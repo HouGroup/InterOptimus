@@ -1,0 +1,23 @@
+Global Parameters
+ISTART =  1            (Read existing wavefunction, if there)
+ISPIN  =  2            (Non-Spin polarised DFT)
+
+LREAL  = .Auto.       (Projection operators: automatic)
+
+ENCUT = 520
+
+Electronic Relaxation
+ISMEAR =  0            (Gaussian smearing, metals:1)
+SIGMA  =  0.05         (Smearing value in eV, metals:0.2)
+NELM   =  1000           (Max electronic SCF steps)
+NELMIN =  6            (Min electronic SCF steps)
+EDIFF  =  2E-06        (SCF energy convergence, in eV)
+
+Ionic Relaxation
+NSW    =  10000          (Max ionic steps)
+IBRION =  2            (Algorithm: 0-MD, 1-Quasi-New, 2-CG)
+ISIF   =  3            (Stress/relaxation: 2-Ions, 3-Shape/Ions/V, 4-Shape/Ions)
+EDIFFG = -0.01        (Ionic convergence, eV/AA)
+ISYM =  0            (Symmetry: 0=none, 2=GGA, 3=hybrids)
+SYMPREC = 1e-4
+ALGO = N 
