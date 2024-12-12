@@ -207,7 +207,9 @@ class ItFireworkPatcher:
         
         Return (list): [firework_1, firework_2]
         """
-        additional_fields['dp'] = 'f'
+        additional_fields['pname'] = self.project_name
+        additional_fields_ndp = additional_fields.copy()
+        additional_fields_ndp['dp'] = 'f'
         if 'k' in additional_fields.keys():
             fw_name = f"{self.project_name}_{additional_fields['tp']}_{additional_fields['i']}_{additional_fields['j']}_{additional_fields['k']}"
         else:
@@ -216,18 +218,19 @@ class ItFireworkPatcher:
                        tasks=[WriteVaspFromIOSet(vasp_input_set = self.vasp_input_settings('interface static', structure, LDIPOL = False),
                                                  structure = structure),
                               RunVaspCustodian(vasp_cmd = self.vasp_cmd, gzip_output = False),
-                              VaspToDb(db_file = self.db_file, additional_fields = additional_fields)],
+                              VaspToDb(db_file = self.db_file, additional_fields = additional_fields_ndp)],
                         name = fw_name + "_ndp",
                         spec={"_launch_dir": launch_dir}
                        )
         #dipole correction
-        additional_fields['dp'] = 't'
+        additional_fields_dp = additional_fields.copy()
+        additional_fields_dp['dp'] = 't'
         mod_incar_update = get_default_incar_settings(name, LDIPOL = True)
         mod_incar_update['LWAVE'] = False
         fw2 = Firework(
                        tasks=[ModifyIncar(incar_update = mod_incar_update),
                               RunVaspCustodian(vasp_cmd = self.vasp_cmd, gzip_output = False),
-                              VaspToDb(db_file = self.db_file, additional_fields = additional_fields),
+                              VaspToDb(db_file = self.db_file, additional_fields = additional_fields_dp),
                               ScriptTask.from_str('rm WAVECAR')],
                         name = fw_name + "_dp",
                         spec={"_launch_dir": launch_dir},
@@ -245,6 +248,7 @@ class ItFireworkPatcher:
         launch_dir (str): launch dictory
         name (str): standard relax or interface relax
         """
+        additional_fields['pname'] = self.project_name
         return Firework(
                         tasks=[
                                 WriteVaspFromIOSet(

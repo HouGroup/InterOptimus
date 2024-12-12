@@ -549,10 +549,10 @@ class InterfaceWorker:
                     
                     single_pairs, double_pairs = self.get_decomposition_slabs(i, j)
                     work_dir = os.path.join(kwargs['work_dir'], mlip)
-                    wf += get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, work_dir)
+                    wf += get_slab_mlip_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, work_dir, mlip)
                     wf += it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static',
                                                                             self.benchmk_dict[mlip][(i,j)]['best_it']['structure'],
-                                                                            {'i':i, 'j':j, 'tp':'it'},
+                                                                            {'mlip':mlip, 'i':i, 'j':j, 'tp':'it'},
                                                                             os.path.join(work_dir, f'it_{i}_{j}'))
         with open('benchmk.pkl','wb') as f:
             pickle.dump(self.benchmk_dict, f)
@@ -757,5 +757,24 @@ def get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, wo
                                                                         os.path.join(workdir, f'stsg_{i}_{j}'))
     fws_stdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[1],
                                                                         {'i':i, 'j':j, 'tp':'stdb'},
+                                                                        os.path.join(workdir, f'stdb_{i}_{j}'))
+    return fws_fmsg + fws_fmdb + fws_stsg + fws_stdb
+
+def get_slab_mlip_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, workdir, mlip):
+    """
+    get fireworks of a set of slabs
+    """
+    #slab workflow
+    fws_fmsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[0],
+                                                                        {'mlip':mlip, 'i':i, 'j':j, 'tp':'fmsg'},
+                                                                        os.path.join(workdir, f'fmsg_{i}_{j}'))
+    fws_fmdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[0],
+                                                                        {'mlip':mlip, 'i':i, 'j':j, 'tp':'fmdb'},
+                                                                        os.path.join(workdir, f'fmdb_{i}_{j}'))
+    fws_stsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[1],
+                                                                        {'mlip':mlip, 'i':i, 'j':j, 'tp':'stsg'},
+                                                                        os.path.join(workdir, f'stsg_{i}_{j}'))
+    fws_stdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[1],
+                                                                        {'mlip':mlip, 'i':i, 'j':j, 'tp':'stdb'},
                                                                         os.path.join(workdir, f'stdb_{i}_{j}'))
     return fws_fmsg + fws_fmdb + fws_stsg + fws_stdb
