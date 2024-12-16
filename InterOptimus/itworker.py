@@ -205,11 +205,11 @@ class InterfaceWorker:
             initial_interface = self.get_specified_interface(self.match_id_now, self.term_id_now, [0,0,2])
             xyz[2] = (xyz[2] - 2)/initial_interface.lattice.c
             interface_here = apply_cnid_rbt(initial_interface, xyz[0],xyz[1],xyz[2])
+        self.opt_results[(self.match_id_now,self.term_id_now)]['sampled_interfaces'].append(interface_here)
         term_atom_ids = self.get_interface_atom_indices(interface_here)
         for i in term_atom_ids:
             if get_min_nb_distance(i, interface_here, self.discut) < self.discut:
                 return 0
-        self.opt_results[(self.match_id_now,self.term_id_now)]['sampled_interfaces'].append(interface_here)
         return self.mc.calculate(interface_here)
     
     def get_film_substrate_layer_thickness(self, match_id, term_id):
