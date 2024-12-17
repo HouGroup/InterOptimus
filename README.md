@@ -8,7 +8,7 @@ Install
 
 InterOptimus integrated machine learning interatomic potentials (MLIPs) including `grace-2l` `chgnet` `mace` `orb-models` `sevenn`. Details can be find in https://matbench-discovery.materialsproject.org/
 
-As these MLIP packages are not compatible in the same python environment, to use them flexibly to calculate atomic energies of interface structures in InterOptimus, we created their corresponding docker images with their required python environment and packages respectively, and achieve usages of these MLIPs through requesting their docker containers for energy prediction results. Our images are uploaded in the Alibaba Cloud. Therefore, to use our package, you need to register an Alibaba Cloud account at https://account.alibabacloud.com/ and install docker.
+As these MLIP packages are not compatible in the same python environment, to use them flexibly to calculate atomic energies of interface structures in InterOptimus, we created their corresponding docker images with their required python environments and packages respectively, and achieve usages of these MLIPs through requesting their docker containers for energy prediction results. Our images are uploaded in the Alibaba Cloud. Therefore, to use our package, you need to register an Alibaba Cloud account at https://account.alibabacloud.com/ and install docker.
 
 After you register your Alibaba Cloud account, go to the `Container Registry/Instances` page, follow the instruction to make a totally free `Instance of Personal Edition`, and get your countainer registry [username] and [password] which you will need to login in to the docker registry.
 
