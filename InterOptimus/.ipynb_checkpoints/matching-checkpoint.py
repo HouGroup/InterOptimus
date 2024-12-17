@@ -22,7 +22,6 @@ from pymatgen.core.surface import get_symmetrically_equivalent_miller_indices
 from InterOptimus.equi_term import pair_fit
 from InterOptimus.tool import sort_list
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 from adjustText import adjust_text
 
 
@@ -181,7 +180,6 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_
     unique_areas (list): list of matching areas of non-identical matches
     """
     matches = list(sub_analyzer.calculate(film=film, substrate=substrate, film_millers = film_millers, substrate_millers = substrate_millers))
-    print(len(matches))
     areas = []
     for i in matches:
         areas.append(get_area_match(i))
@@ -385,16 +383,16 @@ def scatter_by_miller_dict(millers, dict, tuple_id, lattice, strains):
 def draw_circles(ax, data, existing_label):
     for i in range(len(data['type_list'])):
         if data['type_list'][i] not in existing_label:
-            ax.scatter(around(data['XY'][0],3), around(data['XY'][1],3), c='none',marker='o',edgecolors=f"C{data['type_list'][i]}", \
+            ax.scatter(around(data['XY'][0],2), around(data['XY'][1],2), c='none',marker='o',edgecolors=f"C{data['type_list'][i]}", \
                        s = ((i+1)*8)**2, label = f"type {data['type_list'][i] + 1}", linewidths =3, alpha = 1)
             existing_label.append(data['type_list'][i])
         else:
-            ax.scatter(around(data['XY'][0],3), around(data['XY'][1],3), c='none',marker='o',edgecolors=f"C{data['type_list'][i]}", s = ((i+1)*8)**2, linewidths =3, alpha = 1)
+            ax.scatter(around(data['XY'][0],2), around(data['XY'][1],2), c='none',marker='o',edgecolors=f"C{data['type_list'][i]}", s = ((i+1)*8)**2, linewidths =3, alpha = 1)
     return existing_label, ((i+1)*8)**2
     
 
 def plot_matching_data(matching_data, titles, save_filename, show_millers, show_legend, special):
-    fig, ax = plt.subplots(1, 2, figsize=(20, 12))
+    fig, ax = plt.subplots(1, 2, figsize=(20, 10))
     plt.rc('font', family='arial')
     plt.rc('text', usetex=True)
     for i in range(2):
@@ -403,49 +401,46 @@ def plot_matching_data(matching_data, titles, save_filename, show_millers, show_
         existing_label_ids = []
         for k in list(matching_data[i].keys()):
            XYs.append([matching_data[i][k]['XY'][0], matching_data[i][k]['XY'][1]])
-        XYs = np.array(around(XYs,3))
+        XYs = np.array(around(XYs,2))
         projected = []
         already_done = []
         sampled_Xt_Yt = []
-        sampled_X_Y = []
         for j in matching_data[i].keys():
             X, Y = matching_data[i][j]['XY']
-            X = around(X,3)
-            Y = around(Y,3)
-            if abs(Y) < 1e-2:
+            X = around(X,2)
+            Y = around(Y,2)
+            if abs(Y) < 1e-1:
                 Y_t = Y + 0.05
             else:
                 Y_t = Y + Y/abs(Y)*0.05
-            if abs(X) < 1e-2:
+            if abs(X) < 1e-1:
                 X_t = X
             else:
                 X_t = X + X/abs(X)*0.05
-            n = len(XYs[(abs(XYs[:,0] - X)<1e-2) & (abs(XYs[:,1] - Y)<1e-2)])
+            n = len(XYs[(abs(XYs[:,0] - X)<1e-1) & (abs(XYs[:,1] - Y)<1e-1)])
             #print(XYs[(abs(XYs[:,0] - X)<1e-2) & (abs(XYs[:,1] - Y)<1e-2)])
             #print(abs(XYs[:,0] - X), abs(XYs[:,0] - Y))
             if n < 2:
-                if show_millers:
+                if show_millers or (abs(X) < 1e-1 and abs(Y) < 1e-1):
                     ax[i].text(X, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
                 else:
-                    if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
+                    if show_millers or (abs(X) < 1e-1 and abs(Y) < 1e-1):
                         ax[i].text(X, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                #existing_label, circle_s = draw_circles(ax[i], matching_data[i][j], existing_label)
+                existing_label, circle_s = draw_circles(ax[i], matching_data[i][j], existing_label)
             else:
-                if [around(X,2), around(Y,2)] not in already_done:
-                    if show_millers:
+                if [around(X,1), around(Y,1)] not in already_done:
+                    if show_millers or (abs(X) < 1e-1 and abs(Y) < 1e-1):
                         ax[i].text(X_t+0.05, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
                         existing_label, circle_s = draw_circles(ax[i], matching_data[i][j], existing_label)
-                        already_done.append([around(X,2), around(Y,2)])
+                        already_done.append([around(X,1), around(Y,1)])
                         sampled_Xt_Yt.append([X_t, Y_t])
-                        sampled_X_Y.append([X, Y])
                 else:
                     dis = norm(array(sampled_Xt_Yt) - array([X, Y]), axis = 1)
-                    X_t_h, Y_t_h = array(sampled_Xt_Yt)[argsort(dis)[0]]
-                    if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                        ax[i].text(X_t_h-0.05, Y_t_h, format_miller_index(j), fontsize=13, ha='center', va='center')
+                    X_t_h, X_t_h = array(sampled_Xt_Yt)[argsort(dis)[0]]
+                    if show_millers or (abs(X) < 1e-1 and abs(Y) < 1e-1):
+                        ax[i].text(X_t_h-0.05, X_t_h, format_miller_index(j), fontsize=13, ha='center', va='center')
                     #ax[i].text(X_t, Y_t, ', ', fontsize=15, ha='center', va='center')
                     #existing_label = draw_circles(ax[i], matching_data[i][j], existing_label)
-            existing_label, circle_s = draw_circles(ax[i], matching_data[i][j], existing_label)
             #ax[i].text(X_t, Y_t, format_miller_index(j), fontsize=20, ha='center', va='center')
             projected.append([X, Y])
             if X == 0 and Y == 0:
@@ -487,25 +482,7 @@ def plot_matching_data(matching_data, titles, save_filename, show_millers, show_
         sorted_labels, sorted_handles, existing_label = zip(*sorted_handles_labels)
         # 设置 legend，并按照排序后的顺序显示
         if show_legend:
-            custom_labels = []
-            for tp_num in range(len(sorted_labels)):
-                custom_labels.append(
-                                     Line2D([0], [0], marker='o', color = 'w', \
-                                            label=f'type {tp_num}', markerfacecolor=None, \
-                                            markeredgecolor=f"C{tp_num}", markersize=12, markeredgewidth =3)
-                                    )
-            #ax[i].legend(sorted_handles, sorted_labels, fontsize = 12, labelspacing=0.5, ncol=int(len(sorted_labels)/2), loc='upper center', bbox_to_anchor=(0.5, 1.05))
-            ax[i].legend(
-                        handles=custom_labels,
-                        fontsize = 12,
-                        labelspacing=0.5,
-                        loc='lower center',
-                        bbox_to_anchor=(0.5, 0.01),
-                        ncol=len(sorted_labels),
-                        columnspacing=0.1,
-                        handletextpad=0.05
-                        )
-
+            ax[i].legend(sorted_handles, sorted_labels, fontsize = 12)
     plt.subplots_adjust(wspace=0, hspace=0)
     plt.tight_layout()
     plt.savefig(f'{save_filename}_all.jpg', dpi=600)

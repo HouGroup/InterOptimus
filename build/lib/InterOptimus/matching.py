@@ -383,11 +383,11 @@ def scatter_by_miller_dict(millers, dict, tuple_id, lattice, strains):
 def draw_circles(ax, data, existing_label):
     for i in range(len(data['type_list'])):
         if data['type_list'][i] not in existing_label:
-            ax.scatter(data['XY'][0], data['XY'][1], c='none',marker='o',edgecolors=f'C{data['type_list'][i]}', \
+            ax.scatter(data['XY'][0], data['XY'][1], c='none',marker='o',edgecolors=f"C{data['type_list'][i]}", \
                        s = ((i+1)*8)**2, label = f"type {data['type_list'][i] + 1}", linewidths =3, alpha = 1)
             existing_label.append(data['type_list'][i])
         else:
-            ax.scatter(data['XY'][0], data['XY'][1], c='none',marker='o',edgecolors=f'C{data['type_list'][i]}', s = ((i+1)*8)**2, linewidths =3, alpha = 1)
+            ax.scatter(data['XY'][0], data['XY'][1], c='none',marker='o',edgecolors=f"C{data['type_list'][i]}", s = ((i+1)*8)**2, linewidths =3, alpha = 1)
     return existing_label, ((i+1)*8)**2
     
 
