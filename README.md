@@ -14,4 +14,6 @@ After you register your Alibaba Cloud account, go to the `Container Registry/Ins
 
 ![image](https://github.com/user-attachments/assets/bd4240f8-f9d2-4f36-990b-579963a7462a)
 
-Finally, execute the `docker login` command provided in your own `Container Registry/Instances` page.
+Finally, execute the `docker login` command provided in your own `Container Registry/Instances` page, and try to run tutorial.ipynb.
+
+If you have successfully run all the commands in tutorial.ipynb. Congrates! Explore your own interfaces now!
