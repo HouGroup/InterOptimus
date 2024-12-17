@@ -172,14 +172,14 @@ class InterfaceWorker:
             interface_here = trans_to_bottom(interface_here)
         return interface_here
     
-    def set_energy_calculator_docker(self, calc):
+    def set_energy_calculator_docker(self, calc, user_settings = None):
         """
         set energy calculator docker container
         
         Args:
         calc (str): mace, orb-models, sevenn, chgnet, grace-2l
         """
-        self.mc = MlipCalc(image_name = calc)
+        self.mc = MlipCalc(image_name = calc, user_settings = user_settings)
     
     def close_energy_calculator(self):
         """
@@ -417,7 +417,7 @@ class InterfaceWorker:
         self.opt_results[(match_id,term_id)]['supcl_E'] = ys
     
 
-    def global_minimization(self, n_calls = 50, z_range = (0.5, 3), calc = 'mace', discut = 0.8):
+    def global_minimization(self, n_calls = 50, z_range = (0.5, 3), calc = 'mace', discut = 0.8, user_settings = None):
         """
         apply bassian optimization for the xyz registration of all the interfaces with the predicted
         interface energy by machine learning potential, getting ranked interface energies
@@ -440,7 +440,7 @@ class InterfaceWorker:
                    r'$u_{s2}$',r'$v_{s2}$',r'$w_{s2}$', r'$T$', r'$i_m$', r'$i_t$']
         formated_data = []
         #set docker container
-        self.set_energy_calculator_docker(calc)
+        self.set_energy_calculator_docker(calc, user_settings)
         #scanning matches and terminations
         with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
             for i in range(len(self.unique_matches)):
@@ -517,6 +517,7 @@ class InterfaceWorker:
         work_dir (str): working directory
         update_incar_settings, update_potcar_settings, update_kpoints_settings (dict): user incar, potcar, kpoints settings
         update_potcar_functional (str): which set of functional to use
+        user_settings: mlip docker container settings
         
         Return:
         (Workflow)
@@ -531,7 +532,7 @@ class InterfaceWorker:
                                                  user_potcar_functional = kwargs['user_potcar_functional'])
         wf = []
         for mlip in mlips:
-            self.global_minimization(n_calls = n_calls, z_range = z_range, calc = mlip, discut = discut)
+            self.global_minimization(n_calls = n_calls, z_range = z_range, calc = mlip, discut = discut, user_settings = kwargs['user_settings'])
             self.benchmk_dict = {}
             self.benchmk_dict[mlip] = {}
             for i in range(len(self.unique_matches)):
@@ -549,11 +550,11 @@ class InterfaceWorker:
                     
                     single_pairs, double_pairs = self.get_decomposition_slabs(i, j)
                     work_dir = os.path.join(kwargs['work_dir'], mlip)
-                    wf += get_slab_mlip_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, work_dir, mlip)
+                    wf += get_slab_mlip_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, work_dir, mlip, kwargs['dp'])
                     wf += it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static',
                                                                             self.benchmk_dict[mlip][(i,j)]['best_it']['structure'],
                                                                             {'mlip':mlip, 'i':i, 'j':j, 'tp':'it'},
-                                                                            os.path.join(work_dir, f'it_{i}_{j}'))
+                                                                            os.path.join(work_dir, f'it_{i}_{j}'), dp = kwargs['dp'])
         with open('benchmk.pkl','wb') as f:
             pickle.dump(self.benchmk_dict, f)
         return Workflow(wf)
@@ -628,7 +629,7 @@ class InterfaceWorker:
         bd_E = (sup_E - (fmsg_E + stsg_E)) / A * 16.02176634
         return it_E, bd_E
     
-    def predict_global_random_sampling(self, mlip):
+    def predict_global_random_sampling(self, mlip, user_settings = None):
         """
         predict all the sampled structures
         
@@ -636,7 +637,7 @@ class InterfaceWorker:
         mlip (str): which machine learning potential to use
         """
         keys = list(self.global_random_sample_dict.keys())
-        self.set_energy_calculator_docker(mlip)
+        self.set_energy_calculator_docker(mlip, user_settings)
         for i in keys:
             if 'predict' not in self.global_random_sample_dict[i].keys():
                 self.global_random_sample_dict[i]['predict'] = {}
@@ -718,14 +719,14 @@ class InterfaceWorker:
 
                         if to_fireworks:
 
-                            wf += get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, kwargs['work_dir'])
+                            wf += get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, kwargs['work_dir'], kwargs['dp'])
                             
                             #interface workflow
                             its = self.global_random_sample_dict[f'{i}_{j}']['sampled_interfaces']
                             for k in range(len(its)):
                                 fws = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', Structure.from_dict(json.loads(its[k])),
                                                                                           {'i':i, 'j':j, 'k':k, 'tp':'it'},
-                                                                                          os.path.join(kwargs['work_dir'], f'it_{i}_{j}_{k}'))
+                                                                                          os.path.join(kwargs['work_dir'], f'it_{i}_{j}_{k}'), kwargs['dp'])
                                 wf += fws
 
                         #save slab info
@@ -741,40 +742,40 @@ class InterfaceWorker:
                 json.dump(self.global_random_sample_dict, f)
             return Workflow(wf)
 
-def get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, workdir):
+def get_slab_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, workdir, dp):
     """
     get fireworks of a set of slabs
     """
     #slab workflow
     fws_fmsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[0],
                                                                         {'i':i, 'j':j, 'tp':'fmsg'},
-                                                                        os.path.join(workdir, f'fmsg_{i}_{j}'))
+                                                                        os.path.join(workdir, f'fmsg_{i}_{j}'), dp)
     fws_fmdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[0],
                                                                         {'i':i, 'j':j, 'tp':'fmdb'},
-                                                                        os.path.join(workdir, f'fmdb_{i}_{j}'))
+                                                                        os.path.join(workdir, f'fmdb_{i}_{j}'), dp)
     fws_stsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[1],
                                                                         {'i':i, 'j':j, 'tp':'stsg'},
-                                                                        os.path.join(workdir, f'stsg_{i}_{j}'))
+                                                                        os.path.join(workdir, f'stsg_{i}_{j}'), dp)
     fws_stdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[1],
                                                                         {'i':i, 'j':j, 'tp':'stdb'},
-                                                                        os.path.join(workdir, f'stdb_{i}_{j}'))
+                                                                        os.path.join(workdir, f'stdb_{i}_{j}'), dp)
     return fws_fmsg + fws_fmdb + fws_stsg + fws_stdb
 
-def get_slab_mlip_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, workdir, mlip):
+def get_slab_mlip_fireworks(single_pairs, double_pairs, it_firework_patcher, i, j, workdir, mlip, dp):
     """
     get fireworks of a set of slabs
     """
     #slab workflow
     fws_fmsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[0],
                                                                         {'mlip':mlip, 'i':i, 'j':j, 'tp':'fmsg'},
-                                                                        os.path.join(workdir, f'fmsg_{i}_{j}'))
+                                                                        os.path.join(workdir, f'fmsg_{i}_{j}'), dp)
     fws_fmdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[0],
                                                                         {'mlip':mlip, 'i':i, 'j':j, 'tp':'fmdb'},
-                                                                        os.path.join(workdir, f'fmdb_{i}_{j}'))
+                                                                        os.path.join(workdir, f'fmdb_{i}_{j}'), dp)
     fws_stsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', single_pairs[1],
                                                                         {'mlip':mlip, 'i':i, 'j':j, 'tp':'stsg'},
-                                                                        os.path.join(workdir, f'stsg_{i}_{j}'))
+                                                                        os.path.join(workdir, f'stsg_{i}_{j}'), dp)
     fws_stdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', double_pairs[1],
                                                                         {'mlip':mlip, 'i':i, 'j':j, 'tp':'stdb'},
-                                                                        os.path.join(workdir, f'stdb_{i}_{j}'))
+                                                                        os.path.join(workdir, f'stdb_{i}_{j}'), dp)
     return fws_fmsg + fws_fmdb + fws_stsg + fws_stdb

@@ -195,15 +195,16 @@ class ItFireworkPatcher:
                                         update_kpoints_settings = self.user_kpoints_settings,
                                         **kwargs)
 
-    def non_dipole_mod_fol_by_diple_mod(self, name, structure, additional_fields, launch_dir):
+    def non_dipole_mod_fol_by_diple_mod(self, name, structure, additional_fields, launch_dir, dp = False):
         """
-        a non-dipole corrected calculation firework followed by a dipole-corrected calculation firework
+        a non-dipole corrected calculation firework (followed by a dipole-corrected calculation firework, optional)
         
         Args:
         name (str): 'interface static' or 'interface relax'
         structure (Structure): calculation structure
         additional_fields (dict): firework additional fields used to distinguish different calculations
         launch_dir (str): launch dictory
+        dp (bool): whether to do dipole correction
         
         Return (list): [firework_1, firework_2]
         """
@@ -223,20 +224,23 @@ class ItFireworkPatcher:
                         spec={"_launch_dir": launch_dir}
                        )
         #dipole correction
-        additional_fields_dp = additional_fields.copy()
-        additional_fields_dp['dp'] = 't'
-        mod_incar_update = get_default_incar_settings(name, LDIPOL = True)
-        mod_incar_update['LWAVE'] = False
-        fw2 = Firework(
-                       tasks=[ModifyIncar(incar_update = mod_incar_update),
-                              RunVaspCustodian(vasp_cmd = self.vasp_cmd, gzip_output = False),
-                              VaspToDb(db_file = self.db_file, additional_fields = additional_fields_dp),
-                              ScriptTask.from_str('rm WAVECAR')],
-                        name = fw_name + "_dp",
-                        spec={"_launch_dir": launch_dir},
-                        parents = fw1
-                       )
-        return [fw1, fw2]
+        if dp:
+            additional_fields_dp = additional_fields.copy()
+            additional_fields_dp['dp'] = 't'
+            mod_incar_update = get_default_incar_settings(name, LDIPOL = True)
+            mod_incar_update['LWAVE'] = False
+            fw2 = Firework(
+                           tasks=[ModifyIncar(incar_update = mod_incar_update),
+                                  RunVaspCustodian(vasp_cmd = self.vasp_cmd, gzip_output = False),
+                                  VaspToDb(db_file = self.db_file, additional_fields = additional_fields_dp),
+                                  ScriptTask.from_str('rm WAVECAR')],
+                            name = fw_name + "_dp",
+                            spec={"_launch_dir": launch_dir},
+                            parents = fw1
+                           )
+            return [fw1, fw2]
+        else:
+            return [fw1]
     
     def get_fw(self, structure, additional_fields, launch_dir, name, **kwargs):
         """
