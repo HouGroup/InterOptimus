@@ -551,12 +551,20 @@ def add_sele_dyn(it):
     it.add_site_property('selective_dynamics', mobility_mtx)
     return it
 
-def add_sele_dyn_slab(slab):
-    sub_bot_indices = get_termination_indices(slab)[0]
-    mobility_mtx = np.repeat(np.array([[True, True, True]]), len(slab), axis = 0)
-    mobility_mtx[sub_bot_indices] = [False, False, False]
-    slab.add_site_property('selective_dynamics', mobility_mtx)
-    return slab
+def add_sele_dyn_slab(slab, shell = None):
+    if shell == 0:
+        return slab, []
+    elif shell == None:
+        sub_bot_indices = get_termination_indices(slab)[0]
+    else:
+        coords = np.array([i.coords[2] for i in slab])
+        min_z = min(coords)
+        sub_bot_indices = np.where(coords < min_z + shell)[0]
+    if len(sub_bot_indices) > 0:
+        mobility_mtx = np.repeat(np.array([[True, True, True]]), len(slab), axis = 0)
+        mobility_mtx[sub_bot_indices] = [False, False, False]
+        slab.add_site_property('selective_dynamics', mobility_mtx)
+    return slab, mobility_mtx
 
 def cut_vaccum(structure, c):
     lps = structure.lattice.parameters

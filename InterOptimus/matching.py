@@ -191,35 +191,38 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_
     equivalent_matches = []
     unique_areas = []
     ins_equi_match_identifier = equi_match_identifier(substrate, film, substrate_conv, film_conv)
-    for i in range(len(matches)):
-        angle_here = get_cos(matches[i].substrate_sl_vectors[0],\
-                                                       matches[i].substrate_sl_vectors[1])
-        if i == 0:
-            unique_matches.append(matches[i])
-            equivalent_matches.append([matches[i]])
-            unique_angles.append(angle_here)
-            unique_areas.append(get_area_match(matches[i]))
-        else:
-            equivalent = False
-            same_angle_ids = where(abs(array(unique_angles) - angle_here) < 1e-1)[0]
-            if len(same_angle_ids) > 0:
-                for j in same_angle_ids:
-                    #indices matching firstly
-                    if ins_equi_match_identifier.identify_by_indices_matching(matches[i], unique_matches[j]):
-                        equivalent = True
-                    #if indices match, check structure match
-                    else:
-                        equivalent = ins_equi_match_identifier.identify_by_stct_matching(matches[i], unique_matches[j])
-                                     
-                    if equivalent:
-                        equivalent_matches[j].append(matches[i])
-                        equivalent = True
-                        break
-            if not equivalent:
+    from tqdm.notebook import tqdm
+    with tqdm(total = len(matches), desc = "checking matching identity") as rgst_pbar:
+        for i in range(len(matches)):
+            angle_here = get_cos(matches[i].substrate_sl_vectors[0],\
+                                                           matches[i].substrate_sl_vectors[1])
+            if i == 0:
                 unique_matches.append(matches[i])
                 equivalent_matches.append([matches[i]])
                 unique_angles.append(angle_here)
                 unique_areas.append(get_area_match(matches[i]))
+            else:
+                equivalent = False
+                same_angle_ids = where(abs(array(unique_angles) - angle_here) < 1e-1)[0]
+                if len(same_angle_ids) > 0:
+                    for j in same_angle_ids:
+                        #indices matching firstly
+                        if ins_equi_match_identifier.identify_by_indices_matching(matches[i], unique_matches[j]):
+                            equivalent = True
+                        #if indices match, check structure match
+                        else:
+                            equivalent = ins_equi_match_identifier.identify_by_stct_matching(matches[i], unique_matches[j])
+                                         
+                        if equivalent:
+                            equivalent_matches[j].append(matches[i])
+                            equivalent = True
+                            break
+                if not equivalent:
+                    unique_matches.append(matches[i])
+                    equivalent_matches.append([matches[i]])
+                    unique_angles.append(angle_here)
+                    unique_areas.append(get_area_match(matches[i]))
+            rgst_pbar.update(1)
     return unique_matches, equivalent_matches, unique_areas
 
 class convert_info_forma:

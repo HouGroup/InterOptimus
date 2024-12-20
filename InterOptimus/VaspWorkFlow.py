@@ -62,6 +62,7 @@ def get_default_incar_settings(name, **kwargs):
     if name == 'standard relax':
         return {
         "EDIFF": 1e-4,
+        "EDIFFG": -0.05,
         "ALGO": "Normal",
         "ISIF": 3,
         "NELM": 250,
@@ -195,7 +196,7 @@ class ItFireworkPatcher:
                                         update_kpoints_settings = self.user_kpoints_settings,
                                         **kwargs)
 
-    def non_dipole_mod_fol_by_diple_mod(self, name, structure, additional_fields, launch_dir, dp = False):
+    def non_dipole_mod_fol_by_diple_mod(self, name, structure, additional_fields, launch_dir, dp = False, c_periodic = False):
         """
         a non-dipole corrected calculation firework (followed by a dipole-corrected calculation firework, optional)
         
@@ -227,7 +228,7 @@ class ItFireworkPatcher:
         if dp:
             additional_fields_dp = additional_fields.copy()
             additional_fields_dp['dp'] = 't'
-            mod_incar_update = get_default_incar_settings(name, LDIPOL = True)
+            mod_incar_update = get_default_incar_settings(name, LDIPOL = True, c_periodic = c_periodic)
             mod_incar_update['LWAVE'] = False
             fw2 = Firework(
                            tasks=[ModifyIncar(incar_update = mod_incar_update),
