@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="InterOptimus",
-    version="0.0.2",
+    version="0.0.3",
     author="Yaoshu Xie",
     author_email="jasonxie@sz.tsinghua.edu.cn",
     description="High througput simulation making crystalline interfaces",

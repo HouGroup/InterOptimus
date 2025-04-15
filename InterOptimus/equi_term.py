@@ -96,8 +96,8 @@ def pair_fit(film_slab_fit, sub_slab_fit, film_slab, sub_slab, matcher, c_period
         sub_map = SymmOp.from_rotation_and_translation(sub_transformation, [0,0,0])
     film_over_sub = film_map * sub_map.inverse
     
-    sym_ops_film = SpacegroupAnalyzer(film_slab_fit).get_point_group_operations()
-    sym_ops_sub = SpacegroupAnalyzer(sub_slab_fit).get_point_group_operations()
+    sym_ops_film = SpacegroupAnalyzer(film_slab_fit).get_point_group_operations(cartesian = True)
+    sym_ops_sub = SpacegroupAnalyzer(sub_slab_fit).get_point_group_operations(cartesian = True)
     #co-group of film and slab to compare with
     co_group = co_point_group_operations(sym_ops_film, sym_ops_sub)
 

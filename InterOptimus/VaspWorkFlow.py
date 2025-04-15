@@ -15,7 +15,6 @@ from numpy.linalg import norm, inv
 import pickle
 import shutil
 import os
-from InterOptimus.tool import get_one_interface, trans_to_bottom, add_sele_dyn, add_sele_dyn_slab
 
 def update_setting_dict(old_dict, new_dict):
     """
@@ -50,7 +49,7 @@ def get_potcar_dict():
     Return:
     (dict): {element: potcar label}
     """
-    return {'Ac': 'Ac', 'Ag': 'Ag', 'Al': 'Al', 'Ar': 'Ar', 'As': 'As', 'Au': 'Au', 'B': 'B', 'Ba': 'Ba_sv', 'Be': 'Be_sv', 'Bi': 'Bi', 'Br': 'Br', 'C': 'C', 'Ca': 'Ca_sv', 'Cd': 'Cd', 'Ce': 'Ce', 'Cl': 'Cl', 'Co': 'Co', 'Cr': 'Cr_pv', 'Cs': 'Cs_sv', 'Cu': 'Cu_pv', 'Dy': 'Dy_3', 'Er': 'Er_3', 'Eu': 'Eu', 'F': 'F', 'Fe': 'Fe_pv', 'Ga': 'Ga_d', 'Gd': 'Gd', 'Ge': 'Ge_d', 'H': 'H', 'He': 'He', 'Hf': 'Hf_pv', 'Hg': 'Hg', 'Ho': 'Ho_3', 'I': 'I', 'In': 'In_d', 'Ir': 'Ir', 'K': 'K_sv', 'Kr': 'Kr', 'La': 'La', 'Li': 'Li_sv', 'Lu': 'Lu_3', 'Mg': 'Mg_pv', 'Mn': 'Mn_pv', 'Mo': 'Mo_pv', 'N': 'N', 'Na': 'Na_pv', 'Nb': 'Nb_pv', 'Nd': 'Nd_3', 'Ne': 'Ne', 'Ni': 'Ni', 'Np': 'Np', 'O': 'O', 'Os': 'Os_pv', 'P': 'P', 'Pa': 'Pa', 'Pb': 'Pb_d', 'Pd': 'Pd', 'Pm': 'Pm_3', 'Pr': 'Pr_3', 'Pt': 'Pt', 'Pu': 'Pu', 'Rb': 'Rb_sv', 'Re': 'Re_pv', 'Rh': 'Rh_pv', 'Ru': 'Ru_pv', 'S': 'S', 'Sb': 'Sb', 'Sc': 'Sc_sv', 'Se': 'Se', 'Si': 'Si', 'Sm': 'Sm_3', 'Sn': 'Sn_d', 'Sr': 'Sr_sv', 'Ta': 'Ta_pv', 'Tb': 'Tb_3', 'Tc': 'Tc_pv', 'Te': 'Te', 'Th': 'Th', 'Ti': 'Ti_pv', 'Tl': 'Tl_d', 'Tm': 'Tm_3', 'U': 'U', 'V': 'V_pv', 'W': 'W_pv', 'Xe': 'Xe', 'Y': 'Y_sv', 'Yb': 'Yb_2', 'Zn': 'Zn', 'Zr': 'Zr_sv'}
+    return {'Ac': 'Ac', 'Ag': 'Ag', 'Al': 'Al', 'Ar': 'Ar', 'As': 'As', 'Au': 'Au', 'B': 'B', 'Ba': 'Ba_sv', 'Be': 'Be_sv', 'Bi': 'Bi_d', 'Br': 'Br', 'C': 'C', 'Ca': 'Ca_sv', 'Cd': 'Cd', 'Ce': 'Ce', 'Cl': 'Cl', 'Co': 'Co', 'Cr': 'Cr_pv', 'Cs': 'Cs_sv', 'Cu': 'Cu', 'Dy': 'Dy_3', 'Er': 'Er_3', 'Eu': 'Eu_2', 'F': 'F', 'Fe': 'Fe', 'Ga': 'Ga_d', 'Gd': 'Gd_3', 'Ge': 'Ge_d', 'H': 'H', 'He': 'He', 'Hf': 'Hf_pv', 'Hg': 'Hg', 'Ho': 'Ho_3', 'I': 'I', 'In': 'In_d', 'Ir': 'Ir', 'K': 'K_sv', 'Kr': 'Kr', 'La': 'La', 'Li': 'Li_sv', 'Lu': 'Lu_3', 'Mg': 'Mg_pv', 'Mn': 'Mn_pv', 'Mo': 'Mo_sv', 'N': 'N', 'Na': 'Na_pv', 'Nb': 'Nb_sv', 'Nd': 'Nd_3', 'Ne': 'Ne', 'Ni': 'Ni', 'Np': 'Np', 'O': 'O', 'Os': 'Os', 'P': 'P', 'Pa': 'Pa', 'Pb': 'Pb_d', 'Pd': 'Pd', 'Pm': 'Pm_3', 'Pr': 'Pr_3', 'Pt': 'Pt', 'Pu': 'Pu', 'Rb': 'Rb_sv', 'Re': 'Re', 'Rh': 'Rh_pv', 'Ru': 'Ru_pv', 'S': 'S', 'Sb': 'Sb', 'Sc': 'Sc_sv', 'Se': 'Se', 'Si': 'Si', 'Sm': 'Sm_3', 'Sn': 'Sn_d', 'Sr': 'Sr_sv', 'Ta': 'Ta_pv', 'Tb': 'Tb_3', 'Tc': 'Tc_pv', 'Te': 'Te', 'Th': 'Th', 'Ti': 'Ti_sv', 'Tl': 'Tl_d', 'Tm': 'Tm_3', 'U': 'U', 'V': 'V_sv', 'W': 'W_sv', 'Xe': 'Xe', 'Y': 'Y_sv', 'Yb': 'Yb_2', 'Zn': 'Zn', 'Zr': 'Zr_sv', 'Po': 'Po_d',  'At':'At', 'Rn':'Rn', 'Fr':'Fr_sv', 'Ra':'Ra_sv', 'Am':'Am', 'Cm':'Cm'}
 
 def get_default_incar_settings(name, **kwargs):
     """
@@ -65,7 +64,7 @@ def get_default_incar_settings(name, **kwargs):
         "EDIFFG": -0.05,
         "ALGO": "Normal",
         "ISIF": 3,
-        "NELM": 250,
+        "NELM": 500,
         "NSW": 300,
         "LWAVE": False,
         "NCORE": 12,
@@ -125,15 +124,15 @@ def get_vasp_input_settings(name, structure, update_incar_settings = None, updat
     (VaspInputSet)
     """
     default_incar_settings = get_default_incar_settings(name, **kwargs)
-    #default_potcar_settings = get_potcar_dict()
-    default_potcar_settings = {}
+    default_potcar_settings = get_potcar_dict()
+    #default_potcar_settings = {}
     default_kpoints_settings = {'reciprocal_density':100}
     user_incar_settings = update_setting_dict(default_incar_settings, update_incar_settings)
     user_potcar_settings = update_setting_dict(default_potcar_settings, update_potcar_settings)
     user_kpoints_settings = update_setting_dict(default_kpoints_settings, update_kpoints_settings)
 
     if update_potcar_functional == None:
-        user_potcar_functional = 'PBE_54'
+        user_potcar_functional = 'PBE_64'
     else:
         user_potcar_functional = update_potcar_functional
     """
@@ -234,7 +233,9 @@ class ItFireworkPatcher:
                            tasks=[ModifyIncar(incar_update = mod_incar_update),
                                   RunVaspCustodian(vasp_cmd = self.vasp_cmd, gzip_output = False),
                                   VaspToDb(db_file = self.db_file, additional_fields = additional_fields_dp),
-                                  ScriptTask.from_str('rm WAVECAR')],
+                                  ScriptTask.from_str('rm WAVECAR'),
+                                  ScriptTask.from_str('rm CHG'),
+                                  ScriptTask.from_str('rm CHGCAR')],
                             name = fw_name + "_dp",
                             spec={"_launch_dir": launch_dir},
                             parents = fw1
@@ -261,7 +262,9 @@ class ItFireworkPatcher:
                                                   structure = structure
                                                   ),
                                 RunVaspCustodian(vasp_cmd = self.vasp_cmd, gzip_output = False),
-                                VaspToDb(db_file = self.db_file, additional_fields = additional_fields)
-                               ],
+                                VaspToDb(db_file = self.db_file, additional_fields = additional_fields),
+                                ScriptTask.from_str('rm WAVECAR'),
+                                ScriptTask.from_str('rm CHG'),
+                                ScriptTask.from_str('rm CHGCAR')],
                                name = f'{self.project_name}_NDP',
                                spec={"_launch_dir": launch_dir})

@@ -5,7 +5,7 @@ results from pymatgen's SubstrateAnalyzer
 
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.analysis.interfaces import CoherentInterfaceBuilder
-from InterOptimus.equi_term import get_non_identical_slab_pairs
+from InterOptimus.equi_term import get_non_identical_slab_pairs, co_point_group_operations
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces.zsl import ZSLGenerator, ZSLMatch, reduce_vectors
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
@@ -22,8 +22,9 @@ from pymatgen.core.surface import get_symmetrically_equivalent_miller_indices
 from InterOptimus.equi_term import pair_fit
 from InterOptimus.tool import sort_list
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from adjustText import adjust_text
-
+from scipy.linalg import polar
 
 def get_identical_pairs(match, film, substrate):
     film_idtc_millers = get_symmetrically_equivalent_miller_indices(film, match[0], return_hkil = False)
@@ -45,7 +46,7 @@ class equi_directions_identifier:
         structure (Structure)
         """
         analyzer = SpacegroupAnalyzer(structure)
-        self.symmetry_operations = analyzer.get_symmetry_operations()
+        self.symmetry_operations = analyzer.get_symmetry_operations(cartesian = True)
     def identify(self, v1, v2):
         """
         Args:
@@ -60,7 +61,7 @@ class equi_directions_identifier:
         are_equivalent = False
         for operation in self.symmetry_operations:
             transformed_direction1 = operation.operate(direction1)
-            if allclose(transformed_direction1, direction2):
+            if norm(cross(transformed_direction1, direction2)) < 1e-2:
                 are_equivalent = True
                 break
         return are_equivalent
@@ -93,8 +94,9 @@ class equi_match_identifier:
         (bool): whether equivalent
         """
         equivalent = False
-        #substrate_set_1, substrate_set_2 = match_1.substrate_sl_vectors, match_2.substrate_sl_vectors
-        #film_set_1, film_set_2 = match_1.film_sl_vectors, match_2.film_sl_vectors
+        substrate_set_1, substrate_set_2 = match_1.substrate_sl_vectors, match_2.substrate_sl_vectors
+        film_set_1, film_set_2 = match_1.film_sl_vectors, match_2.film_sl_vectors
+        """
         substrate_set_1 = around(dot(inv(self.substrate_conv.lattice.matrix.T), \
                                                         match_1.substrate_sl_vectors.T),8).T
         substrate_set_2 = around(dot(inv(self.substrate_conv.lattice.matrix.T), \
@@ -103,6 +105,7 @@ class equi_match_identifier:
                                                         match_1.film_sl_vectors.T),8).T
         film_set_2 = around(dot(inv(self.film_conv.lattice.matrix.T), \
                                                         match_2.film_sl_vectors.T),8).T
+        """
         if (
             self.substrate_equi_directions_identifier.identify(substrate_set_1[0], substrate_set_2[0]) \
             and self.substrate_equi_directions_identifier.identify(substrate_set_1[1], substrate_set_2[1]) \
@@ -126,7 +129,8 @@ class equi_match_identifier:
         Return
         (bool): whether equivalent
         """
-        matcher = StructureMatcher(primitive_cell=False, attempt_supercell=True, scale = True)
+        #matcher = StructureMatcher(primitive_cell=False, attempt_supercell=True, scale = True)
+        matcher = StructureMatcher(primitive_cell=True)
         matches = [match_1, match_2]
         its = []
         for i in range(2):
@@ -142,16 +146,7 @@ class equi_match_identifier:
                                                            film_thickness = 3,
                                                            vacuum_over_film=10,
                                                            gap=1))[0])
-        stct_matcher = StructureMatcher(primitive_cell=True)
-        return stct_matcher.fit(its[0], its[1])
-        """
-        ase_SEC = SymmetryEquivalenceCheck()
-        if ase_SEC.compare(to_ase(its[0].film), to_ase(its[1].film)) and \
-                    ase_SEC.compare(to_ase(its[0].substrate), to_ase(its[1].substrate)):
-            return pair_fit(its[0].film, its[0].substrate, its[1].film, its[1].substrate, matcher, False)
-        else:
-            return False
-        """
+        return matcher.fit(its[0], its[1])
 
 def get_cos(v1, v2):
     """
@@ -164,7 +159,8 @@ def get_area_match(match):
     matching area
     """
     return norm(cross(match.substrate_sl_vectors[0], match.substrate_sl_vectors[1]))
-    
+
+
 def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_millers, substrate_millers):
     """
     given substrate, film lattice structures, \
@@ -180,6 +176,7 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_
     unique_areas (list): list of matching areas of non-identical matches
     """
     matches = list(sub_analyzer.calculate(film=film, substrate=substrate, film_millers = film_millers, substrate_millers = substrate_millers))
+    print(len(matches))
     areas = []
     for i in matches:
         areas.append(get_area_match(i))
@@ -189,37 +186,129 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_
     equivalent_matches = []
     unique_areas = []
     ins_equi_match_identifier = equi_match_identifier(substrate, film, substrate_conv, film_conv)
-    for i in range(len(matches)):
-        angle_here = get_cos(matches[i].substrate_sl_vectors[0],\
-                                                       matches[i].substrate_sl_vectors[1])
-        if i == 0:
-            unique_matches.append(matches[i])
-            equivalent_matches.append([matches[i]])
-            unique_angles.append(angle_here)
-            unique_areas.append(get_area_match(matches[i]))
-        else:
-            equivalent = False
-            same_angle_ids = where(abs(array(unique_angles) - angle_here) < 1e-1)[0]
-            if len(same_angle_ids) > 0:
-                for j in same_angle_ids:
-                    #indices matching firstly
-                    if ins_equi_match_identifier.identify_by_indices_matching(matches[i], unique_matches[j]):
-                        equivalent = True
-                    #if indices match, check structure match
-                    else:
-                        equivalent = ins_equi_match_identifier.identify_by_stct_matching(matches[i], unique_matches[j])
-                                     
-                    if equivalent:
-                        equivalent_matches[j].append(matches[i])
-                        equivalent = True
-                        break
-            if not equivalent:
+    from tqdm.notebook import tqdm
+    with tqdm(total = len(matches), desc = "checking matching identity") as rgst_pbar:
+        for i in range(len(matches)):
+            angle_here = get_cos(matches[i].substrate_sl_vectors[0],\
+                                                           matches[i].substrate_sl_vectors[1])
+            if i == 0:
                 unique_matches.append(matches[i])
                 equivalent_matches.append([matches[i]])
                 unique_angles.append(angle_here)
                 unique_areas.append(get_area_match(matches[i]))
+            else:
+                equivalent = False
+                same_angle_ids = where(abs(array(unique_angles) - angle_here) < 1e-1)[0]
+                if len(same_angle_ids) > 0:
+                    for j in same_angle_ids:
+                        #indices matching firstly
+                        if ins_equi_match_identifier.identify_by_indices_matching(matches[i], unique_matches[j]):
+                            equivalent = True
+                        #if indices match, check structure match
+                        else:
+                            equivalent = ins_equi_match_identifier.identify_by_stct_matching(matches[i], unique_matches[j])
+                                         
+                        if equivalent:
+                            equivalent_matches[j].append(matches[i])
+                            equivalent = True
+                            break
+                if not equivalent:
+                    unique_matches.append(matches[i])
+                    equivalent_matches.append([matches[i]])
+                    unique_angles.append(angle_here)
+                    unique_areas.append(get_area_match(matches[i]))
+            rgst_pbar.update(1)
     return unique_matches, equivalent_matches, unique_areas
 
+class MatchIdentifier:
+    def __init__(self, substrate_conv, film_conv):
+        self.film_symops = SpacegroupAnalyzer(film_conv).get_point_group_operations()
+        self.substrate_symops = SpacegroupAnalyzer(substrate_conv).get_point_group_operations()
+        self.prod_symops = co_point_group_operations(self.film_symops, self.substrate_symops)
+    def is_equivalent(self, normal_1, MR_1, normal_2, MR_2, tol = 0.1):
+        disorient = dot(MR_1, inv(MR_2))
+        for symop_out in self.prod_symops:
+            if np.allclose(disorient, symop_out.rotation_matrix, atol=tol):
+                for symop_in in self.substrate_symops:
+                    if np.allclose(normal_1, dot(symop_in.rotation_matrix, normal_2), atol=tol):
+                        return True
+        return False
+"""
+def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_millers, substrate_millers):
+    #
+    given substrate, film lattice structures, \
+    get non-identical matches and identical match groups
+    
+    Args:
+    substrate (Structure): primitive structure of the substrate material
+    film (Structure): primitive structure of the film material
+    
+    Return:
+    unique_matches (list): list of non-identical matches.
+    equivalent_matches (list): clustered identical matches.
+    unique_areas (list): list of matching areas of non-identical matches
+    #
+    matches = list(sub_analyzer.calculate(film=film, substrate=substrate, film_millers = film_millers, substrate_millers = substrate_millers))
+    print(len(matches))
+    areas = []
+    for i in matches:
+        areas.append(get_area_match(i))
+    matches = sort_list(matches, areas)
+    #unique_normals = []
+    #unique_MRs = []
+    unique_matches = []
+    equivalent_matches = []
+    unique_areas = []
+    #match_identifier = MatchIdentifier(substrate_conv, film_conv)
+    emi = equi_match_identifier(substrate, film, substrate_conv, film_conv)
+    from tqdm.notebook import tqdm
+    with tqdm(total = len(matches), desc = "checking matching identity") as rgst_pbar:
+        for i in range(len(matches)):
+            #normal_here = cross(matches[i].substrate_sl_vectors[0], matches[i].substrate_sl_vectors[1])
+            #normal_here = normal_here/norm(normal_here)
+            #MR_here, T_here = polar(matches[i].match_transformation)
+        
+            if i == 0:
+                unique_matches.append(matches[i])
+                equivalent_matches.append([matches[i]])
+                unique_areas.append(get_area_match(matches[i]))
+                #unique_normals.append(normal_here)
+                #unique_MRs.append(MR_here)
+            else:
+                if len(unique_matches) == 0:
+                    unique_matches.append(matches[i])
+                    equivalent_matches.append([matches[i]])
+                    unique_areas.append(get_area_match(matches[i]))
+                    #unique_normals.append(normal_here)
+                    #unique_MRs.append(MR_here)
+                else:
+                    equivalent = False
+                    for j in range(len(unique_matches)):
+                        #
+                        normal_comp = cross(matches[j].substrate_sl_vectors[0], matches[j].substrate_sl_vectors[1])
+                        normal_comp = normal_comp/norm(normal_comp)
+                        MR_comp, T_comp = polar(matches[j].match_transformation)
+                        
+                        equivalent = match_identifier.is_equivalent(normal_here, MR_here, normal_comp, MR_comp)
+                        if equivalent:
+                            equivalent_matches[j].append(matches[i])
+                            break
+                        
+                        else:
+                        #
+                        if emi.identify_by_stct_matching(matches[i], unique_matches[j]):
+                            equivalent = True
+                            break
+                        
+                    if not equivalent:
+                        unique_matches.append(matches[i])
+                        equivalent_matches.append([matches[i]])
+                        unique_areas.append(get_area_match(matches[i]))
+                        #unique_normals.append(normal_here)
+                        #unique_MRs.append(MR_here)
+            rgst_pbar.update(1)
+    return unique_matches, equivalent_matches, unique_areas
+"""
 class convert_info_forma:
     """
     class to generate matching indices information
@@ -380,73 +469,85 @@ def scatter_by_miller_dict(millers, dict, tuple_id, lattice, strains):
         found_data[i]['strains'] = strains[found_data[i]['type_list']]
     return found_data
 
-def draw_circles(ax, data, existing_label):
+def draw_circles(ax, data, existing_label, dotscatter):
     for i in range(len(data['type_list'])):
+        if dotscatter:
+            center_c = f"C{data['type_list'][i]+3}"
+            center_s = 300
+            center_ap = 0.5
+        else:
+            center_c = 'none'
+            center_s = ((i+1)*16)**2
+            center_ap = 0.7
         if data['type_list'][i] not in existing_label:
-            ax.scatter(data['XY'][0], data['XY'][1], c='none',marker='o',edgecolors=f"C{data['type_list'][i]}", \
-                       s = ((i+1)*8)**2, label = f"type {data['type_list'][i] + 1}", linewidths =3, alpha = 1)
+            ax.scatter(around(data['XY'][0],3), around(data['XY'][1],3), c=center_c,marker='o',edgecolors=f"C{data['type_list'][i]+3}", \
+                       s = center_s, label = f"Type {data['type_list'][i]}", linewidths =7, alpha = center_ap)
             existing_label.append(data['type_list'][i])
         else:
-            ax.scatter(data['XY'][0], data['XY'][1], c='none',marker='o',edgecolors=f"C{data['type_list'][i]}", s = ((i+1)*8)**2, linewidths =3, alpha = 1)
-    return existing_label, ((i+1)*8)**2
+            ax.scatter(around(data['XY'][0],3), around(data['XY'][1],3), c=center_c,marker='o',edgecolors=f"C{data['type_list'][i]+3}", s = center_s, linewidths =7, alpha = center_ap)
+        if dotscatter:
+            ax.scatter(around(data['XY'][0],3), around(data['XY'][1],3), c='none',marker='o', s = 10, alpha = 1)
+            ax.scatter(around(data['XY'][0],3), around(data['XY'][1],3), c='none',marker='o',edgecolors=f"C{data['type_list'][i]+3}", s = center_s, linewidths =7, alpha = 1)
+    return existing_label, ((i+1)*16)**2
     
 
-def plot_matching_data(matching_data, titles, save_filename, show_millers, show_legend, special):
-    fig, ax = plt.subplots(1, 2, figsize=(20, 10))
-    plt.rc('font', family='arial')
-    plt.rc('text', usetex=True)
+def plot_matching_data(matching_data, titles, save_filename, show_millers, show_legend, show_title, special):
+    fig, ax = plt.subplots(1, 2, figsize=(20*1.25, 12*1.25))
+    #plt.rc('font', family='arial')
+    #plt.rc('text', usetex=True)
+    plt.subplots_adjust(wspace=0.01)
     for i in range(2):
         XYs = []
         existing_label = []
         existing_label_ids = []
         for k in list(matching_data[i].keys()):
            XYs.append([matching_data[i][k]['XY'][0], matching_data[i][k]['XY'][1]])
-        XYs = np.array(around(XYs,2))
+        XYs = np.array(around(XYs,3))
         projected = []
         already_done = []
+        sampled_Xt_Yt = []
+        sampled_X_Y = []
         for j in matching_data[i].keys():
             X, Y = matching_data[i][j]['XY']
+            X = around(X,3)
+            Y = around(Y,3)
             if abs(Y) < 1e-2:
-                Y_t = Y + 0.05
+                Y_t = Y + 0.11
+                #Y_t = Y
             else:
-                Y_t = Y + Y/abs(Y)*0.05
+                Y_t = Y + Y/abs(Y)*0.11
+                #Y_t = Y
             if abs(X) < 1e-2:
                 X_t = X
             else:
-                X_t = X + X/abs(X)*0.05
+                X_t = X
             n = len(XYs[(abs(XYs[:,0] - X)<1e-2) & (abs(XYs[:,1] - Y)<1e-2)])
+            #print(np.linalg.norm([X, Y]))
             #print(XYs[(abs(XYs[:,0] - X)<1e-2) & (abs(XYs[:,1] - Y)<1e-2)])
             #print(abs(XYs[:,0] - X), abs(XYs[:,0] - Y))
             if n < 2:
-                if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                    if special:
-                        if allclose(j, [1,1,-3]):
-                            ax[i].text(X-0.11, Y-0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        elif allclose(j, [-3,1,1]):
-                                ax[i].text(X-0.11, Y-0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        elif allclose(j, [3,-1,-1]):
-                                ax[i].text(X+0.11, Y+0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        elif allclose(j, [-1,-1,3]):
-                                ax[i].text(X+0.11, Y+0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        else:
-                            ax[i].text(X, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                    else:
-                        ax[i].text(X, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
+                if show_millers:
+                    ax[i].text(X, Y_t, format_miller_index(j), fontsize=25, ha='center', va='center', bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.15'))
                 else:
                     if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                        ax[i].text(X, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                existing_label, circle_s = draw_circles(ax[i], matching_data[i][j], existing_label)
+                        ax[i].text(X, Y_t, format_miller_index(j), fontsize=25, ha='center', va='center', bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.15'))
+                existing_label, circle_s = draw_circles(ax[i], matching_data[i][j], existing_label, False)
             else:
                 if [around(X,2), around(Y,2)] not in already_done:
-                    if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                        ax[i].text(X_t+0.05, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        existing_label, circle_s = draw_circles(ax[i], matching_data[i][j], existing_label)
-                        already_done.append([around(X,2), around(Y,2)])
+                    if show_millers and (np.linalg.norm([X, Y]) > 0.9 or np.linalg.norm([X, Y]) < 0.01):
+                        ax[i].text(X_t+0.12, Y_t, format_miller_index(j), fontsize=25, ha='center', va='center', bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.15'))
+                    existing_label, circle_s = draw_circles(ax[i], matching_data[i][j], existing_label, False)
+                    already_done.append([around(X,2), around(Y,2)])
+                    sampled_Xt_Yt.append([X_t, Y_t])
+                    sampled_X_Y.append([X, Y])
                 else:
-                    if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                        ax[i].text(X_t-0.05, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
+                    dis = norm(array(sampled_Xt_Yt) - array([X, Y]), axis = 1)
+                    X_t_h, Y_t_h = array(sampled_Xt_Yt)[argsort(dis)[0]]
+                    if show_millers and (np.linalg.norm([X, Y]) > 0.9  or (abs(X) < 1e-2 and abs(Y) < 1e-2)):
+                        ax[i].text(X_t_h-0.12, Y_t_h, format_miller_index(j), fontsize=25, ha='center', va='center', bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.15'))
                     #ax[i].text(X_t, Y_t, ', ', fontsize=15, ha='center', va='center')
                     #existing_label = draw_circles(ax[i], matching_data[i][j], existing_label)
+                    #existing_label, circle_s = draw_circles(ax[i], matching_data[i][j], existing_label, False)
             #ax[i].text(X_t, Y_t, format_miller_index(j), fontsize=20, ha='center', va='center')
             projected.append([X, Y])
             if X == 0 and Y == 0:
@@ -464,11 +565,11 @@ def plot_matching_data(matching_data, titles, save_filename, show_millers, show_
         radii = np.linalg.norm(projected, axis=1)
         for r in radii:
             if all(abs(r - np.array(existing_radii))>0.01):
-                wulff_circle = plt.Circle((0, 0), r, color='gray', fill=False, linestyle='--', alpha=0.7)
+                wulff_circle = plt.Circle((0, 0), r, color='gray', fill=False, linestyle='--', alpha=0.3)
                 ax[i].add_artist(wulff_circle)
                 existing_radii.append(r)
         if all(abs(1 - np.array(existing_radii))>0.01):
-            ax[i].add_artist(plt.Circle((0, 0), 1, color='gray', fill=False, linestyle='--', alpha=0.7))
+            ax[i].add_artist(plt.Circle((0, 0), 1, color='gray', fill=False, linestyle='--', alpha=0.3))
 
         existing_angles = []
         angles = np.arctan2(projected[:, 1], projected[:, 0])
@@ -479,7 +580,8 @@ def plot_matching_data(matching_data, titles, save_filename, show_millers, show_
                 ax[i].plot([0, x], [0, y], color='gray', linestyle='--', alpha=0.3)
                 existing_angles.append(angle)
         #ax[i].set_frame_on(False)
-        ax[i].set_title(titles[i], fontsize = 25)
+        if show_title:
+            ax[i].set_title(titles[i], fontsize = 40)
         # 获取图形中的句柄和标签
         handles, labels = ax[i].get_legend_handles_labels()
         # 根据标签的字母顺序进行排序
@@ -488,203 +590,32 @@ def plot_matching_data(matching_data, titles, save_filename, show_millers, show_
         sorted_labels, sorted_handles, existing_label = zip(*sorted_handles_labels)
         # 设置 legend，并按照排序后的顺序显示
         if show_legend:
-            ax[i].legend(sorted_handles, sorted_labels, fontsize = 12)
+            custom_labels = []
+            for tp_num in range(len(sorted_labels)):
+                custom_labels.append(
+                                         Line2D([0], [0], marker='o', color = 'w', \
+                                                label=f'Type {tp_num}', markerfacecolor='none', \
+                                                markeredgecolor=f"C{tp_num+3}", markersize=32, markeredgewidth =7, alpha=0.7)
+                                        )
+                
+            #ax[i].legend(sorted_handles, sorted_labels, fontsize = 12, labelspacing=0.5, ncol=int(len(sorted_labels)/2), loc='upper center', bbox_to_anchor=(0.5, 1.05))
+            if i == 0:
+                ax[i].legend(
+                            handles=custom_labels,
+                            fontsize = 30,
+                            labelspacing=0.5,
+                            loc='lower center',
+                            bbox_to_anchor=(0.5, -0.15),
+                            ncol=int(len(sorted_labels)/2),
+                            columnspacing=0.1,
+                            handletextpad=0.05
+                            )
+
     plt.subplots_adjust(wspace=0, hspace=0)
     plt.tight_layout()
     plt.savefig(f'{save_filename}_all.jpg', dpi=600)
 
-def plot_matching_data_strain(matching_data, titles, save_filename, show_millers = True, show_legend = False, special = False):
-    fig, ax = plt.subplots(1, 2, figsize=(20, 10))
-    plt.rc('font', family='arial')
-    plt.rc('text', usetex=True)
-    for i in range(2):
-        XYs = []
-        existing_label = []
-        existing_label_ids = []
-        min_strains = []
-        for k in list(matching_data[i].keys()):
-            XYs.append([matching_data[i][k]['XY'][0], matching_data[i][k]['XY'][1]])
-            min_strains.append(min(matching_data[i][k]['strains']))
-        XYs = np.array(around(XYs,2))
-        projected = []
-        already_done = []
-        for j in matching_data[i].keys():
-            X, Y = matching_data[i][j]['XY']
-            if abs(Y) < 1e-2:
-                Y_t = Y + 0.05
-            else:
-                Y_t = Y + Y/abs(Y)*0.05
-            if abs(X) < 1e-2:
-                X_t = X
-            else:
-                X_t = X + X/abs(X)*0.05
-            n = len(XYs[(abs(XYs[:,0] - X)<1e-2) & (abs(XYs[:,1] - Y)<1e-2)])
-            #print(XYs[(abs(XYs[:,0] - X)<1e-2) & (abs(XYs[:,1] - Y)<1e-2)])
-            #print(abs(XYs[:,0] - X), abs(XYs[:,0] - Y))
-            if n < 2:
-                if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                    if special:
-                        if allclose(j, [1,1,-3]):
-                            ax[i].text(X-0.11, Y-0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        elif allclose(j, [-3,1,1]):
-                                ax[i].text(X-0.11, Y-0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        elif allclose(j, [3,-1,-1]):
-                                ax[i].text(X+0.11, Y+0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        elif allclose(j, [-1,-1,3]):
-                                ax[i].text(X+0.11, Y+0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        else:
-                            ax[i].text(X, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                    else:
-                        ax[i].text(X, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                else:
-                    if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                        ax[i].text(X, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-            else:
-                if [around(X,2), around(Y,2)] not in already_done:
-                    if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                        ax[i].text(X_t+0.05, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        already_done.append([around(X,2), around(Y,2)])
-                else:
-                    if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                        ax[i].text(X_t-0.05, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                    #ax[i].text(X_t, Y_t, ', ', fontsize=15, ha='center', va='center')
-                    #existing_label = draw_circles(ax[i], matching_data[i][j], existing_label)
-            #ax[i].text(X_t, Y_t, format_miller_index(j), fontsize=20, ha='center', va='center')
-            projected.append([X, Y])
-            if X == 0 and Y == 0:
-                have_zero = True
-        sctr = ax[i].scatter(XYs[:,0], XYs[:,1], c=array(min_strains)*100, cmap='viridis', s = 250)
-        projected = np.array(projected)
 
-        ax[i].set_aspect('equal')
-        ax[i].set_xlim([-1.25, 1.25])
-        ax[i].set_ylim([-1.25, 1.25])
-        
-        ax[i].set_xticks([])
-        ax[i].set_yticks([])
-
-        existing_radii = []
-        radii = np.linalg.norm(projected, axis=1)
-        for r in radii:
-            if all(abs(r - np.array(existing_radii))>0.01):
-                wulff_circle = plt.Circle((0, 0), r, color='gray', fill=False, linestyle='--', alpha=0.7)
-                ax[i].add_artist(wulff_circle)
-                existing_radii.append(r)
-        if all(abs(1 - np.array(existing_radii))>0.01):
-            ax[i].add_artist(plt.Circle((0, 0), 1, color='gray', fill=False, linestyle='--', alpha=0.7))
-
-        existing_angles = []
-        angles = np.arctan2(projected[:, 1], projected[:, 0])
-        for angle in angles:
-            if all(abs(angle - np.array(existing_angles))>0.01):
-                x = np.cos(angle)
-                y = np.sin(angle)
-                ax[i].plot([0, x], [0, y], color='gray', linestyle='--', alpha=0.3)
-                existing_angles.append(angle)
-        ##############ax[i].set_frame_on(False)
-        ax[i].set_title(titles[i], fontsize = 25)
-        cbar = fig.colorbar(sctr, ax=ax[i], fraction=0.046, pad=0.04)
-        cbar.set_label('strain (\\%)', fontsize = 30)
-    plt.subplots_adjust(wspace=0, hspace=0)
-    plt.tight_layout()
-    plt.savefig(f'{save_filename}_strain.jpg', dpi=600)
-
-def plot_matching_data_num(matching_data, titles, save_filename, show_millers = True, show_legend = False, special = False):
-    fig, ax = plt.subplots(1, 2, figsize=(20, 10))
-    plt.rc('font', family='arial')
-    plt.rc('text', usetex=True)
-    for i in range(2):
-        XYs = []
-        existing_label = []
-        existing_label_ids = []
-        it_nums = []
-        for k in list(matching_data[i].keys()):
-            XYs.append([matching_data[i][k]['XY'][0], matching_data[i][k]['XY'][1]])
-            it_nums.append(len(matching_data[i][k]['type_list']))
-        XYs = np.array(around(XYs,2))
-        projected = []
-        already_done = []
-        for j in matching_data[i].keys():
-            X, Y = matching_data[i][j]['XY']
-            if abs(Y) < 1e-2:
-                Y_t = Y + 0.05
-            else:
-                Y_t = Y + Y/abs(Y)*0.05
-            if abs(X) < 1e-2:
-                X_t = X
-            else:
-                X_t = X + X/abs(X)*0.05
-            n = len(XYs[(abs(XYs[:,0] - X)<1e-2) & (abs(XYs[:,1] - Y)<1e-2)])
-            #print(XYs[(abs(XYs[:,0] - X)<1e-2) & (abs(XYs[:,1] - Y)<1e-2)])
-            #print(abs(XYs[:,0] - X), abs(XYs[:,0] - Y))
-            if n < 2:
-                if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                    if special:
-                        if allclose(j, [1,1,-3]):
-                            ax[i].text(X-0.11, Y-0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        elif allclose(j, [-3,1,1]):
-                                ax[i].text(X-0.11, Y-0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        elif allclose(j, [3,-1,-1]):
-                                ax[i].text(X+0.11, Y+0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        elif allclose(j, [-1,-1,3]):
-                                ax[i].text(X+0.11, Y+0.08, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        else:
-                            ax[i].text(X, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                    else:
-                        ax[i].text(X, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                else:
-                    if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                        ax[i].text(X, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-            else:
-                if [around(X,2), around(Y,2)] not in already_done:
-                    if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                        ax[i].text(X_t+0.05, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                        already_done.append([around(X,2), around(Y,2)])
-                else:
-                    if show_millers or (abs(X) < 1e-2 and abs(Y) < 1e-2):
-                        ax[i].text(X_t-0.05, Y_t, format_miller_index(j), fontsize=13, ha='center', va='center')
-                    #ax[i].text(X_t, Y_t, ', ', fontsize=15, ha='center', va='center')
-                    #existing_label = draw_circles(ax[i], matching_data[i][j], existing_label)
-            #ax[i].text(X_t, Y_t, format_miller_index(j), fontsize=20, ha='center', va='center')
-            projected.append([X, Y])
-            if X == 0 and Y == 0:
-                have_zero = True
-        sctr = ax[i].scatter(XYs[:,0], XYs[:,1], c=it_nums, s = 250)
-        projected = np.array(projected)
-
-        ax[i].set_aspect('equal')
-        ax[i].set_xlim([-1.25, 1.25])
-        ax[i].set_ylim([-1.25, 1.25])
-        
-        ax[i].set_xticks([])
-        ax[i].set_yticks([])
-
-        existing_radii = []
-        radii = np.linalg.norm(projected, axis=1)
-        for r in radii:
-            if all(abs(r - np.array(existing_radii))>0.01):
-                wulff_circle = plt.Circle((0, 0), r, color='gray', fill=False, linestyle='--', alpha=0.7)
-                ax[i].add_artist(wulff_circle)
-                existing_radii.append(r)
-        if all(abs(1 - np.array(existing_radii))>0.01):
-            ax[i].add_artist(plt.Circle((0, 0), 1, color='gray', fill=False, linestyle='--', alpha=0.7))
-
-        existing_angles = []
-        angles = np.arctan2(projected[:, 1], projected[:, 0])
-        for angle in angles:
-            if all(abs(angle - np.array(existing_angles))>0.01):
-                x = np.cos(angle)
-                y = np.sin(angle)
-                ax[i].plot([0, x], [0, y], color='gray', linestyle='--', alpha=0.3)
-                existing_angles.append(angle)
-        #ax[i].set_frame_on(False)
-        ax[i].set_title(titles[i], fontsize = 25)
-        cbar = fig.colorbar(sctr, ax=ax[i], fraction=0.046, pad=0.04)
-        cbar.set_label('number of interfaces', fontsize = 30)
-        cbar.set_ticks(arange(1, max(it_nums) + 1))
-    plt.subplots_adjust(wspace=0, hspace=0)
-    plt.tight_layout()
-    plt.savefig(f'{save_filename}_num.jpg', dpi=600)
 
 class EquiMatchSorter:
     def __init__(self, film, substrate, equivalent_matches_indices_data, unique_matches):
@@ -736,10 +667,11 @@ class EquiMatchSorter:
         substrate_millers = list(set(substrate_millers))
         self.film_map = {m_id:id for id, m_id in enumerate(film_millers)}
         self.substrate_map = {m_id:id for id, m_id in enumerate(substrate_millers)}
-    def plot_matching_data(self, names = ['film', 'substrate'], save_filename = 'stereographic_projection.jpg', show_millers = True, show_legend = True, special = False):
+    def plot_matching_data(self, names = ['film', 'substrate'], save_filename = 'stereographic_projection.jpg', show_millers = True, show_legend = True, show_title = True, special = False):
         film_matching_data = scatter_by_miller_dict(list(self.film_map.keys()), self.all_matche_data, 0, self.film.lattice, self.strains)
         substrate_matching_data = scatter_by_miller_dict(list(self.substrate_map.keys()), self.all_matche_data, 1, self.substrate.lattice, self.strains)
         matching_data = [film_matching_data, substrate_matching_data]
+        self.matching_data = matching_data
         data = []
         with open(f'{names[0]}_matching_data','w') as f:
             f.write(f'(h k l) (X Y) [types]\n')
@@ -751,7 +683,7 @@ class EquiMatchSorter:
             for i in substrate_matching_data.keys():
                 X, Y = substrate_matching_data[i]['XY']
                 f.write(f"{i[0]} {i[1]} {i[2]} {X} {Y} {substrate_matching_data[i]['type_list']}\n" )
-        plot_matching_data(matching_data, names, save_filename, show_millers, show_legend, special)
+        plot_matching_data(matching_data, names, save_filename, show_millers, show_legend, show_title, special)
         #plot_matching_data_num(matching_data, names, save_filename)
         #plot_matching_data_strain(matching_data, names, save_filename)
 
@@ -763,11 +695,11 @@ class EquiMatchSorter:
         for i in self.unique_matches:
             strains.append(i.von_mises_strain)
             areas.append(i.match_area)
-            x.append(ct + 1)
+            x.append(ct)
             ct+=1
 
-        plt.rc('font', family='arial')
-        plt.rc('text', usetex=False)
+        #plt.rc('font', family='arial')
+        #plt.rc('text', usetex=False)
         x = x
         y1 = areas
         y2 = strains
@@ -782,16 +714,16 @@ class EquiMatchSorter:
 
         ax2.bar(x_pos + width/2 + offset, array(y2)*100, width, alpha=0.6, label='strain', color ='C01')
 
-        ax1.set_xlabel('type', fontsize = 20)
-        ax1.set_ylabel('matching area $\AA^2$', color='C00', fontsize = 20)
-        ax2.set_ylabel('strain %', color='C01', fontsize = 20)
+        ax1.set_xlabel('Type', fontsize = 30)
+        ax1.set_ylabel('Matching area ($\mathregular{\AA}^2$)', color='C00', fontsize = 30)
+        ax2.set_ylabel('Strain (%)', color='C01', fontsize = 30)
 
         ax1.set_xticks(x_pos)
         ax1.set_xticklabels(x)
-        ax1.tick_params(axis='x', labelsize=15)
-        ax1.tick_params(axis='y', labelsize=15, color = 'C00', labelcolor = 'C00')
-        ax2.tick_params(axis='y', labelsize=15, color = 'C01', labelcolor = 'C01')
+        ax1.tick_params(axis='x', labelsize=20)
+        ax1.tick_params(axis='y', labelsize=20, color = 'C00', labelcolor = 'C00')
+        ax2.tick_params(axis='y', labelsize=20, color = 'C01', labelcolor = 'C01')
 
-        fig.legend(loc='upper left', bbox_to_anchor=(0.5, 1.15), fontsize = 15)
+        #fig.legend(loc='upper left', bbox_to_anchor=(0.1, 1.25), fontsize = 25)
         plt.tight_layout()
         fig.savefig(filename, dpi = 600, format='jpg')
