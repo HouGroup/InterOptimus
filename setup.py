@@ -28,5 +28,6 @@ setup(
         "ipywidgets",
         "tqdm",
         "mlipdockers",
+        "mp-api",
     ]
 )
