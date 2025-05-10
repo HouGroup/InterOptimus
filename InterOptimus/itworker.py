@@ -513,8 +513,8 @@ class InterfaceWorker:
 
         self.opt_results = {}
         self.discut = discut
-        columns = [r'$h_s$',r'$k_s$',r'$l_s$',
-                  r'$h_f$',r'$k_f$',r'$l_f$',
+        columns = [r'$h_f$',r'$k_f$',r'$l_f$',
+                  r'$h_s$',r'$k_s$',r'$l_s$',
                    r'$A$ (' + '\u00C5' + '$^2$)', r'$\epsilon$', r'$E_{it}$ $(J/m^2)$', r'$E_{bd}$ $(J/m^2)$', r'$E_{el}$ $(eV/\atom)$', r'$E_{sp}$',
                    r'$u_{f1}$',r'$v_{f1}$',r'$w_{f1}$',
                    r'$u_{f2}$',r'$v_{f2}$',r'$w_{f2}$',
