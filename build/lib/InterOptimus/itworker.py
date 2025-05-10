@@ -3,12 +3,12 @@ from pymatgen.transformations.site_transformations import TranslateSitesTransfor
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces import SubstrateAnalyzer
 from InterOptimus.equi_term import get_non_identical_slab_pairs
-from InterOptimus.tool import apply_cnid_rbt, trans_to_bottom, sort_list, get_it_core_indices, get_min_nb_distance, cut_vaccum, add_sele_dyn_slab, add_sele_dyn_it
+from InterOptimus.tool import apply_cnid_rbt, trans_to_bottom, sort_list, get_it_core_indices, get_min_nb_distance, cut_vaccum, add_sele_dyn_slab, add_sele_dyn_it, get_non_strained_film
 from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
 from skopt import gp_minimize
 from skopt.space import Real
 from tqdm.notebook import tqdm
-from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat
+from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat, cross
 from numpy.linalg import norm
 from InterOptimus.CNID import calculate_cnid_in_supercell
 from InterOptimus.VaspWorkFlow import ItFireworkPatcher
@@ -100,8 +100,9 @@ class InterfaceWorker:
         self.get_all_unique_terminations()
         self.calculate_thickness()
         self.do_opt = False
+        self.dxs = {}
     
-    def parse_optimization_params(self, do = False, fix_shell = False, remove_film_top = False, fix_mode = 0, **kwargs):
+    def parse_optimization_params(self, do = True, fix_shell = 2, remove_film_top = False, fix_mode = 2, **kwargs):
         self.do_opt = do
         self.fix_shell = fix_shell
         self.fix_mode = fix_mode
@@ -299,6 +300,7 @@ class InterfaceWorker:
         cib = self.get_specified_match_cib(match_id)
 
         film_dx, substrate_dx = self.get_film_substrate_layer_thickness(match_id, term_id)
+        self.dxs[(match_id, term_id)] = [film_dx, substrate_dx]
         film_layers = int(ceil(self.film_thickness/film_dx))
         substrate_layers = int(ceil(self.substrate_thickness/substrate_dx))
 
@@ -513,7 +515,7 @@ class InterfaceWorker:
         self.discut = discut
         columns = [r'$h_s$',r'$k_s$',r'$l_s$',
                   r'$h_f$',r'$k_f$',r'$l_f$',
-                   r'$A$ (' + '\u00C5' + '$^2$)', r'$\epsilon$', r'$E_{it}$ $(J/m^2)$', r'$E_{bd}$ $(J/m^2)$', r'$E_{sp}$',
+                   r'$A$ (' + '\u00C5' + '$^2$)', r'$\epsilon$', r'$E_{it}$ $(J/m^2)$', r'$E_{bd}$ $(J/m^2)$', r'$E_{el}$ $(eV/\atom)$', r'$E_{sp}$',
                    r'$u_{f1}$',r'$v_{f1}$',r'$w_{f1}$',
                    r'$u_{f2}$',r'$v_{f2}$',r'$w_{f2}$',
                    r'$u_{s1}$',r'$v_{s1}$',r'$w_{s1}$',
@@ -535,7 +537,7 @@ class InterfaceWorker:
                         m = self.unique_matches
                         idt = self.unique_matches_indices_data
                         
-                        hkl_f, hkl_s = m[i].film_miller, m[i].substrate_miller
+                        hkl_f, hkl_s = idt[i]['film_conventional_miller'], idt[i]['substrate_conventional_miller']
                         A, epsilon, E_sups = m[i].match_area, m[i].von_mises_strain, self.opt_results[(i,j)]['supcl_E']
                         uvw_f1, uvw_f2 = idt[i]['film_conventional_vectors']
                         uvw_s1, uvw_s2 = idt[i]['substrate_conventional_vectors']
@@ -612,6 +614,19 @@ class InterfaceWorker:
                             self.opt_results[(i,j)]['relaxed_slabs']['fmsg']['e'] = single_pair_E[0]
                             self.opt_results[(i,j)]['relaxed_slabs']['fmdb']['e'] = double_pair_E[0]
                             
+                            self.opt_results[(i,j)]['relaxed_slabs']['fmns'] = {}
+                            fmns = get_non_strained_film(self.unique_matches[i], best_it)
+                            fmns_A = norm(cross(fmns.lattice.matrix[0], fmns.lattice.matrix[1]))
+                            min_c, max_c = min(fmns.cart_coords[:,2]), max(fmns.cart_coords[:,2])
+                            fmns_L = ceil((max_c - min_c)/self.dxs[(i,j)][0]) * self.dxs[(i,j)][0]
+                            fmns_V = fmns_L * fmns_A
+                            fmns_E = self.mc.calculate(fmns)
+                            strain_E = - (fmns_E - single_pair_E[0])
+                            
+                            self.opt_results[(i,j)]['relaxed_slabs']['fmns']['structure'] = fmns
+                            self.opt_results[(i,j)]['relaxed_slabs']['fmns']['e'] = fmns_E
+                            self.opt_results[(i,j)]['relaxed_slabs']['fmns']['strain_e'] = strain_E
+                            self.opt_results[(i,j)]['relaxed_slabs']['fmns']['strain_e_per_atom'] = strain_E/len(fmns)
                             #parse relaxed best it structure and energy, Eit, Ech
                             self.opt_results[(i,j)]['relaxed_best_interface']['structure'] = relaxed_best_it
                             self.opt_results[(i,j)]['relaxed_best_interface']['e'] = relaxed_best_sup_E
@@ -624,7 +639,7 @@ class InterfaceWorker:
                             formated_data.append(
                                         [hkl_f[0], hkl_f[1], hkl_f[2],\
                                         hkl_s[0], hkl_s[1], hkl_s[2], \
-                                        A, epsilon, it_E, bd_E, relaxed_best_sup_E, \
+                                        A, epsilon, it_E, bd_E, strain_E/len(fmns),  relaxed_best_sup_E, \
                                         uvw_f1[0], uvw_f1[1], uvw_f1[2], \
                                         uvw_f2[0], uvw_f2[1], uvw_f2[2], \
                                         uvw_s1[0], uvw_s1[1], uvw_s1[2], \
@@ -881,6 +896,7 @@ class InterfaceWorker:
                     self.benchmk_dict[mlip][(i,j)]['A'] = self.unique_matches[i].match_area
                     self.benchmk_dict[mlip][(i,j)]['strain'] = self.unique_matches[i].von_mises_strain
                     self.benchmk_dict[mlip][(i,j)]['slabs'] = self.opt_results[(i,j)]['slabs']
+                    self.benchmk_dict[mlip][(i,j)]['relaxed_slabs'] = self.opt_results[(i,j)]['relaxed_slabs']
                     self.benchmk_dict[mlip][(i,j)]['best_it'] = {}
                     if self.do_opt:
                         self.benchmk_dict[mlip][(i,j)]['best_it']['structure'] = self.opt_results[(i,j)]['relaxed_best_interface']['structure']
