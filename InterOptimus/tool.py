@@ -712,8 +712,16 @@ def get_non_strained_film(match, it):
 def trans_to_bottom(stct):
     ids = np.arange(len(stct))
     min_fc = stct.frac_coords[:,2].min()
-    TST = TranslateSitesTransformation(ids, [0,0,-min_fc])
+    TST = TranslateSitesTransformation(ids, [0,0,-min_fc+1e-6])
     return TST.apply_transformation(stct)
+
+def trans_to_top(stct):
+    ids = np.arange(len(stct))
+    max_fc = stct.frac_coords[:,2].max()
+    TST = TranslateSitesTransformation(ids, [0,0,1-max_fc])
+    nstct = TST.apply_transformation(stct)
+    TST = TranslateSitesTransformation(ids, [0,0,-0.1], vector_in_frac_coords = False)
+    return TST.apply_transformation(nstct)
 
 def get_film_length(match, film, it):
     film_sg = SlabGenerator(
@@ -728,94 +736,39 @@ def get_film_length(match, film, it):
         )
     return film_sg._proj_height * it.film_layers
 
-def add_sele_dyn_slab(slab, shell = None, lr = 0, mode = 0):
+def add_sele_dyn_slab(slab, shell = 0, lr = 'left'):
     slab.fatom_ids = []
-    slab.fline_ids = []
-    
-    if shell > 2.5:
-        shell = 2.5
-    if shell < 2 and shell != 0:
-        shell = 2
-    
-    if shell == 0:
-        return slab, []
-        
-    elif shell == None:
-        fix_indices = list(get_termination_indices(slab)[lr])
-        
-    else:
-        coords = np.array([i.coords[2] for i in slab])
-        if lr == 0:
-            
-            dyn = [False, False, False]
-            posz = min(coords)
-            fix_indices = np.where(coords < posz + shell)[0]
-            slab.fatom_ids = fix_indices.tolist()
-            if mode == 2:
-                fix_indices = np.arange(len(slab))
-                dyn = [False, False, False]
-                slab.fatom_ids = fix_indices.tolist()
-            """
-            fix_indices = np.arange(len(slab))
-            dyn = [False, False, False]
-            slab.fatom_ids = fix_indices.tolist()
-            """
-        elif lr == 1:
-            posz = max(coords)
-            fix_indices = np.where(coords > posz - shell)[0]
-            if mode == 0:
-                dyn = [False, False, False]
-                slab.fatom_ids = fix_indices.tolist()
-            elif mode == 1:
-                dyn = [False, False, True]
-                slab.fline_ids = fix_indices.tolist()
-            elif mode == 2:
-                fix_indices = np.arange(len(slab))
-                dyn = [False, False, False]
-                slab.fatom_ids = fix_indices.tolist()
-            else:
-                raise ValueError('0: xyz-top-fix, 1: xy-top-fix, 2: all-fix')
-        else:
-            raise ValueError('fix left: lr = 0, fix right: lr = 1')
-            
-    if len(fix_indices) > 0:
-        mobility_mtx = np.repeat(np.array([[True, True, True]]), len(slab), axis = 0)
-        mobility_mtx[fix_indices] = dyn
-        
+    mobility_mtx = np.repeat(np.array([[True, True, True]]), len(slab), axis = 0)
+    coords = np.array([i.coords[2] for i in slab])
+    if shell <= 0:
         return slab, mobility_mtx
+    elif shell == np.inf:
+        fix_indices = np.arange(len(coords))
     else:
-        return slab, []
+        if lr == 'left':
+            fix_indices = np.where(coords < min(coords) + shell)[0]
+        elif lr == 'right':
+            fix_indices = np.where(coords > max(coords) - shell)[0]
+        else:
+            raise ValueError('fix left: lr = left, fix right: lr = right')
+    slab.fatom_ids = fix_indices.tolist()
+    mobility_mtx[fix_indices] = [False, False, False]
+    return slab, mobility_mtx
 
-def add_sele_dyn_it(it, film_shell, sub_shell, mode = 0):
+def add_sele_dyn_it(it, film_shell, sub_shell):
     coords = np.array([i.coords[2] for i in it])
-    
-    
-    if film_shell > 2.5:
-        film_shell = 2.5
-    if film_shell < 2 and film_shell != 0:
-        film_shell = 2
-    
-    if sub_shell > 2.5:
-        sub_shell = 2.5
-    if sub_shell < 2 and sub_shell != 0:
-        sub_shell = 2
-    
+    it.fatom_ids = []
     sub_bot_indices = np.where(coords < min(coords) + sub_shell)[0]
     film_top_indices = np.where(coords > max(coords) - film_shell)[0]
     #print(max(coords), film_top_indices)
     it.fatom_ids = []
-    it.fline_ids = []
     mobility_mtx = np.repeat(np.array([[True, True, True]]), len(it), axis = 0)
     if len(sub_bot_indices) > 0:
-        it.fatom_ids = sub_bot_indices.tolist()
+        it.fatom_ids += sub_bot_indices.tolist()
         mobility_mtx[sub_bot_indices] = [False, False, False]
     if len(film_top_indices) > 0:
-        if mode == 0 or mode == 2:
-            it.fatom_ids += film_top_indices.tolist()
-            mobility_mtx[film_top_indices] = [False, False, False]
-        else:
-            it.fline_ids = film_top_indices.tolist()
-            mobility_mtx[film_top_indices] = [False, False, True]
+        it.fatom_ids += film_top_indices.tolist()
+        mobility_mtx[film_top_indices] = [False, False, False]
     return it, mobility_mtx
 
 def cut_vaccum(structure, c):

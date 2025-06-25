@@ -18,7 +18,6 @@ from numpy.linalg import *
 from pymatgen.analysis.structure_matcher import StructureMatcher
 from pymatgen.core.surface import get_symmetrically_equivalent_miller_indices
 #from ase.utils.structure_comparator import SymmetryEquivalenceCheck
-#from MPsoap import to_ase
 from InterOptimus.equi_term import pair_fit
 from InterOptimus.tool import sort_list
 import matplotlib.pyplot as plt
@@ -600,16 +599,19 @@ def plot_matching_data(matching_data, titles, save_filename, show_millers, show_
                 
             #ax[i].legend(sorted_handles, sorted_labels, fontsize = 12, labelspacing=0.5, ncol=int(len(sorted_labels)/2), loc='upper center', bbox_to_anchor=(0.5, 1.05))
             if i == 0:
-                ax[i].legend(
-                            handles=custom_labels,
-                            fontsize = 30,
-                            labelspacing=0.5,
-                            loc='lower center',
-                            bbox_to_anchor=(0.5, -0.15),
-                            ncol=int(len(sorted_labels)/2),
-                            columnspacing=0.1,
-                            handletextpad=0.05
-                            )
+                try:
+                    ax[i].legend(
+                                handles=custom_labels,
+                                fontsize = 30,
+                                labelspacing=0.5,
+                                loc='lower center',
+                                bbox_to_anchor=(0.5, -0.15),
+                                ncol=int(len(sorted_labels)/2),
+                                columnspacing=0.1,
+                                handletextpad=0.05
+                                )
+                except:
+                    pass
 
     plt.subplots_adjust(wspace=0, hspace=0)
     plt.tight_layout()
