@@ -29,5 +29,12 @@ setup(
         "tqdm",
         "mlipdockers",
         "mp-api",
-    ]
+        "orb-models",
+        "sevenn",
+    ],
+    include_package_data=True,
+    package_data={
+        'InterOptimus': ['/data/orb-v3-conservative-20-omat-20250404.ckpt',
+            '/data/checkpoint_sevennet_mf_ompa.pth']
+            },
 )
