@@ -64,7 +64,6 @@ class MlipCalc:
         atoms.set_constraint([FixAtoms(indices = structure.fatom_ids)])
         ft = UnitCellFilter(atoms, kwargs['fix_cell_booleans'])
         relax = optimizer(ft, logfile = None)
-        #relax = optimizer(ft)
         relax.run(fmax = kwargs['fmax'], steps =  kwargs['steps'])
         return Structure.from_ase_atoms(atoms), atoms.get_potential_energy()
     

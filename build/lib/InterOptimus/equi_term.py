@@ -7,7 +7,6 @@ import numpy as np
 from pymatgen.core.surface import SlabGenerator
 from pymatgen.core.operations import SymmOp
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from InterOptimus.MPsoap import to_ase
 from ase.utils.structure_comparator import SymmetryEquivalenceCheck
 import sys
 import time
@@ -166,8 +165,8 @@ def slab_pair_cluster(film_slabs, sub_slabs, c_periodic = True):
                     film_slab_fit = non_identical_slab_pairs[k][0]
                     sub_slab_fit = non_identical_slab_pairs[k][1]
                     ase_SEC = SymmetryEquivalenceCheck()
-                    if ase_SEC.compare(to_ase(film_slab_fit), to_ase(film_slabs[i])) and \
-                    ase_SEC.compare(to_ase(sub_slab_fit), to_ase(sub_slabs[j])):
+                    if ase_SEC.compare(film_slab_fit.to_ase_atoms(), film_slabs[i].to_ase_atoms()) and \
+                    ase_SEC.compare(sub_slab_fit.to_ase_atoms(), sub_slabs[j].to_ase_atoms()):
                         #print('fit')
                         if pair_fit(film_slab_fit, sub_slab_fit, film_slabs[i], sub_slabs[j], matcher, c_periodic):
                             identical_interface_exist = True

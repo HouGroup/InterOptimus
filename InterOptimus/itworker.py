@@ -9,7 +9,7 @@ from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBu
 from skopt import gp_minimize
 from skopt.space import Real
 from tqdm.notebook import tqdm
-from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat, cross, inf, round, arccos, pi
+from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat, cross, inf, round, arccos, pi, where
 from numpy.linalg import norm
 from InterOptimus.CNID import calculate_cnid_in_supercell
 from InterOptimus.VaspWorkFlow import ItFireworkPatcher
@@ -95,16 +95,19 @@ class InterfaceWorker:
         n_prim_substrate = get_normal_from_MI(self.substrate.lattice.matrix.T, hkl_prim_substrate)
         n_prim_substrate = n_prim_substrate / norm(n_prim_substrate)
         screened_matches = []
-        for i in range(len(self.equivalent_matches)):
-            for j in range(len(self.equivalent_matches[i])):
-                match = self.equivalent_matches[i][j]
-                f_vs = match.film_sl_vectors
-                s_vs = match.substrate_sl_vectors
-                R,s = get_rot_strain(f_vs, s_vs)
-                score = norm(cross(n_prim_substrate, dot(R, n_prim_film)))
-                if score < tol:
-                    screened_matches.append([i,j])
-                    break
+        sub_analyzer = SubstrateAnalyzer(max_area = 200, max_length_tol = 0.1, max_angle_tol = 0.1, film_max_miller = 3, substrate_max_miller = 3)
+        matches = list(sub_analyzer.calculate(film=self.film, substrate=self.substrate))
+        for i in range(len(matches)):
+            #for j in range(len(matches[i])):
+            match = matches[i]
+            f_vs = match.film_sl_vectors
+            s_vs = match.substrate_sl_vectors
+            R,s = get_rot_strain(f_vs, s_vs)
+            score = norm(cross(n_prim_substrate, dot(R, n_prim_film)))
+            if score < tol:
+                screened_matches.append(match)
+                print(arccos(dot(n_prim_substrate,dot(R, n_prim_film))) / pi * 180)
+                break
         return screened_matches
     
     def parse_interface_structure_params(self, termination_ftol = 0.01, c_periodic = False, \
@@ -288,12 +291,22 @@ class InterfaceWorker:
             initial_interface = self.get_specified_interface(self.match_id_now, self.term_id_now, [0,0,2])
             xyz[2] = (xyz[2] - 2)/initial_interface.lattice.c
             interface_here = apply_cnid_rbt(initial_interface, xyz[0],xyz[1],xyz[2])
-        self.opt_results[(self.match_id_now,self.term_id_now)]['sampled_interfaces'].append(interface_here)
         term_atom_ids = self.get_interface_atom_indices(interface_here)
         for i in term_atom_ids:
             if get_min_nb_distance(i, interface_here, self.discut) < self.discut:
                 return 0
-        return self.mc.calculate(interface_here)
+        if self.num_relax_bayesian == 0:
+            self.opt_results[(self.match_id_now,self.term_id_now)]['sampled_interfaces'].append(interface_here)
+            return self.mc.calculate(interface_here)
+        else:
+            fix_thickness_film, fix_thickness_substrate = self.absolute_fix_thicknesses[self.match_id_now]
+            interface_here, mobility_mtx = add_sele_dyn_it(interface_here, fix_thickness_film, fix_thickness_substrate)
+            interface_here_relaxed, e = self.mc.optimize(interface_here, fix_cell_booleans = self.opt_kwargs['fix_cell_booleans'], fmax = 0.05, steps = self.num_relax_bayesian)
+            interface_here_relaxed.film = interface_here.film
+            interface_here_relaxed.substrate = interface_here.substrate
+            interface_here_relaxed.interface_properties = interface_here.interface_properties
+            self.opt_results[(self.match_id_now,self.term_id_now)]['sampled_interfaces'].append(interface_here)
+            return e
     
     def get_film_substrate_layer_thickness(self, match_id, term_id):
         """
@@ -545,8 +558,33 @@ class InterfaceWorker:
         self.opt_results[(match_id,term_id)]['xyzs_cart'] = xs_cart
         self.opt_results[(match_id,term_id)]['supcl_E'] = ys
     
+    def screen_low_energy_static_interfaces(self, i, j, rank_by):
+        #select all the interfaces with low energies
+        if self.tol_relax_bayesian > 0:
+            indices = []
+            if rank_by == 'it':
+                ys = self.opt_results[(i,j)]['it_Es']
+            else:
+                ys = self.opt_results[(i,j)]['bd_Es']
+            ys = ys[(ys - min(ys)) < self.tol_relax_bayesian]
+            print(ys)
+            xs = self.opt_results[(i,j)]['xyzs_cart']
+            for idx in range(len(ys)):
+                if idx == 0:
+                    indices.append(idx)
+                else:
+                    too_close = False
+                    for i_idx in indices:
+                        if norm(xs[i_idx] - xs[indices]) < 1:
+                            too_close = True
+                            break
+                    if not too_close:
+                        indices.append(idx)
+        else:
+            indices = [0]
+        return [self.opt_results[(i,j)]['sampled_interfaces'][it] for it in indices]
 
-    def global_minimization(self, n_calls = 50, z_range = (0.5, 3), calc = 'sevenn', discut = 0.8, rank_by = 'it', strain_E_correction = False):
+    def global_minimization(self, n_calls = 50, z_range = (0.5, 3), calc = 'sevenn', discut = 0.8, rank_by = 'it', strain_E_correction = False, num_relax_bayesian = 0, tol_relax_bayesian = 0):
         """
         apply bassian optimization for the xyz registration of all the interfaces with the predicted
         interface energy by machine learning potential, getting ranked interface energies
@@ -558,7 +596,9 @@ class InterfaceWorker:
         discut: (float): allowed minimum atomic distance for searching
         rank_by (str): it interface energy, bd binding energy
         """
-
+        self.rank_by = rank_by
+        self.num_relax_bayesian = num_relax_bayesian
+        self.tol_relax_bayesian = tol_relax_bayesian
         self.opt_results = {}
         self.discut = discut
         columns = [r'$h_f$',r'$k_f$',r'$l_f$',
@@ -577,7 +617,7 @@ class InterfaceWorker:
             for i in range(len(self.unique_matches)):
                 with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
                     for j in range(len(self.all_unique_terminations[i])):
-                    #for j in range(1):
+                    #for j in range(2):
                         #optimize
                         self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
                         
@@ -629,14 +669,27 @@ class InterfaceWorker:
                             #fix interface
                             if not self.c_periodic:
                                 fix_thickness_film, fix_thickness_substrate = self.absolute_fix_thicknesses[i]
+                                screened_its = self.screen_low_energy_static_interfaces(i, j, rank_by)
+                                sample_relaxed_its = []
+                                sample_relaxed_energies = []
+                                for screened_it in screened_its:
+                                    relaxed_screened_it, mobility_mtx = add_sele_dyn_it(screened_it, fix_thickness_film, fix_thickness_substrate)
+                                    relaxed_screened_it, e = self.mc.optimize(relaxed_screened_it, **self.opt_kwargs)
+                                    sample_relaxed_its.append(relaxed_screened_it)
+                                    sample_relaxed_energies.append(e)
+                                best_id = sample_relaxed_energies.index(min(sample_relaxed_energies))
+                                relaxed_best_it, relaxed_best_sup_E = sample_relaxed_its[best_id], sample_relaxed_energies[best_id]
                                 
-                                best_it, mobility_mtx = add_sele_dyn_it(self.opt_results[(i,j)]['sampled_interfaces'][0], fix_thickness_film, fix_thickness_substrate)
+                                relaxed_best_it.film, relaxed_best_it.substrate, relaxed_best_it.interface_properties = \
+                                screened_it.film, screened_it.substrate, screened_it.interface_properties
+                                
+                                print(relaxed_best_sup_E)
                             else:
                                 best_it = self.opt_results[(i,j)]['sampled_interfaces'][0]
                                 mobility_mtx = repeat(array([[True, True, True]]), len(best_it), axis = 0)
                                 best_it.fatom_ids = []
-                            #relax interface
-                            relaxed_best_it, relaxed_best_sup_E = self.mc.optimize(best_it, **self.opt_kwargs)
+                                #relax interface
+                                relaxed_best_it, relaxed_best_sup_E = self.mc.optimize(best_it, **self.opt_kwargs)
                             relaxed_best_it = relaxed_best_it.add_site_property('selective_dynamics', mobility_mtx)
                             
                             #compute Eit Ech
@@ -658,7 +711,7 @@ class InterfaceWorker:
                             
                             #non-strained-film-slab
                             self.opt_results[(i,j)]['relaxed_slabs']['fmns_sg'] = {}
-                            fmns_sg = cut_vaccum(get_non_strained_film(self.unique_matches[i], best_it), self.vacuum_over_film)
+                            fmns_sg = cut_vaccum(get_non_strained_film(self.unique_matches[i], relaxed_best_it), self.vacuum_over_film)
                             min_c, max_c = min(fmns_sg.cart_coords[:,2]), max(fmns_sg.cart_coords[:,2])
                             fmns_sg_L = ceil((max_c - min_c)/self.dzs[(i,j)][0]) * self.dzs[(i,j)][0]
                             fmns_sg_E = self.mc.calculate(fmns_sg)
@@ -727,7 +780,7 @@ class InterfaceWorker:
             self.global_optimized_data = self.global_optimized_data.sort_values(by = r'$E_{it}$ $(J/m^2)$')
         elif rank_by == 'bd':
             self.global_optimized_data = self.global_optimized_data.sort_values(by = r'$E_{bd}$ $(J/m^2)$')
-        self.best_key = (self.global_optimized_data[r'$i_m$'][0], self.global_optimized_data[r'$i_t$'][0])
+        self.best_key = (self.global_optimized_data[r'$i_m$'].to_numpy()[0], self.global_optimized_data[r'$i_t$'].to_numpy()[0])
         #close docker container
         self.close_energy_calculator()
     
@@ -898,8 +951,8 @@ class InterfaceWorker:
         with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
             for i in range(len(self.unique_matches)):
                 with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
-                    #for j in range(1):
-                    for j in range(len(self.all_unique_terminations[i])):
+                    for j in range(2):
+                    #for j in range(len(self.all_unique_terminations[i])):
                         #print('modified')
                         key = f'{i}_{j}'
                         self.global_random_sample_dict[key] = {}

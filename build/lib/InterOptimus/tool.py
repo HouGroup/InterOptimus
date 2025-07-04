@@ -743,7 +743,7 @@ def add_sele_dyn_slab(slab, shell = 0, lr = 'left'):
     if shell <= 0:
         return slab, mobility_mtx
     elif shell == np.inf:
-        fix_indices = np.arange(coords)
+        fix_indices = np.arange(len(coords))
     else:
         if lr == 'left':
             fix_indices = np.where(coords < min(coords) + shell)[0]
