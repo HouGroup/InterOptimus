@@ -124,7 +124,7 @@ def get_vasp_input_settings(name, structure, update_incar_settings = None, updat
     (VaspInputSet)
     """
     default_incar_settings = get_default_incar_settings(name, **kwargs)
-    default_potcar_settings = get_potcar_dict()
+    default_potcar_settings = {}
     #default_potcar_settings = {}
     default_kpoints_settings = {'reciprocal_density':100}
     user_incar_settings = update_setting_dict(default_incar_settings, update_incar_settings)
@@ -135,6 +135,8 @@ def get_vasp_input_settings(name, structure, update_incar_settings = None, updat
         user_potcar_functional = 'PBE_64'
     else:
         user_potcar_functional = update_potcar_functional
+    if user_potcar_functional == 'PBE_64':
+        user_potcar_settings = get_potcar_dict()
     """
     potcar = get_potcar(structure, user_potcar_functional)
     max_encut = max(p.keywords['ENMAX'] for p in potcar)

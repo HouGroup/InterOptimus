@@ -179,7 +179,10 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_
     areas = []
     for i in matches:
         areas.append(get_area_match(i))
-    matches = sort_list(matches, areas)
+    vstrains = []
+    for i in matches:
+        vstrains.append(i.von_mises_strain)
+    matches = sort_list(matches, vstrains)
     unique_angles = []
     unique_matches = []
     equivalent_matches = []
@@ -696,7 +699,7 @@ class EquiMatchSorter:
         ct = 0
         for i in self.unique_matches:
             strains.append(i.von_mises_strain)
-            areas.append(i.match_area)
+            areas.append(norm(cross(i.substrate_sl_vectors[0], i.substrate_sl_vectors[1])))
             x.append(ct)
             ct+=1
 

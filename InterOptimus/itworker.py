@@ -1,18 +1,18 @@
 from InterOptimus.matching import interface_searching, EquiMatchSorter
+from pymatgen.transformations.standard_transformations import DeformStructureTransformation
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces import SubstrateAnalyzer
 from InterOptimus.equi_term import get_non_identical_slab_pairs
-from InterOptimus.tool import apply_cnid_rbt, trans_to_bottom, sort_list, get_it_core_indices, get_min_nb_distance, cut_vaccum, add_sele_dyn_slab, add_sele_dyn_it, get_non_strained_film, get_rot_strain
+from InterOptimus.tool import apply_cnid_rbt, sort_list, get_it_core_indices, get_min_nb_distance, cut_vaccum, add_sele_dyn_slab, add_sele_dyn_it, get_non_strained_film, get_rot_strain
 from pymatgen.io.vasp.sets import MPRelaxSet
 from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
 from skopt import gp_minimize
 from skopt.space import Real
 from tqdm.notebook import tqdm
-from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat, cross, inf, round, arccos, pi, where
+from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat, cross, inf, round, arccos, pi, where, unique
 from numpy.linalg import norm
 from InterOptimus.CNID import calculate_cnid_in_supercell
-from InterOptimus.VaspWorkFlow import ItFireworkPatcher
 import os
 import pandas as pd
 from fireworks import Workflow
@@ -20,8 +20,6 @@ import json
 import pickle
 import warnings
 import shutil
-from ase.filters import UnitCellFilter
-from ase.constraints import FixAtoms, FixedLine
 from interfacemaster.cellcalc import get_normal_from_MI, get_primitive_hkl
 
 def registration_minimizer(interfaceworker, n_calls, z_range):
@@ -85,7 +83,7 @@ class InterfaceWorker:
         self.areas = interface_searching(self.substrate_conv, self.film_conv, sub_analyzer, film_millers, substrate_millers)
         self.ems = EquiMatchSorter(self.film_conv, self.substrate_conv, self.equivalent_matches_indices_data, self.unique_matches)
     
-    def screen_matches_by_parallel_planes(self, hkl_conv_film, hkl_conv_substrate, tol):
+    def screen_matches_by_parallel_planes(self, hkl_conv_film, hkl_conv_substrate, tol = 0.1, max_area = 200, max_length_tol = 0.1, max_angle_tol = 0.1, film_max_miller = 3, substrate_max_miller = 3):
         hkl_prim_film = get_primitive_hkl(hkl = hkl_conv_film,
                                   C_lattice = self.film_conv.lattice.matrix.T, P_lattice = self.film.lattice.matrix.T)
         n_prim_film = get_normal_from_MI(self.film.lattice.matrix.T, hkl_prim_film)
@@ -95,7 +93,7 @@ class InterfaceWorker:
         n_prim_substrate = get_normal_from_MI(self.substrate.lattice.matrix.T, hkl_prim_substrate)
         n_prim_substrate = n_prim_substrate / norm(n_prim_substrate)
         screened_matches = []
-        sub_analyzer = SubstrateAnalyzer(max_area = 200, max_length_tol = 0.1, max_angle_tol = 0.1, film_max_miller = 3, substrate_max_miller = 3)
+        sub_analyzer = SubstrateAnalyzer(max_area = max_area, max_length_tol = max_length_tol, max_angle_tol = max_length_tol, film_max_miller = film_max_miller, substrate_max_miller = substrate_max_miller)
         matches = list(sub_analyzer.calculate(film=self.film, substrate=self.substrate))
         for i in range(len(matches)):
             #for j in range(len(matches[i])):
@@ -106,12 +104,11 @@ class InterfaceWorker:
             score = norm(cross(n_prim_substrate, dot(R, n_prim_film)))
             if score < tol:
                 screened_matches.append(match)
-                print(arccos(dot(n_prim_substrate,dot(R, n_prim_film))) / pi * 180)
-                break
+                print(arccos(dot(n_prim_substrate,dot(R, n_prim_film))) / pi * 180, match.match_area)
+                #break
         return screened_matches
     
-    def parse_interface_structure_params(self, termination_ftol = 0.01, c_periodic = False, \
-                                        vacuum_over_film = 10, film_thickness = 10, substrate_thickness = 10, \
+    def parse_interface_structure_params(self, termination_ftol = 0.01, film_thickness = 10, substrate_thickness = 10, \
                                         shift_to_bottom = True):
         """
         parse necessary structure parameters for interface generation in the next steps
@@ -119,30 +116,30 @@ class InterfaceWorker:
         Args:
 
         termination_ftol (float): tolerance of the c-fractional coordinates for termination atom clustering
-        c_periodic (bool): whether to make double interface supercell
-        vacuum_over_film (float): vacuum thickness over film
         film_thickness (float): film slab thickness
         substrate_thickness (float): substrate slab thickness
         shift_to_bottom (bool): whether to shift the supercell to the bottom
         """
-        self.termination_ftol, self.c_periodic, self.vacuum_over_film, self.film_thickness, self.substrate_thickness, self.shift_to_bottom = \
-        termination_ftol, c_periodic, vacuum_over_film, film_thickness, substrate_thickness, shift_to_bottom
+        self.termination_ftol, self.film_thickness, self.substrate_thickness, self.shift_to_bottom = \
+        termination_ftol, film_thickness, substrate_thickness, shift_to_bottom
         self.get_all_unique_terminations()
         self.calculate_thickness()
         self.do_opt = False
         self.dzs = {}
     
-    def parse_optimization_params(self, do = True, set_fix_thicknesses = (0,0), fix_in_layers = False, whole_slab_fixed = True, **kwargs):
-        self.do_opt = do
+    def parse_optimization_params(self, set_fix_thicknesses = (0,0), fix_in_layers = False, whole_slab_fixed = True, num_relax_bayesian = 0, discut = 0.8,  **kwargs):
+        #number of relaxing steps during BO
+        self.num_relax_bayesian = num_relax_bayesian
+        #during BO, structures with minimum atomic distance lower than discut will be attached a zero energy
+        self.discut = discut
+        
         self.set_fix_thicknesses = set_fix_thicknesses
         self.fix_in_layers = fix_in_layers
         self.whole_slab_fixed = whole_slab_fixed
         self.opt_kwargs = kwargs
-        if self.c_periodic:
-            self.opt_kwargs['fix_cell_booleans'] = [False, False, True, False, False, False]
-        else:
-            self.opt_kwargs['fix_cell_booleans'] = [False, False, False, False, False, False]
-        
+
+        self.opt_kwargs['fix_cell_booleans'] = [False, False, True, False, False, False]
+
         if 'fmax' not in self.opt_kwargs:
             self.opt_kwargs['fmax'] = 0.05
         if 'steps' not in self.opt_kwargs:
@@ -201,7 +198,7 @@ class InterfaceWorker:
         id (int): unique match index
         """
         unique_term_ids = get_non_identical_slab_pairs(self.film, self.substrate, self.unique_matches[id], \
-                                                       ftol = self.termination_ftol, c_periodic = self.c_periodic)[0]
+                                                       ftol = self.termination_ftol, c_periodic = True)[0]
         cib = self.get_specified_match_cib(id)
         return [cib.terminations[i] for i in unique_term_ids]
     
@@ -239,19 +236,13 @@ class InterfaceWorker:
         (Interface)
         """
         x, y, z = xyz
-        if self.c_periodic:
-            gap = vacuum_over_film = z
-        else:
-            gap = z
-            vacuum_over_film = self.vacuum_over_film
+
         cib = self.get_specified_match_cib(match_id)
         film_thickness, substrate_thickness = self.thickness_in_layers[match_id]
         interface_here = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
                                        substrate_thickness = substrate_thickness, film_thickness = film_thickness, \
-                                       vacuum_over_film = vacuum_over_film, gap = gap, in_layers = True))[0]
+                                       vacuum_over_film = z, gap = z, in_layers = True))[0]
         interface_here = apply_cnid_rbt(interface_here, x, y, 0)
-        if self.shift_to_bottom:
-            interface_here = trans_to_bottom(interface_here)
         return interface_here
     
     def set_energy_calculator(self, calc, user_settings = None):
@@ -285,12 +276,9 @@ class InterfaceWorker:
         """
         x,y,z = params
         xyz = [x,y,z]
-        if self.c_periodic:
-            interface_here = self.get_specified_interface(self.match_id_now, self.term_id_now, xyz = xyz)
-        else:
-            initial_interface = self.get_specified_interface(self.match_id_now, self.term_id_now, [0,0,2])
-            xyz[2] = (xyz[2] - 2)/initial_interface.lattice.c
-            interface_here = apply_cnid_rbt(initial_interface, xyz[0],xyz[1],xyz[2])
+
+        interface_here = self.get_specified_interface(self.match_id_now, self.term_id_now, xyz = xyz)
+
         term_atom_ids = self.get_interface_atom_indices(interface_here)
         for i in term_atom_ids:
             if get_min_nb_distance(i, interface_here, self.discut) < self.discut:
@@ -352,144 +340,6 @@ class InterfaceWorker:
         sgs[1].to_file('stsg_POSCAR')
         dbs[0].to_file('fmdb_POSCAR')
         dbs[1].to_file('stdb_POSCAR')
-
-    def get_decomposition_slabs(self, match_id, term_id, get_double_it = False):
-        """
-        get decomposed film & substrate slabs to calculate binding energy
-
-        Args:
-        match_id (int): unique match index
-        term_id (int): unique termination index
-
-        Return:
-        (single_film, single_substrate), (double_film, double_substrate) (tuple): single and double (film, substrate) pairs
-        """
-        
-        cib = self.get_specified_match_cib(match_id)
-
-        film_dz, substrate_dz = self.get_film_substrate_layer_thickness(match_id, term_id)
-        self.dzs[(match_id, term_id)] = [film_dz, substrate_dz]
-
-        film_thickness, substrate_thickness = self.thickness_in_layers[match_id]
-
-        interface_single = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
-                                       substrate_thickness = substrate_thickness, film_thickness = film_thickness, \
-                                       vacuum_over_film = self.vacuum_over_film, gap = 2, in_layers = True))[0]
-        
-        n_film_s = len(interface_single.film)
-        n_substrate_s = len(interface_single.substrate)
-        
-        db_substrate_thickness = substrate_thickness * 2
-        db_film_thickness = film_thickness * 2
-        
-        interface_double = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
-                                       substrate_thickness = db_substrate_thickness, film_thickness = db_film_thickness, \
-                                       vacuum_over_film = self.vacuum_over_film, gap = 2, in_layers = True))[0]
-                                       
-        n_film_d = len(interface_double.film)
-        n_substrate_d = len(interface_double.substrate)
-        
-        while not (n_film_d == 2 * n_film_s and n_substrate_d == 2 * n_substrate_s):
-            if n_substrate_d > 2 * n_substrate_s:
-                db_substrate_thickness += -1
-            if n_substrate_d < 2 * n_substrate_s:
-                db_substrate_thickness += 1
-            if n_film_d > 2 * n_film_s:
-                db_film_thickness += -1
-            if n_film_d < 2 * n_film_s:
-                db_film_thickness += 1
-            
-            interface_double = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
-                                       substrate_thickness = db_substrate_thickness, film_thickness = db_film_thickness, \
-                                       vacuum_over_film = self.vacuum_over_film, gap = 2, in_layers = True))[0]
-            n_film_d = len(interface_double.film)
-            n_substrate_d = len(interface_double.substrate)
-        
-        if get_double_it:
-            return interface_double
-        
-        return (cut_vaccum(trans_to_bottom(interface_single.film), self.vacuum_over_film), \
-                cut_vaccum(trans_to_bottom(interface_single.substrate), self.vacuum_over_film)), \
-                (cut_vaccum(trans_to_bottom(interface_double.film), self.vacuum_over_film), \
-                cut_vaccum(trans_to_bottom(interface_double.substrate), self.vacuum_over_film))
-    
-    def get_interface_energy_and_binding_energy_non_relax(self, supcl_E, match_id, term_id):
-        area = self.unique_matches[match_id].match_area
-        single_pair, double_pair = self.get_decomposition_slabs(match_id, term_id)
-
-        film_single_E = self.mc.calculate(single_pair[0])
-        film_double_E = self.mc.calculate(double_pair[0])
-        substrate_single_E = self.mc.calculate(single_pair[1])
-        substrate_double_E = self.mc.calculate(double_pair[1])
-
-        E_it = (supcl_E - (film_double_E + substrate_double_E) / 2) / area * 16.02176634
-        E_ch = (supcl_E - (film_single_E + substrate_single_E)) / area * 16.02176634
-        if self.c_periodic:
-            E_it = E_it/2
-            E_ch = E_ch/2
-        single_pair_E = (film_single_E, substrate_single_E)
-        double_pair_E = (film_double_E, substrate_double_E)
-        
-        return E_it, E_ch, single_pair, double_pair, single_pair_E, double_pair_E
-    
-    def get_interface_energy_and_binding_energy_relax(self, supcl_E, match_id, term_id):
-        area = self.unique_matches[match_id].match_area
-        single_pair, double_pair = self.get_decomposition_slabs(match_id, term_id)
-        
-        #perform fix
-        #0:no fix, 1: fix substrate, 2: fix both substrate and film
-        
-        #all mobile
-        single_fixed_film_mobility_mtx, single_fixed_substrate_mobility_mtx, \
-        double_fixed_film_mobility_mtx, double_fixed_substrate_mobility_mtx = \
-        repeat(array([[True, True, True]]), len(single_pair[0]), axis = 0), \
-        repeat(array([[True, True, True]]), len(single_pair[1]), axis = 0), \
-        repeat(array([[True, True, True]]), len(double_pair[0]), axis = 0), \
-        repeat(array([[True, True, True]]), len(double_pair[1]), axis = 0)
-        
-        if self.whole_slab_fixed:
-            fix_thickness_film, fix_thickness_substrate = inf, inf
-        else:
-            fix_thickness_film, fix_thickness_substrate = self.absolute_fix_thicknesses[match_id]
-        
-        single_fixed_substrate, single_fixed_substrate_mobility_mtx = \
-                                                                    add_sele_dyn_slab(single_pair[1], fix_thickness_substrate, 'left')
-        double_fixed_substrate, double_fixed_substrate_mobility_mtx = \
-                                                                    add_sele_dyn_slab(double_pair[1], fix_thickness_substrate, 'left')
-    
-        #print(fix_thickness_film, fix_thickness_substrate)
-        single_fixed_film, single_fixed_film_mobility_mtx = \
-                                                            add_sele_dyn_slab(single_pair[0], fix_thickness_film, 'right')
-        double_fixed_film, double_fixed_film_mobility_mtx = \
-                                                            add_sele_dyn_slab(double_pair[0], fix_thickness_film, 'right')
-        
-        single_pair = (single_fixed_film, single_fixed_substrate)
-        double_pair = (double_fixed_film, double_fixed_substrate)
-            
-        #relax and calculate energy
-        film_single, film_single_E = self.mc.optimize(single_pair[0], **self.opt_kwargs)
-        film_double, film_double_E = self.mc.optimize(double_pair[0], **self.opt_kwargs)
-        substrate_single, substrate_single_E = self.mc.optimize(single_pair[1], **self.opt_kwargs)
-        substrate_double, substrate_double_E = self.mc.optimize(double_pair[1], **self.opt_kwargs)
-        
-        #parse structure
-        single_pair, double_pair = (film_single, substrate_single), (film_double, substrate_double)
-        
-        #package
-        E_it = (supcl_E - (film_double_E + substrate_double_E) / 2) / area * 16.02176634
-        E_ch = (supcl_E - (film_single_E + substrate_single_E)) / area * 16.02176634
-        single_pair_E = (film_single_E, substrate_single_E)
-        double_pair_E = (film_double_E, substrate_double_E)
-        single_pair_mobility_mtx = (single_fixed_film_mobility_mtx, single_fixed_substrate_mobility_mtx)
-        double_pair_mobility_mtx = (double_fixed_film_mobility_mtx, double_fixed_substrate_mobility_mtx)
-        
-        #dyn_mtx to relaxed structure
-        single_pair = (single_pair[0].add_site_property('selective_dynamics', single_pair_mobility_mtx[0]), \
-                       single_pair[1].add_site_property('selective_dynamics', single_pair_mobility_mtx[1]))
-        double_pair = (double_pair[0].add_site_property('selective_dynamics', double_pair_mobility_mtx[0]), \
-                       double_pair[1].add_site_property('selective_dynamics', double_pair_mobility_mtx[1]))
-        
-        return E_it, E_ch, single_pair, double_pair, single_pair_E, double_pair_E, single_pair_mobility_mtx, double_pair_mobility_mtx
     
     def get_interface_atom_indices(self, interface):
         """
@@ -504,10 +354,9 @@ class InterfaceWorker:
         """
         #interface atom indices
         ids_film_min, ids_film_max, ids_substrate_min, ids_substrate_max = get_it_core_indices(interface)
-        if self.c_periodic:
-            return concatenate((ids_film_min, ids_film_max, ids_substrate_min, ids_substrate_max))
-        else:
-            return concatenate((ids_film_min, ids_substrate_max))
+
+        return concatenate((ids_film_min, ids_film_max, ids_substrate_min, ids_substrate_max))
+
     
     def optimize_specified_interface_by_mlip(self, match_id, term_id, n_calls = 50, z_range = (0.5, 3), calc = 'mace'):
         """
@@ -558,14 +407,11 @@ class InterfaceWorker:
         self.opt_results[(match_id,term_id)]['xyzs_cart'] = xs_cart
         self.opt_results[(match_id,term_id)]['supcl_E'] = ys
     
-    def screen_low_energy_static_interfaces(self, i, j, rank_by):
+    def screen_low_energy_static_interfaces(self, i, j):
         #select all the interfaces with low energies
         if self.tol_relax_bayesian > 0:
             indices = []
-            if rank_by == 'it':
-                ys = self.opt_results[(i,j)]['it_Es']
-            else:
-                ys = self.opt_results[(i,j)]['bd_Es']
+            ys = self.opt_results[(i,j)]['it_Es']
             ys = ys[(ys - min(ys)) < self.tol_relax_bayesian]
             print(ys)
             xs = self.opt_results[(i,j)]['xyzs_cart']
@@ -583,8 +429,39 @@ class InterfaceWorker:
         else:
             indices = [0]
         return [self.opt_results[(i,j)]['sampled_interfaces'][it] for it in indices]
-
-    def global_minimization(self, n_calls = 50, z_range = (0.5, 3), calc = 'sevenn', discut = 0.8, rank_by = 'it', strain_E_correction = False, num_relax_bayesian = 0, tol_relax_bayesian = 0):
+    
+    def get_i_j_static_best_it(self, i, j, n_calls, z_range, calc):
+        self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
+        best_it = self.opt_results[(i,j)]['sampled_interfaces'][0]
+        best_sup_E = self.opt_results[(i,j)]['supcl_E'][0]
+        area = best_it.lattice.a * best_it.lattice.b
+        E_it = (best_sup_E - len(best_it.film)/len(self.film) * self.film_e - len(best_it.substrate)/len(self.substrate) * self.substrate_e) / area * 16.02176634 / 2
+        return best_it, E_it
+    
+    def phase_stability_evaluation(self, n_calls = 50, z_range = (0.5, 3), calc = 'sevenn', discut = 0.8):
+        self.set_energy_calculator(calc, self.opt_kwargs)
+        self.film_e = self.mc.calculate(self.film)
+        self.substrate_e = self.mc.calculate(self.substrate)
+        self.discut = discut
+        its, Es = [], []
+        self.num_relax_bayesian = 0
+        self.tol_relax_bayesian = 0
+        self.opt_kwargs['fix_cell_booleans'] = [False, False, False, False, False, False]
+        for i in range(len(self.unique_matches)):
+            for j in range(len(self.all_unique_terminations[i])):
+                it, E = self.get_i_j_static_best_it(i, j, n_calls, z_range, calc)
+                its.append(it)
+                Es.append(E)
+        its = sort_list(its, Es)
+        static_it = its[0]
+        static_it.fatom_ids = []
+        relaxed_it,e = self.mc.optimize(static_it, **self.opt_kwargs)
+        dis_fracs = abs(relaxed_it.frac_coords - static_it.frac_coords)
+        dis_fracs = abs(dis_fracs - round(dis_fracs))
+        dis_carts = dot(relaxed_it.lattice.matrix.T, dis_fracs.T).T
+        return static_it, relaxed_it,  sum(norm(dis_fracs, axis = 1))/len(relaxed_it), sum(norm(dis_carts, axis = 1))/len(relaxed_it)
+    
+    def global_minimization(self, n_calls = 50, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, name = ''):
         """
         apply bassian optimization for the xyz registration of all the interfaces with the predicted
         interface energy by machine learning potential, getting ranked interface energies
@@ -592,220 +469,230 @@ class InterfaceWorker:
         Args:
         n_calls (int): number of calls
         z_range (tuple): sampling range of z
-        calc (str): MLIP calculator: mace, orb-models, sevenn, chgnet, grace-2l
-        discut: (float): allowed minimum atomic distance for searching
-        rank_by (str): it interface energy, bd binding energy
+        calc (str): MLIP calculator: orb-models, sevenn
         """
-        self.rank_by = rank_by
-        self.num_relax_bayesian = num_relax_bayesian
-        self.tol_relax_bayesian = tol_relax_bayesian
+        #optimization results
         self.opt_results = {}
-        self.discut = discut
         columns = [r'$h_f$',r'$k_f$',r'$l_f$',
                   r'$h_s$',r'$k_s$',r'$l_s$',
-                   r'$A$ (' + '\u00C5' + '$^2$)', r'$\epsilon$', r'$E_{it}$ $(J/m^2)$', r'$E_{bd}$ $(J/m^2)$', r'$E_{el}$ $(eV/\atom)$', r'$E_{sp}$',
+                   r'$A$ (' + '\u00C5' + '$^2$)', r'$\epsilon$', r'$E_{it}$ $(J/m^2)$', r'$E_{el}$ $(eV/\atom)$', r'$E_{sp}$',
                    r'$u_{f1}$',r'$v_{f1}$',r'$w_{f1}$',
                    r'$u_{f2}$',r'$v_{f2}$',r'$w_{f2}$',
                    r'$u_{s1}$',r'$v_{s1}$',r'$w_{s1}$',
                    r'$u_{s2}$',r'$v_{s2}$',r'$w_{s2}$', r'$T$', r'$i_m$', r'$i_t$']
         formated_data = []
-        #set docker container
+        #set mlip calculator
         self.set_energy_calculator(calc, self.opt_kwargs)
+        self.film_e = self.mc.calculate(self.film)
+        self.substrate_e = self.mc.calculate(self.substrate)
         #scanning matches and terminations
         with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
-            #for i in range(1):
-            for i in range(len(self.unique_matches)):
+            for i in range(1):
+            #for i in range(len(self.unique_matches)):
                 with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
-                    for j in range(len(self.all_unique_terminations[i])):
-                    #for j in range(2):
+                    for j in range(1):
+                    #for j in range(len(self.all_unique_terminations[i])):
                         #optimize
                         self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
                         
-                        #formated data
+                        #lattice matching data
                         m = self.unique_matches
                         idt = self.unique_matches_indices_data
-                        
                         hkl_f, hkl_s = idt[i]['film_conventional_miller'], idt[i]['substrate_conventional_miller']
-                        A, epsilon, E_sups = m[i].match_area, m[i].von_mises_strain, self.opt_results[(i,j)]['supcl_E']
+                        epsilon = m[i].von_mises_strain
                         uvw_f1, uvw_f2 = idt[i]['film_conventional_vectors']
                         uvw_s1, uvw_s2 = idt[i]['substrate_conventional_vectors']
-                        
-                        ##calculate adhesive & interface energy
-                        it_Es, bd_Es, single_pair, double_pair, single_pair_E, double_pair_E = self.get_interface_energy_and_binding_energy_non_relax(array(E_sups), i, j)
-                        
-                        self.opt_results[(i,j)]['A'] = A
-                        self.opt_results[(i,j)]['strain'] = epsilon
-                        self.opt_results[(i,j)]['it_Es'] = it_Es
-                        self.opt_results[(i,j)]['bd_Es'] = bd_Es
-                        self.opt_results[(i,j)]['sup_Es'] = E_sups
-                        ##save single double slabs
-                        self.opt_results[(i,j)]['slabs'] = {}
-                        self.opt_results[(i,j)]['slabs']['fmsg'] = {}
-                        self.opt_results[(i,j)]['slabs']['fmsg']['structure'] = single_pair[0]
-                        self.opt_results[(i,j)]['slabs']['fmsg']['e'] = single_pair_E[0]
-                        
-                        self.opt_results[(i,j)]['slabs']['stsg'] = {}
-                        self.opt_results[(i,j)]['slabs']['stsg']['structure'] = single_pair[1]
-                        self.opt_results[(i,j)]['slabs']['stsg']['e'] = single_pair_E[1]
-                        
-                        self.opt_results[(i,j)]['slabs']['fmdb'] = {}
-                        self.opt_results[(i,j)]['slabs']['fmdb']['structure'] = double_pair[0]
-                        self.opt_results[(i,j)]['slabs']['fmdb']['e'] = double_pair_E[0]
-                        
-                        self.opt_results[(i,j)]['slabs']['stdb'] = {}
-                        self.opt_results[(i,j)]['slabs']['stdb']['structure'] = double_pair[1]
-                        self.opt_results[(i,j)]['slabs']['stdb']['e'] = double_pair_E[1]
+                        ltc = self.opt_results[(i,j)]['sampled_interfaces'][0].lattice
+                        A = ltc.a * ltc.b
 
-                        if self.do_opt:
-                            #relax best interface & slabs
-                            self.opt_results[(i,j)]['relaxed_slabs'] = {}
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmsg'] = {}
-                            self.opt_results[(i,j)]['relaxed_slabs']['stsg'] = {}
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmdb'] = {}
-                            self.opt_results[(i,j)]['relaxed_slabs']['stdb'] = {}
-                            self.opt_results[(i,j)]['relaxed_best_interface'] = {}
+                        #layer thickness
+                        film_dz, substrate_dz = self.get_film_substrate_layer_thickness(i, j)
+                        self.dzs[(i, j)] = [film_dz, substrate_dz]
+                        
+                        #relax best interface & slabs
+                        self.opt_results[(i,j)]['relaxed_best_interface'] = {}
+
+                        #get lowest-energy static it
+                        best_it = self.opt_results[(i,j)]['sampled_interfaces'][0]
+                        
+                        #relax interface
+                        relaxed_best_it, relaxed_best_sup_E = self.mc.optimize(best_it, **self.opt_kwargs)
+                        relaxed_best_it = Structure.from_dict(json.loads(  relaxed_best_it.to_json() ) )
+                        relaxed_best_it.interface_properties = best_it.interface_properties
+                        
+                        #interface energy
+                        it_E = (relaxed_best_sup_E - len(best_it.film)/len(self.film) * self.film_e - len(best_it.substrate)/len(self.substrate) * self.substrate_e) / A * 16.02176634 / 2
+                        
+                        #save to result dict
+                        self.opt_results[(i,j)]['relaxed_best_interface']['structure'] = relaxed_best_it
+                        self.opt_results[(i,j)]['relaxed_best_interface']['e'] = relaxed_best_sup_E
+                        
+                        #energy correction by film strain energy
+                        if strain_E_correction:
                             
-                            #no fix shell:
-                            #fix interface
-                            if not self.c_periodic:
-                                fix_thickness_film, fix_thickness_substrate = self.absolute_fix_thicknesses[i]
-                                screened_its = self.screen_low_energy_static_interfaces(i, j, rank_by)
-                                sample_relaxed_its = []
-                                sample_relaxed_energies = []
-                                for screened_it in screened_its:
-                                    relaxed_screened_it, mobility_mtx = add_sele_dyn_it(screened_it, fix_thickness_film, fix_thickness_substrate)
-                                    relaxed_screened_it, e = self.mc.optimize(relaxed_screened_it, **self.opt_kwargs)
-                                    sample_relaxed_its.append(relaxed_screened_it)
-                                    sample_relaxed_energies.append(e)
-                                best_id = sample_relaxed_energies.index(min(sample_relaxed_energies))
-                                relaxed_best_it, relaxed_best_sup_E = sample_relaxed_its[best_id], sample_relaxed_energies[best_id]
-                                
-                                relaxed_best_it.film, relaxed_best_it.substrate, relaxed_best_it.interface_properties = \
-                                screened_it.film, screened_it.substrate, screened_it.interface_properties
-                                
-                                print(relaxed_best_sup_E)
-                            else:
-                                best_it = self.opt_results[(i,j)]['sampled_interfaces'][0]
-                                mobility_mtx = repeat(array([[True, True, True]]), len(best_it), axis = 0)
-                                best_it.fatom_ids = []
-                                #relax interface
-                                relaxed_best_it, relaxed_best_sup_E = self.mc.optimize(best_it, **self.opt_kwargs)
-                            relaxed_best_it = relaxed_best_it.add_site_property('selective_dynamics', mobility_mtx)
+                            #film length
+                            fmns_L = self.absolute_thicknesses[i][0]
                             
-                            #compute Eit Ech
-                            it_E, bd_E, single_pair, double_pair, \
-                            single_pair_E, double_pair_E, \
-                            single_pair_mobility_mtx, double_pair_mobility_mtx, \
-                            = self.get_interface_energy_and_binding_energy_relax(relaxed_best_sup_E, i, j)
+                            #get film with strain
+                            match = self.unique_matches[i]
+                            f_vs = match.film_sl_vectors
+                            s_vs = match.substrate_sl_vectors
+                            Rt, Sr = get_rot_strain(f_vs, s_vs)
+                            DST = DeformStructureTransformation(Sr)
+                            strain_film = DST.apply_transformation(self.film)
+                            strain_E = (self.mc.calculate(strain_film) - self.film_e)/len(self.film)
                             
-                            #parse relaxed slab structure & energy
-                            self.opt_results[(i,j)]['relaxed_slabs']['stsg']['structure'] = single_pair[1]
-                            self.opt_results[(i,j)]['relaxed_slabs']['stdb']['structure'] = double_pair[1]
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmsg']['structure'] = single_pair[0]
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmdb']['structure'] = double_pair[0]
-                            
-                            self.opt_results[(i,j)]['relaxed_slabs']['stsg']['e'] = single_pair_E[1]
-                            self.opt_results[(i,j)]['relaxed_slabs']['stdb']['e'] = double_pair_E[1]
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmsg']['e'] = single_pair_E[0]
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmdb']['e'] = double_pair_E[0]
-                            
-                            #non-strained-film-slab
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_sg'] = {}
-                            fmns_sg = cut_vaccum(get_non_strained_film(self.unique_matches[i], relaxed_best_it), self.vacuum_over_film)
-                            min_c, max_c = min(fmns_sg.cart_coords[:,2]), max(fmns_sg.cart_coords[:,2])
-                            fmns_sg_L = ceil((max_c - min_c)/self.dzs[(i,j)][0]) * self.dzs[(i,j)][0]
-                            fmns_sg_E = self.mc.calculate(fmns_sg)
-                            strain_E = - (fmns_sg_E - single_pair_E[0])
-                            strain_E_patom = strain_E/len(fmns_sg)
-                            strain_E_mod = strain_E * fmns_sg_L / self.film_thickness / A * 16.02176634
+                            #energy correction
+                            strain_E_mod = strain_E * len(best_it.film) * fmns_L / self.film_thickness / A * 16.02176634 / 2
+                            it_E += strain_E_mod
+                            self.opt_results[(i,j)]['strain_film'] = strain_film
+                            self.opt_results[(i,j)]['strain_E'] = strain_E
+                            self.opt_results[(i,j)]['length_factor'] = fmns_L / self.film_thickness
                             self.opt_results[(i,j)]['A'] = A
-                            self.opt_results[(i,j)]['fmns_sg_L'] = fmns_sg_L
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_sg']['structure'] = fmns_sg
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_sg']['e'] = fmns_sg_E
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_sg']['strain_e'] = strain_E
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_sg']['strain_e_per_atom'] = strain_E/len(fmns_sg)
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_sg']['e_correction'] = strain_E_mod
-                            if strain_E_correction:
-                                bd_E += strain_E_mod
-                            
-                            #non-strained-film-slab-double
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_db'] = {}
-                            fmns_db = cut_vaccum(get_non_strained_film(self.unique_matches[i], self.get_decomposition_slabs(i, j, True)), self.vacuum_over_film)
-                            min_c, max_c = min(fmns_db.cart_coords[:,2]), max(fmns_db.cart_coords[:,2])
-                            fmns_db_L = ceil((max_c - min_c)/self.dzs[(i,j)][0]) * self.dzs[(i,j)][0]
-                            fmns_db_E = self.mc.calculate(fmns_db)
-                            strain_E = - (fmns_db_E - double_pair_E[0])
-                            strain_E_mod = strain_E / 2 * fmns_sg_L / self.film_thickness / A * 16.02176634
-                            
-                            self.opt_results[(i,j)]['fmns_db_L'] = fmns_db_L
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_db']['structure'] = fmns_db
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_db']['e'] = fmns_db_E
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_db']['strain_e'] = strain_E
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_db']['strain_e_per_atom'] = strain_E/len(fmns_db)
-                            self.opt_results[(i,j)]['relaxed_slabs']['fmns_db']['e_correction'] = strain_E_mod
-                            if strain_E_correction:
-                                it_E += strain_E_mod
-                            #parse relaxed best it structure and energy, Eit, Ech
-                            self.opt_results[(i,j)]['relaxed_best_interface']['structure'] = relaxed_best_it
-                            self.opt_results[(i,j)]['relaxed_best_interface']['e'] = relaxed_best_sup_E
-                            self.opt_results[(i,j)]['relaxed_min_it_E'] = it_E
-                            self.opt_results[(i,j)]['relaxed_min_bd_E'] = bd_E
-                                
-                            self.opt_results[(i,j)]['single_double_pairs'] = ((self.opt_results[(i,j)]['relaxed_slabs']['fmsg'],
-                                                                              self.opt_results[(i,j)]['relaxed_slabs']['stsg']),
-                                                                              (self.opt_results[(i,j)]['relaxed_slabs']['fmdb'],
-                                                                              self.opt_results[(i,j)]['relaxed_slabs']['stdb']))
-                            formated_data.append(
-                                        [hkl_f[0], hkl_f[1], hkl_f[2],\
-                                        hkl_s[0], hkl_s[1], hkl_s[2], \
-                                        A, epsilon, it_E, bd_E, strain_E_patom,  relaxed_best_sup_E, \
-                                        uvw_f1[0], uvw_f1[1], uvw_f1[2], \
-                                        uvw_f2[0], uvw_f2[1], uvw_f2[2], \
-                                        uvw_s1[0], uvw_s1[1], uvw_s1[2], \
-                                        uvw_s2[0], uvw_s2[1], uvw_s2[2], self.all_unique_terminations[i][j], i, j])
-                        else:
-                             formated_data.append(
-                                        [hkl_f[0], hkl_f[1], hkl_f[2],\
-                                        hkl_s[0], hkl_s[1], hkl_s[2], \
-                                        A, epsilon, it_Es[0], bd_Es[0], E_sups[0], \
-                                        uvw_f1[0], uvw_f1[1], uvw_f1[2], \
-                                        uvw_f2[0], uvw_f2[1], uvw_f2[2], \
-                                        uvw_s1[0], uvw_s1[1], uvw_s1[2], \
-                                        uvw_s2[0], uvw_s2[1], uvw_s2[2], self.all_unique_terminations[i][j], i, j])
+
+                        self.opt_results[(i,j)]['thicknesses'] = self.absolute_thicknesses[i]
+                        formated_data.append(
+                                [hkl_f[0], hkl_f[1], hkl_f[2],\
+                                hkl_s[0], hkl_s[1], hkl_s[2], \
+                                A, epsilon, it_E, strain_E,  relaxed_best_sup_E, \
+                                uvw_f1[0], uvw_f1[1], uvw_f1[2], \
+                                uvw_f2[0], uvw_f2[1], uvw_f2[2], \
+                                uvw_s1[0], uvw_s1[1], uvw_s1[2], \
+                                uvw_s2[0], uvw_s2[1], uvw_s2[2], self.all_unique_terminations[i][j], i, j])
                                         
                         term_pbar.update(1)
-                match_pbar.update(1)
+                    match_pbar.update(1)
         self.global_optimized_data = pd.DataFrame(formated_data, columns = columns)
-        if rank_by == 'it':
-            self.global_optimized_data = self.global_optimized_data.sort_values(by = r'$E_{it}$ $(J/m^2)$')
-        elif rank_by == 'bd':
-            self.global_optimized_data = self.global_optimized_data.sort_values(by = r'$E_{bd}$ $(J/m^2)$')
+        self.global_optimized_data = self.global_optimized_data.sort_values(by = r'$E_{it}$ $(J/m^2)$')
+
         self.best_key = (self.global_optimized_data[r'$i_m$'].to_numpy()[0], self.global_optimized_data[r'$i_t$'].to_numpy()[0])
         #close docker container
         self.close_energy_calculator()
+        self.global_optimized_data.to_csv('all_data.csv')
+        with open(f'opt_results_{name}.pkl','wb') as f:
+            pickle.dump(self.opt_results, f)
     
-    def write_vasp_input(self, folder = 'it_E_vasp_input', user_incar_settings = {}, user_potcar_functional = 'PBE', e = 'bd'):
-        try:
-            shutil.rmtree(folder)
-        except:
-            pass
-        os.mkdir(folder)
-        names = ['it', 'film', 'film_non_strain', 'substrate']
-        structures = {}
-        structures['it'] = self.opt_results[self.best_key]['relaxed_best_interface']['structure']
-        if e == 'bd':
-            structures['film'] = self.opt_results[self.best_key]['relaxed_slabs']['fmsg']['structure']
-            structures['film_non_strain'] = self.opt_results[self.best_key]['relaxed_slabs']['fmns_sg']['structure']
-            structures['substrate'] = self.opt_results[self.best_key]['relaxed_slabs']['stsg']['structure']
-        else:
-            structures['film'] = self.opt_results[self.best_key]['relaxed_slabs']['fmdb']['structure']
-            structures['film_non_strain'] = self.opt_results[self.best_key]['relaxed_slabs']['fmns_db']['structure']
-            structures['substrate'] = self.opt_results[self.best_key]['relaxed_slabs']['stdb']['structure']
+    def get_selected_match_ids_per_plane(self):
+        sub_millers = list(self.ems.matching_data[1].keys())
+        type_lists_per_miller = []
+        for i in sub_millers:
+            type_lists_per_miller.append(self.ems.matching_data[1][i]['type_list'])
+        selected_i_ms = []
+        for i in type_lists_per_miller:
+            for k in self.global_optimized_data['$i_m$'].to_numpy():
+                if k in i:
+                    selected_i_ms.append(k)
+                    break
+        self.selected_i_ms_substrate = unique(selected_i_ms)
         
-        for i in names:
-            vis = MPRelaxSet(structures[i], user_incar_settings = user_incar_settings, user_potcar_functional = user_potcar_functional)
-            vis.write_input(f'{folder}/{i}')
-    
+        film_millers = list(self.ems.matching_data[0].keys())
+        type_lists_per_miller = []
+        for i in film_millers:
+            type_lists_per_miller.append(self.ems.matching_data[1][i]['type_list'])
+        selected_i_ms = []
+        for i in type_lists_per_miller:
+            for k in self.global_optimized_data['$i_m$'].to_numpy():
+                if k in i:
+                    selected_i_ms.append(k)
+                    break
+        self.selected_i_ms_film = unique(selected_i_ms)
+
+    def patch_jobflow_jobs(self,
+                            only_lowest_energy_each_sub_plane = False,
+                            only_substrate = False,
+                            
+                            relax_user_incar_settings = None,
+                            relax_user_potcar_settings = None,
+                            relax_user_kpoints_settings = None,
+                            relax_user_potcar_functional = None,
+                            
+                            static_user_incar_settings = None,
+                            static_user_potcar_settings = None,
+                            static_user_kpoints_settings = None,
+                            static_user_potcar_functional = None,
+                            
+                            filter_name = 'my_IO_jobs',
+                            ):
+        """
+        Patch JobFlow jobs, only for c_period = True
+        """
+        
+        from pymatgen.io.vasp.sets import MPStaticSet, MPRelaxSet
+        from atomate2.vasp.jobs.core import StaticMaker, RelaxMaker
+        from jobflow_remote import submit_flow
+        from jobflow import Flow
+        from atomate2.vasp.powerups import add_metadata_to_flow
+        
+        if only_lowest_energy_each_sub_plane:
+            self.get_selected_match_ids_per_plane()
+        pd = self.global_optimized_data
+        ids = pd.index.to_numpy()
+        i_s = pd['$i_m$'].to_numpy()
+        j_s = pd['$i_t$'].to_numpy()
+        match_ids = []
+        pairs = []
+        for i in range(len(i_s)):
+            if only_lowest_energy_each_sub_plane:
+                if only_substrate:
+                    con = i_s[i] not in match_ids and i_s[i] in self.selected_i_ms_substrate
+                else:
+                    con = i_s[i] not in match_ids and (i_s[i] in self.selected_i_ms_substrate or
+                                                        i_s[i] in self.selected_i_ms_film)
+            else:
+                con = i_s[i] not in match_ids
+            if con:
+                match_ids.append(i_s[i])
+                pairs.append((i_s[i], j_s[i]))
+        
+        flows = []
+        for num in range(2):
+            structure = [self.film, self.substrate][num]
+            job = ['film','job'][num]
+            update_metadata = {'filter_name':filter_name, 'job': job}
+            vasp_maker = RelaxMaker(
+                                    input_set_generator = MPRelaxSet(
+                                                        structure,
+                                                        user_incar_settings = relax_user_incar_settings,
+                                                         user_potcar_settings = relax_user_potcar_settings,
+                                                          user_kpoints_settings = relax_user_kpoints_settings,
+                                                           user_potcar_functional = relax_user_potcar_functional,
+                                                           )
+                                    )
+            flows.append(add_metadata_to_flow(flow = vasp_maker.make(structure), additional_fields = update_metadata))
+
+        for i in pairs:
+            it_user_incar_settings = relax_user_incar_settings
+            it_user_incar_settings['IOPTCELL'] = "0 0 0 0 0 0 0 0 1"
+            #interface here
+            it = self.opt_results[i]['relaxed_best_interface']['structure']
+            update_metadata = {'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_it'}
+            vasp_maker = RelaxMaker(
+                                    input_set_generator = MPRelaxSet(
+                                                                    it,
+                                                                    user_incar_settings = it_user_incar_settings,
+                                                                    user_potcar_settings = relax_user_potcar_settings,
+                                                                    user_kpoints_settings = relax_user_kpoints_settings,
+                                                                    user_potcar_functional = relax_user_potcar_functional,
+                                                                    )
+                                    )
+            flows.append(add_metadata_to_flow(flow = vasp_maker.make(it), additional_fields = update_metadata))
+
+            #strained film
+            s_film = self.opt_results[i]['strain_film']
+            update_metadata = {'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_sfilm'}
+            vasp_maker = StaticMaker(
+                                    input_set_generator = MPRelaxSet(
+                                                                    s_film,
+                                                                    user_incar_settings = static_user_incar_settings,
+                                                                    user_potcar_settings = static_user_potcar_settings,
+                                                                    user_kpoints_settings = static_user_kpoints_settings,
+                                                                    user_potcar_functional = static_user_potcar_functional
+                                                                    )
+                                    )
+            flows.append(add_metadata_to_flow(flow = vasp_maker.make(s_film), additional_fields = update_metadata))
+        
+        return flows
+        
     def random_sampling_specified_interface(self, match_id, term_id, n_taget, n_max, sampling_min_displace, discut, set_seed = True, seed = 999):
         """
         perform random sampling of rigid body translation for a specified interface
@@ -870,344 +757,3 @@ class InterfaceWorker:
             n_trials += 1
         
         return sampled_interfaces, xyzs, rbt_carts
-    
-    def calculate_itE_bdE(self, fmsg_E, fmdb_E, stsg_E, stdb_E, sup_E, A):
-        it_E = (sup_E - 1/2 * (fmdb_E + stdb_E)) / A * 16.02176634
-        bd_E = (sup_E - (fmsg_E + stsg_E)) / A * 16.02176634
-        return it_E, bd_E
-    
-    def predict_global_random_sampling(self, mlip, user_settings = None):
-        """
-        predict all the sampled structures
-        
-        Args:
-        mlip (str): which machine learning potential to use
-        """
-        keys = list(self.global_random_sample_dict.keys())
-        self.set_energy_calculator(mlip, self.opt_kwargs)
-        for i in keys:
-            if 'predict' not in self.global_random_sample_dict[i].keys():
-                self.global_random_sample_dict[i]['predict'] = {}
-            self.global_random_sample_dict[i]['predict'][mlip] = {}
-            
-            #slabs
-            for slb in ['fmsg','fmdb','stsg','stdb']:
-                stct = Structure.from_dict(json.loads(self.global_random_sample_dict[i][slb]))
-                self.global_random_sample_dict[i]['predict'][mlip][slb] = self.mc.calculate(stct)
-                
-            dct = self.global_random_sample_dict[i]['predict'][mlip]
-            
-            self.global_random_sample_dict[i]['predict'][mlip]['sup_Es'] = []
-            self.global_random_sample_dict[i]['predict'][mlip]['it_Es'] = []
-            self.global_random_sample_dict[i]['predict'][mlip]['bd_Es'] = []
-            
-            for k in self.global_random_sample_dict[i]['sampled_interfaces']:
-                sup_E = self.mc.calculate(Structure.from_dict(json.loads(k)))
-                self.global_random_sample_dict[i]['predict'][mlip]['sup_Es'].append(sup_E)
-                
-                it_E, bd_E = self.calculate_itE_bdE(dct['fmsg'], dct['fmdb'], dct['stsg'], dct['stdb'], sup_E, self.global_random_sample_dict[i]['A'])
-                
-                self.global_random_sample_dict[i]['predict'][mlip]['it_Es'].append(it_E)
-                self.global_random_sample_dict[i]['predict'][mlip]['bd_Es'].append(bd_E)
-                
-        self.close_energy_calculator()
-        
-    def global_random_sampling(self, n_taget, n_max, sampling_min_displace, discut, set_seed = True, seed = 999, to_fireworks = False, **kwargs):
-        """
-        perform random sampling of rigid body translation for all the interface
-        
-        Args:
-        n_taget (int): target number of sampling
-        n_max (int): max number of trials
-        sampling_min_displace (float): sampled rigid body translation position are not allowed to be closer than this (angstrom)
-        discut (float): the atoms are not allowed to be closer than this (angstrom)
-        set_seed (bool): whether to set random seed
-        seed (int): random seed
-        to_fireworks (bool): whether to generate firework workflow dict
-        
-        kwargs:
-        project_name (str): project name to be stored in mongodb database
-        db_file (str): path to atomate mongodb config file
-        vasp_cmd (str): command to run vasp
-        work_dir (str): working directory
-        update_incar_settings, update_potcar_settings, update_kpoints_settings (dict): user incar, potcar, kpoints settings
-        update_potcar_functional (str): which set of functional to use
-
-        Return:
-        (Workflow)
-        """
-        if to_fireworks:
-            for st in ['user_incar_settings', 'user_potcar_settings', 'user_kpoints_settings', 'user_potcar_functional']:
-                if st not in kwargs.keys():
-                    kwargs[st] = None
-            it_firework_patcher = ItFireworkPatcher(kwargs['project_name'], kwargs['db_file'], kwargs['vasp_cmd'],
-                                                     user_incar_settings = kwargs['user_incar_settings'],
-                                                     user_potcar_settings = kwargs['user_potcar_settings'],
-                                                     user_kpoints_settings = kwargs['user_kpoints_settings'],
-                                                     user_potcar_functional = kwargs['user_potcar_functional'])
-            wf = []
-
-        self.global_random_sample_dict = {}
-        with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
-            for i in range(len(self.unique_matches)):
-                with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
-                    for j in range(2):
-                    #for j in range(len(self.all_unique_terminations[i])):
-                        #print('modified')
-                        key = f'{i}_{j}'
-                        self.global_random_sample_dict[key] = {}
-                        self.global_random_sample_dict[key]['A'] = self.unique_matches[i].match_area
-                        self.global_random_sample_dict[key]['strain'] = self.unique_matches[i].von_mises_strain
-                        
-                        self.global_random_sample_dict[key]['sampled_interfaces'], \
-                        self.global_random_sample_dict[key]['xyzs'], \
-                        self.global_random_sample_dict[key]['rbt_carts'] \
-                        = self.random_sampling_specified_interface(i, j, n_taget, n_max, \
-                                                                    sampling_min_displace, discut, set_seed, seed)
-                        single_pairs, double_pairs = self.get_decomposition_slabs(i, j)
-
-                        if to_fireworks:
-
-                            wf += get_slab_fireworks('random_sample', single_pairs, double_pairs, it_firework_patcher, i, j, kwargs['work_dir'], kwargs['dp'])
-                            
-                            #interface workflow
-                            its = self.global_random_sample_dict[f'{i}_{j}']['sampled_interfaces']
-                            for k in range(len(its)):
-                                fws = it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static', Structure.from_dict(json.loads(its[k])),
-                                                                                          {'i':i, 'j':j, 'k':k, 'tp':'it'},
-                                                                                          os.path.join(kwargs['work_dir'], f'it_{i}_{j}_{k}'), kwargs['dp'])
-                                wf += fws
-
-                        #save slab info
-                        self.global_random_sample_dict[f'{i}_{j}']['fmsg'], self.global_random_sample_dict[f'{i}_{j}']['fmdb'], \
-                        self.global_random_sample_dict[f'{i}_{j}']['stsg'], self.global_random_sample_dict[f'{i}_{j}']['stdb'], = \
-                        single_pairs[0].to_json(), double_pairs[0].to_json(), single_pairs[1].to_json(), double_pairs[1].to_json()
-                        
-                        term_pbar.update(1)
-                match_pbar.update(1)
-                
-        if to_fireworks:
-            with open('global_random_sampling.json','w') as f:
-                json.dump(self.global_random_sample_dict, f)
-            return Workflow(wf)
-    
-    def mlip_benchmark(self, mlips, n_calls = 50, z_range = (0.5, 3), discut = 0.8, **kwargs):
-        """
-        glabal minimization by different mlips, generate firework
-        
-        Args:
-        mlips (list): mlips
-        n_calls (int): number of calls
-        z_range (tuple): sampling range of z
-        discut: (float): allowed minimum atomic distance for searching
-        
-        kwargs:
-        project_name (str): project name to be stored in mongodb database
-        db_file (str): path to atomate mongodb config file
-        vasp_cmd (str): command to run vasp
-        work_dir (str): working directory
-        update_incar_settings, update_potcar_settings, update_kpoints_settings (dict): user incar, potcar, kpoints settings
-        update_potcar_functional (str): which set of functional to use
-        user_settings: mlip docker container settings
-        
-        Return:
-        (Workflow)
-        """
-
-        #print('modified')
-        if 'work_dir' not in kwargs.keys():
-            kwargs['work_dir'] = ''
-        work_dir = kwargs['work_dir']
-        for st in ['project_name', 'db_file', 'vasp_cmd', 'user_incar_settings', 'user_potcar_settings', 'user_kpoints_settings', 'user_potcar_functional', 'user_settings']:
-            if st not in kwargs.keys():
-                kwargs[st] = None
-        it_firework_patcher = ItFireworkPatcher(kwargs['project_name'], kwargs['db_file'], kwargs['vasp_cmd'],
-                                                 user_incar_settings = kwargs['user_incar_settings'],
-                                                 user_potcar_settings = kwargs['user_potcar_settings'],
-                                                 user_kpoints_settings = kwargs['user_kpoints_settings'],
-                                                 user_potcar_functional = kwargs['user_potcar_functional'])
-        slab_fws_added = False
-        wf = []
-        self.benchmk_dict = {}
-        for mlip in mlips:
-            self.global_minimization(n_calls = n_calls, z_range = z_range, calc = mlip, discut = discut, user_settings = kwargs['user_settings'])
-            self.benchmk_dict[mlip] = {}
-            #for i in range(1):
-            for i in range(len(self.unique_matches)):
-                for j in range(len(self.all_unique_terminations[i])):
-                #for j in range(1):
-                    self.benchmk_dict[mlip][(i,j)] = {}
-                    self.benchmk_dict[mlip][(i,j)]['A'] = self.unique_matches[i].match_area
-                    self.benchmk_dict[mlip][(i,j)]['strain'] = self.unique_matches[i].von_mises_strain
-                    self.benchmk_dict[mlip][(i,j)]['slabs'] = self.opt_results[(i,j)]['slabs']
-                    self.benchmk_dict[mlip][(i,j)]['relaxed_slabs'] = self.opt_results[(i,j)]['relaxed_slabs']
-                    self.benchmk_dict[mlip][(i,j)]['best_it'] = {}
-                    if self.do_opt:
-                        self.benchmk_dict[mlip][(i,j)]['best_it']['structure'] = self.opt_results[(i,j)]['relaxed_best_interface']['structure']
-                        self.benchmk_dict[mlip][(i,j)]['best_it']['sup_E'] = self.opt_results[(i,j)]['relaxed_best_interface']['e']
-                        self.benchmk_dict[mlip][(i,j)]['best_it']['it_E'] = self.opt_results[(i,j)]['relaxed_min_it_E']
-                        self.benchmk_dict[mlip][(i,j)]['best_it']['bd_E'] = self.opt_results[(i,j)]['relaxed_min_bd_E']
-                    else:
-                        self.benchmk_dict[mlip][(i,j)]['best_it']['structure'] = self.opt_results[(i,j)]['sampled_interfaces'][0]
-                        self.benchmk_dict[mlip][(i,j)]['best_it']['sup_E'] = self.opt_results[(i,j)]['sup_Es'][0]
-                        self.benchmk_dict[mlip][(i,j)]['best_it']['it_E'] = self.opt_results[(i,j)]['it_Es'][0]
-                        self.benchmk_dict[mlip][(i,j)]['best_it']['bd_E'] = self.opt_results[(i,j)]['bd_Es'][0]
-                    self.benchmk_dict[mlip][(i,j)]['opt_results'] = self.opt_results[(i,j)]
-                    
-                    work_dir = os.path.join(kwargs['work_dir'], mlip)
-                    
-                    if self.do_opt:
-                        self.benchmk_dict[mlip][(i,j)]['relaxed_slabs'] = self.opt_results[(i,j)]['relaxed_slabs']
-                        best_it_structure = self.opt_results[(i,j)]['relaxed_best_interface']['structure']
-                        if not slab_fws_added:
-                            single_pairs, double_pairs = self.opt_results[(i,j)]['single_double_pairs']
-                            if kwargs['dp']:
-                                wf += get_slab_fireworks_dp('interface relax', single_pairs, double_pairs, it_firework_patcher, i, j, work_dir, kwargs['dp'])
-                            else:
-                                wf += get_slab_fireworks_relax_direct(single_pairs, double_pairs, it_firework_patcher, i, j, work_dir, self.c_periodic)
-                    else:
-                        best_it_structure = self.benchmk_dict[mlip][(i,j)]['best_it']['structure']
-                        if not slab_fws_added:
-                            single_pairs, double_pairs = self.get_decomposition_slabs(i, j)
-                            wf += get_slab_fireworks_dp('interface static', single_pairs, double_pairs, it_firework_patcher, i, j, work_dir, kwargs['dp'])
-                            slab_fws_added = True
-                    
-                    if self.do_opt:
-                        if kwargs['dp']:
-                            wf += it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface relax',
-                                                                                best_it_structure,
-                                                                                {'mlip':mlip, 'i':i, 'j':j, 'tp':'it'},
-                                                                                os.path.join(work_dir, f'it_{i}_{j}'), dp = kwargs['dp'], c_periodic = self.c_periodic)
-                        else:
-                            wf += [it_firework_patcher.get_fw(best_it_structure, {'mlip':mlip, 'i':i, 'j':j, 'tp':'it'}, os.path.join(work_dir, f'it_{i}_{j}'), 'interface relax', LDIPOL = False, c_periodic = self.c_periodic)]
-                    else:
-                        wf += it_firework_patcher.non_dipole_mod_fol_by_diple_mod('interface static',
-                                                                            best_it_structure,
-                                                                            {'mlip':mlip, 'i':i, 'j':j, 'tp':'it'},
-                                                                            os.path.join(work_dir, f'it_{i}_{j}'), dp = kwargs['dp'])
-            slab_fws_added = True
-        
-        
-        
-        with open('benchmk.pkl','wb') as f:
-            pickle.dump(self.benchmk_dict, f)
-        return Workflow(wf)
-    
-    def conv_test(self, length_list, match_id, term_id, n_calls, calc = 'sevenn', discut = 0.8, conv = 'slab', slab_length = 10, user_settings = None):
-        conv_dict = {}
-        film_l, substrate_l = self.get_film_substrate_layer_thickness(match_id, term_id)
-        fix_thickness_film, fix_thickness_substrate = self.absolute_fix_thicknesses[match_id]
-        if fix_thickness_film < 2:
-            warnings.warn(f'({i}, {j}) fixed film thickness is lower than 2 angstrom!')
-        if fix_thickness_substrate < 2:
-            warnings.warn(f'({i}, {j}) fixed substrate thickness is lower than 2 angstrom!')
-            
-        self.set_energy_calculator(calc, self.opt_kwargs)
-        self.discut = discut
-        for L in length_list:
-            if conv == 'slab':
-                self.parse_interface_structure_params(termination_ftol = self.termination_ftol, c_periodic = False, \
-                                        vacuum_over_film = 10, film_thickness = L, \
-                                        substrate_thickness = L, shift_to_bottom = True)
-            else:
-                self.parse_interface_structure_params(termination_ftol = self.termination_ftol, c_periodic = False, \
-                                        vacuum_over_film = L, film_thickness = slab_length, \
-                                        substrate_thickness = slab_length, shift_to_bottom = True)
-            self.optimize_specified_interface_by_mlip(match_id, term_id, n_calls = n_calls, z_range = (0.5, 3), calc = calc)
-            conv_dict[L] = {}
-            conv_dict[L]['relaxed_slabs'] = {}
-            conv_dict[L]['relaxed_slabs']['fmsg'] = {}
-            conv_dict[L]['relaxed_slabs']['stsg'] = {}
-            conv_dict[L]['relaxed_slabs']['fmdb'] = {}
-            conv_dict[L]['relaxed_slabs']['stdb'] = {}
-            conv_dict[L]['relaxed_best_interface'] = {}
-            
-            best_it = self.get_specified_interface(match_id=match_id, term_id=term_id, xyz=self.opt_results[(match_id,term_id)]['xyzs_ognl'][0])
-            best_it, mobility_mtx = add_sele_dyn_it(best_it, fix_thickness_film, fix_thickness_substrate)
-            
-            #relax interface
-            relaxed_best_it, relaxed_best_sup_E = self.mc.optimize(best_it, **self.opt_kwargs)
-            #add site property
-            relaxed_best_it = relaxed_best_it.add_site_property('selective_dynamics', mobility_mtx)
-            
-            #compute Eit Ech
-            it_E, bd_E, single_pair, double_pair, \
-            single_pair_E, double_pair_E, \
-            single_pair_mobility_mtx, double_pair_mobility_mtx, \
-            = self.get_interface_energy_and_binding_energy_relax(relaxed_best_sup_E, match_id, term_id)
-            
-            #parse relaxed slab structure & energy
-            conv_dict[L]['relaxed_slabs']['stsg']['structure'] = single_pair[1]
-            conv_dict[L]['relaxed_slabs']['stdb']['structure'] = double_pair[1]
-            conv_dict[L]['relaxed_slabs']['fmsg']['structure'] = single_pair[0]
-            conv_dict[L]['relaxed_slabs']['fmdb']['structure'] = double_pair[0]
-            
-            conv_dict[L]['relaxed_slabs']['stsg']['e'] = single_pair_E[1]
-            conv_dict[L]['relaxed_slabs']['stdb']['e'] = double_pair_E[1]
-            conv_dict[L]['relaxed_slabs']['fmsg']['e'] = single_pair_E[0]
-            conv_dict[L]['relaxed_slabs']['fmdb']['e'] = double_pair_E[0]
-            
-            #parse relaxed best it structure and energy, Eit, Ech
-            conv_dict[L]['relaxed_best_interface']['structure'] = relaxed_best_it
-            conv_dict[L]['relaxed_best_interface']['e'] = relaxed_best_sup_E
-            conv_dict[L]['relaxed_min_it_E'] = it_E
-            conv_dict[L]['relaxed_min_bd_E'] = bd_E
-        self.conv_dict = conv_dict
-        self.close_energy_calculator()
-
-
-def get_slab_fireworks(name, single_pairs, double_pairs, it_firework_patcher, i, j, workdir, dp):
-    """
-    get fireworks of a set of slabs
-    """
-    #slab workflow
-    fws_fmsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod(name, single_pairs[0],
-                                                                        {'i':i, 'j':j, 'tp':'fmsg'},
-                                                                        os.path.join(workdir, f'fmsg_{i}_{j}'), dp, c_periodic = False)
-    fws_fmdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod(name, double_pairs[0],
-                                                                        {'i':i, 'j':j, 'tp':'fmdb'},
-                                                                        os.path.join(workdir, f'fmdb_{i}_{j}'), dp, c_periodic = False)
-    fws_stsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod(name, single_pairs[1],
-                                                                        {'i':i, 'j':j, 'tp':'stsg'},
-                                                                        os.path.join(workdir, f'stsg_{i}_{j}'), dp, c_periodic = False)
-    fws_stdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod(name, double_pairs[1],
-                                                                        {'i':i, 'j':j, 'tp':'stdb'},
-                                                                        os.path.join(workdir, f'stdb_{i}_{j}'), dp, c_periodic = False)
-    return fws_fmsg + fws_fmdb + fws_stsg + fws_stdb
-
-def get_slab_fireworks_dp(name, single_pairs, double_pairs, it_firework_patcher, i, j, workdir, dp):
-    """
-    get fireworks of a set of slabs
-    """
-    #slab workflow
-    fws_fmsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod(name, single_pairs[0]['structure'],
-                                                                        {'i':i, 'j':j, 'tp':'fmsg'},
-                                                                        os.path.join(workdir, f'fmsg_{i}_{j}'), dp, c_periodic = False)
-    fws_fmdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod(name, double_pairs[0]['structure'],
-                                                                        {'i':i, 'j':j, 'tp':'fmdb'},
-                                                                        os.path.join(workdir, f'fmdb_{i}_{j}'), dp, c_periodic = False)
-    fws_stsg = it_firework_patcher.non_dipole_mod_fol_by_diple_mod(name, single_pairs[1]['structure'],
-                                                                        {'i':i, 'j':j, 'tp':'stsg'},
-                                                                        os.path.join(workdir, f'stsg_{i}_{j}'), dp, c_periodic = False)
-    fws_stdb = it_firework_patcher.non_dipole_mod_fol_by_diple_mod(name, double_pairs[1]['structure'],
-                                                                        {'i':i, 'j':j, 'tp':'stdb'},
-                                                                        os.path.join(workdir, f'stdb_{i}_{j}'), dp, c_periodic = False)
-    return fws_fmsg + fws_fmdb + fws_stsg + fws_stdb
-
-def get_slab_fireworks_relax_direct(single_pairs, double_pairs, it_firework_patcher, i, j, workdir, c_periodic):
-    """
-    get fireworks of a set of slabs
-    """
-    #slab workflow
-    fws_fmsg = it_firework_patcher.get_fw(single_pairs[0]['structure'], {'i':i, 'j':j, 'tp':'fmsg'},
-                                            os.path.join(workdir, f'fmsg_{i}_{j}'), 'interface relax', LDIPOL = False, c_periodic = c_periodic)
-                                            
-    fws_fmdb = it_firework_patcher.get_fw(double_pairs[0]['structure'], {'i':i, 'j':j, 'tp':'fmdb'},
-                                            os.path.join(workdir, f'fmdb_{i}_{j}'), 'interface relax', LDIPOL = False, c_periodic = c_periodic)
-    
-    fws_stsg = it_firework_patcher.get_fw(single_pairs[1]['structure'], {'i':i, 'j':j, 'tp':'stsg'},
-                                            os.path.join(workdir, f'stsg_{i}_{j}'), 'interface relax', LDIPOL = False, c_periodic = c_periodic)
-    
-    fws_stdb = it_firework_patcher.get_fw(double_pairs[1]['structure'], {'i':i, 'j':j, 'tp':'stdb'},
-                                            os.path.join(workdir, f'stdb_{i}_{j}'), 'interface relax', LDIPOL = False, c_periodic = c_periodic)
-    return [fws_fmsg, fws_fmdb, fws_stsg, fws_stdb]

@@ -31,6 +31,7 @@ setup(
         "mp-api",
         "orb-models",
         "sevenn",
+        "torch==2.6",
     ],
     include_package_data=True,
     package_data={

@@ -39,8 +39,16 @@ class MlipCalc:
         if calc == 'orb-models':
             from orb_models.forcefield import pretrained
             from orb_models.forcefield.calculator import ORBCalculator
+            device = user_settings['device']
+            print(device)
             try:
-                self.calc = ORBCalculator(pretrained.orb_v3_conservative_20_omat(weights_path = user_settings['ckpt_path'], device = user_settings['device']), device = user_settings['device'])
+                orbff = pretrained.orb_v3_conservative_20_omat(
+                          weights_path = user_settings['ckpt_path'],
+                          device=device,
+                          precision="float32-high",   # or "float32-highest" / "float64
+                        )
+                self.calc = ORBCalculator(orbff, device = device)
+                print('orb initialization success')
             except:
                 self.calc = ORBCalculator(pretrained.orb_v3_conservative_20_omat(device = user_settings['device']), device = user_settings['device'])
         elif calc == 'sevenn':
@@ -61,7 +69,7 @@ class MlipCalc:
         optimizer = get_optimizer(optimizer)
         atoms = structure.to_ase_atoms()
         atoms.calc = self.calc
-        atoms.set_constraint([FixAtoms(indices = structure.fatom_ids)])
+        #atoms.set_constraint([FixAtoms(indices = structure.fatom_ids)])
         ft = UnitCellFilter(atoms, kwargs['fix_cell_booleans'])
         relax = optimizer(ft, logfile = None)
         #relax = optimizer(ft)

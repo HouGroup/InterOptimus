@@ -1,5 +1,4 @@
 from pymatgen.transformations.standard_transformations import DeformStructureTransformation
-from pymatgen.transformations.standard_transformations import DeformStructureTransformation
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
 from pymatgen.core.surface import SlabGenerator
 import numpy as np
@@ -698,16 +697,16 @@ def get_rot_strain(film_matrix, sub_matrix) -> np.ndarray:
     S = np.dot(R.T, A)
     return R, S
 
-def get_non_strained_film(match, it):
+def get_non_strained_film(match, film):
     f_vs = match.film_sl_vectors
     s_vs = match.substrate_sl_vectors
     R_21, s_21 = get_rot_strain(f_vs, s_vs)
-    R_1it, _ = get_rot_strain(s_vs, it.lattice.matrix[:2])
+    R_1it, _ = get_rot_strain(s_vs, film.lattice.matrix[:2])
     trans_f = np.dot(R_1it, R_21)
     trans_b = np.dot(np.linalg.inv(R_21), np.linalg.inv(R_1it))
     trans = triple_dot(trans_f, np.linalg.inv(s_21), trans_b)
     DST = DeformStructureTransformation(trans)
-    return trans_to_bottom(DST.apply_transformation(it.film))
+    return trans_to_bottom(DST.apply_transformation(film))
 
 def trans_to_bottom(stct):
     ids = np.arange(len(stct))
