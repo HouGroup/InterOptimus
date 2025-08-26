@@ -487,11 +487,11 @@ class InterfaceWorker:
         self.substrate_e = self.mc.calculate(self.substrate)
         #scanning matches and terminations
         with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
-            for i in range(1):
-            #for i in range(len(self.unique_matches)):
+            #for i in range(1):
+            for i in range(len(self.unique_matches)):
                 with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
-                    for j in range(1):
-                    #for j in range(len(self.all_unique_terminations[i])):
+                    #for j in range(1):
+                    for j in range(len(self.all_unique_terminations[i])):
                         #optimize
                         self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
                         
@@ -551,6 +551,8 @@ class InterfaceWorker:
                             self.opt_results[(i,j)]['A'] = A
 
                         self.opt_results[(i,j)]['thicknesses'] = self.absolute_thicknesses[i]
+                        self.opt_results[(i,j)]['relaxed_min_it_E'] = it_E
+                        
                         formated_data.append(
                                 [hkl_f[0], hkl_f[1], hkl_f[2],\
                                 hkl_s[0], hkl_s[1], hkl_s[2], \
@@ -559,7 +561,8 @@ class InterfaceWorker:
                                 uvw_f2[0], uvw_f2[1], uvw_f2[2], \
                                 uvw_s1[0], uvw_s1[1], uvw_s1[2], \
                                 uvw_s2[0], uvw_s2[1], uvw_s2[2], self.all_unique_terminations[i][j], i, j])
-                                        
+                        
+                        
                         term_pbar.update(1)
                     match_pbar.update(1)
         self.global_optimized_data = pd.DataFrame(formated_data, columns = columns)
