@@ -124,7 +124,6 @@ class InterfaceWorker:
         termination_ftol, film_thickness, substrate_thickness, shift_to_bottom
         self.get_all_unique_terminations()
         self.calculate_thickness()
-        self.do_opt = False
         self.dzs = {}
     
     def parse_optimization_params(self, set_fix_thicknesses = (0,0), fix_in_layers = False, whole_slab_fixed = True, num_relax_bayesian = 0, discut = 0.8,  **kwargs):
@@ -601,6 +600,7 @@ class InterfaceWorker:
         self.selected_i_ms_film = unique(selected_i_ms)
 
     def patch_jobflow_jobs(self,
+                            only_lowest_energy = False,
                             only_lowest_energy_each_sub_plane = False,
                             only_substrate = False,
                             
@@ -624,7 +624,6 @@ class InterfaceWorker:
         from atomate2.vasp.jobs.core import StaticMaker, RelaxMaker
         from jobflow_remote import submit_flow
         from jobflow import Flow
-        from atomate2.vasp.powerups import add_metadata_to_flow
         
         if only_lowest_energy_each_sub_plane:
             self.get_selected_match_ids_per_plane()
@@ -632,43 +631,48 @@ class InterfaceWorker:
         ids = pd.index.to_numpy()
         i_s = pd['$i_m$'].to_numpy()
         j_s = pd['$i_t$'].to_numpy()
-        match_ids = []
         pairs = []
-        for i in range(len(i_s)):
-            if only_lowest_energy_each_sub_plane:
-                if only_substrate:
-                    con = i_s[i] not in match_ids and i_s[i] in self.selected_i_ms_substrate
+        if only_lowest_energy:
+            pairs.append((i_s[0], j_s[0]))
+        else:
+            match_ids = []
+            for i in range(len(i_s)):
+                if only_lowest_energy_each_sub_plane:
+                    if only_substrate:
+                        con = i_s[i] not in match_ids and i_s[i] in self.selected_i_ms_substrate
+                    else:
+                        con = i_s[i] not in match_ids and (i_s[i] in self.selected_i_ms_substrate or
+                                                            i_s[i] in self.selected_i_ms_film)
                 else:
-                    con = i_s[i] not in match_ids and (i_s[i] in self.selected_i_ms_substrate or
-                                                        i_s[i] in self.selected_i_ms_film)
-            else:
-                con = i_s[i] not in match_ids
-            if con:
-                match_ids.append(i_s[i])
-                pairs.append((i_s[i], j_s[i]))
+                    con = i_s[i] not in match_ids
+                if con:
+                    match_ids.append(i_s[i])
+                    pairs.append((i_s[i], j_s[i]))
         
         flows = []
         for num in range(2):
             structure = [self.film, self.substrate][num]
-            job = ['film','job'][num]
-            update_metadata = {'filter_name':filter_name, 'job': job}
-            vasp_maker = RelaxMaker(
-                                    input_set_generator = MPRelaxSet(
+            vasp_maker = StaticMaker(
+                                    input_set_generator = MPStaticSet(
                                                         structure,
-                                                        user_incar_settings = relax_user_incar_settings,
-                                                         user_potcar_settings = relax_user_potcar_settings,
-                                                          user_kpoints_settings = relax_user_kpoints_settings,
-                                                           user_potcar_functional = relax_user_potcar_functional,
+                                                        user_incar_settings = static_user_incar_settings,
+                                                         user_potcar_settings = static_user_potcar_settings,
+                                                          user_kpoints_settings = static_user_kpoints_settings,
+                                                           user_potcar_functional = static_user_potcar_functional,
                                                            )
                                     )
-            flows.append(add_metadata_to_flow(flow = vasp_maker.make(structure), additional_fields = update_metadata))
+            job = vasp_maker.make(structure)
+            job.update_metadata({'filter_name':filter_name, 'job': ['film','job'][num]})
+            flows.append(job)
 
         for i in pairs:
-            it_user_incar_settings = relax_user_incar_settings
-            it_user_incar_settings['IOPTCELL'] = "0 0 0 0 0 0 0 0 1"
+            if not relax_user_incar_settings == None:
+                it_user_incar_settings = relax_user_incar_settings
+                it_user_incar_settings['IOPTCELL'] = "0 0 0 0 0 0 0 0 1"
+            else:
+                it_user_incar_settings = {'IOPTCELL':"0 0 0 0 0 0 0 0 1"}
             #interface here
             it = self.opt_results[i]['relaxed_best_interface']['structure']
-            update_metadata = {'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_it'}
             vasp_maker = RelaxMaker(
                                     input_set_generator = MPRelaxSet(
                                                                     it,
@@ -678,13 +682,14 @@ class InterfaceWorker:
                                                                     user_potcar_functional = relax_user_potcar_functional,
                                                                     )
                                     )
-            flows.append(add_metadata_to_flow(flow = vasp_maker.make(it), additional_fields = update_metadata))
+            job = vasp_maker.make(structure)
+            job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_it'})
+            flows.append(job)
 
             #strained film
             s_film = self.opt_results[i]['strain_film']
-            update_metadata = {'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_sfilm'}
             vasp_maker = StaticMaker(
-                                    input_set_generator = MPRelaxSet(
+                                    input_set_generator = MPStaticSet(
                                                                     s_film,
                                                                     user_incar_settings = static_user_incar_settings,
                                                                     user_potcar_settings = static_user_potcar_settings,
@@ -692,7 +697,9 @@ class InterfaceWorker:
                                                                     user_potcar_functional = static_user_potcar_functional
                                                                     )
                                     )
-            flows.append(add_metadata_to_flow(flow = vasp_maker.make(s_film), additional_fields = update_metadata))
+            job = vasp_maker.make(structure)
+            job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_sfilm'})
+            flows.append(job)
         
         return flows
         
