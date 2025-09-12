@@ -662,7 +662,7 @@ class InterfaceWorker:
                                                            )
                                     )
             job = vasp_maker.make(structure)
-            job.update_metadata({'filter_name':filter_name, 'job': ['film','job'][num]})
+            job.update_metadata({'filter_name':filter_name, 'job': ['film','substrate'][num]})
             flows.append(job)
 
         for i in pairs:
@@ -682,7 +682,7 @@ class InterfaceWorker:
                                                                     user_potcar_functional = relax_user_potcar_functional,
                                                                     )
                                     )
-            job = vasp_maker.make(structure)
+            job = vasp_maker.make(it)
             job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_it'})
             flows.append(job)
 
@@ -697,7 +697,7 @@ class InterfaceWorker:
                                                                     user_potcar_functional = static_user_potcar_functional
                                                                     )
                                     )
-            job = vasp_maker.make(structure)
+            job = vasp_maker.make(s_film)
             job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_sfilm'})
             flows.append(job)
         
