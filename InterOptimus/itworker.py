@@ -15,7 +15,6 @@ from numpy.linalg import norm
 from InterOptimus.CNID import calculate_cnid_in_supercell
 import os
 import pandas as pd
-from fireworks import Workflow
 import json
 import pickle
 import warnings
