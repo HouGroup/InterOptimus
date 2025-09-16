@@ -1,12 +1,12 @@
 InterOptimus.egg-info/
 __pycache__/
 dist/
-build/
+build
 test/
 new_test/
 *.pyc
 *.xcodeproj
-*.DS_Store
+.DS_Store
 *.gitignore
 *.ckpt
 
