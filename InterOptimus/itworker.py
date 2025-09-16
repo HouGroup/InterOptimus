@@ -618,8 +618,8 @@ class InterfaceWorker:
                 uvw_f1, uvw_f2 = idt[i]['film_conventional_vectors']
                 uvw_s1, uvw_s2 = idt[i]['substrate_conventional_vectors']
                 with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
-                    for j in range(1):
-                    #for j in range(len(self.all_unique_terminations[i])):
+                    #for j in range(1):
+                    for j in range(len(self.all_unique_terminations[i])):
                         #optimize
                         self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
                         ltc = self.opt_results[(i,j)]['sampled_interfaces'][0].lattice
