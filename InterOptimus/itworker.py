@@ -4,7 +4,7 @@ from pymatgen.transformations.site_transformations import TranslateSitesTransfor
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces import SubstrateAnalyzer
 from InterOptimus.equi_term import get_non_identical_slab_pairs
-from InterOptimus.tool import apply_cnid_rbt, sort_list, get_it_core_indices, get_min_nb_distance, cut_vaccum, add_sele_dyn_slab, add_sele_dyn_it, get_non_strained_film, get_rot_strain
+from InterOptimus.tool import apply_cnid_rbt, sort_list, get_it_core_indices, get_min_nb_distance, cut_vaccum, add_sele_dyn_slab, add_sele_dyn_it, get_non_strained_film, get_rot_strain, trans_to_bottom
 from pymatgen.io.vasp.sets import MPRelaxSet
 from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
 from skopt import gp_minimize
@@ -107,8 +107,7 @@ class InterfaceWorker:
                 #break
         return screened_matches
     
-    def parse_interface_structure_params(self, termination_ftol = 0.01, film_thickness = 10, substrate_thickness = 10, \
-                                        shift_to_bottom = True):
+    def parse_interface_structure_params(self, termination_ftol = 0.01, film_thickness = 10, substrate_thickness = 10, double_interface = False, vacuum_over_film = 5):
         """
         parse necessary structure parameters for interface generation in the next steps
 
@@ -117,26 +116,27 @@ class InterfaceWorker:
         termination_ftol (float): tolerance of the c-fractional coordinates for termination atom clustering
         film_thickness (float): film slab thickness
         substrate_thickness (float): substrate slab thickness
-        shift_to_bottom (bool): whether to shift the supercell to the bottom
+        vacuum_over_film (float): vacuum over film
         """
-        self.termination_ftol, self.film_thickness, self.substrate_thickness, self.shift_to_bottom = \
-        termination_ftol, film_thickness, substrate_thickness, shift_to_bottom
+        self.termination_ftol, self.film_thickness, self.substrate_thickness, self.double_interface, self.vacuum_over_film = \
+        termination_ftol, film_thickness, substrate_thickness, double_interface, vacuum_over_film
         self.get_all_unique_terminations()
         self.calculate_thickness()
-        self.dzs = {}
     
-    def parse_optimization_params(self, set_fix_thicknesses = (0,0), fix_in_layers = False, whole_slab_fixed = True, num_relax_bayesian = 0, discut = 0.8,  **kwargs):
+    def parse_optimization_params(self, set_relax_thicknesses = (0,0), relax_in_layers = False, num_relax_bayesian = 0, discut = 0.8,  **kwargs):
         #number of relaxing steps during BO
         self.num_relax_bayesian = num_relax_bayesian
         #during BO, structures with minimum atomic distance lower than discut will be attached a zero energy
         self.discut = discut
         
-        self.set_fix_thicknesses = set_fix_thicknesses
-        self.fix_in_layers = fix_in_layers
-        self.whole_slab_fixed = whole_slab_fixed
+        self.set_relax_thicknesses = set_relax_thicknesses
+        self.relax_in_layers = relax_in_layers
         self.opt_kwargs = kwargs
-
-        self.opt_kwargs['fix_cell_booleans'] = [False, False, True, False, False, False]
+        
+        if self.double_interface:
+            self.opt_kwargs['fix_cell_booleans'] = [False, False, True, False, False, False]
+        else:
+            self.opt_kwargs['fix_cell_booleans'] = [False, False, False, False, False, False]
 
         if 'fmax' not in self.opt_kwargs:
             self.opt_kwargs['fmax'] = 0.05
@@ -149,28 +149,23 @@ class InterfaceWorker:
             
         self.absolute_fix_thicknesses = []
         for i in range(len(self.unique_matches)):
-            if self.fix_in_layers:
-                if self.set_fix_thicknesses[0] == self.thickness_in_layers[i][0]:
-                    raise ValueError(f'match {i}: the whole film in the interface will be fixed, please reset fix conditions')
-                if self.set_fix_thicknesses[1] == self.thickness_in_layers[i][1]:
-                    raise ValueError(f'match {i}: the whole substrate in the interface will be fixed, please reset fix conditions')
-        
-            fix_thickness_film, fix_thickness_substrate = self.get_specified_match_fix_thickness(i, 0)
-            print(f'match {i}: fix thicknesses (film, substrate) ({round(fix_thickness_film, 2)} {round(fix_thickness_substrate, 2)})')
-            if fix_thickness_film < 2:
-                warnings.warn(f'match {i}: fixed film thickness {fix_thickness_film} is lower than 2 angstrom!')
-            if fix_thickness_substrate < 2:
-                warnings.warn(f'match {i}: fixed substrate thickness {fix_thickness_substrate} is lower than 2 angstrom!')
-            self.absolute_fix_thicknesses.append([fix_thickness_film, fix_thickness_substrate])
-    
-    def get_specified_match_fix_thickness(self, match_id, term_id):
-        if self.fix_in_layers:
-            film_layer_thickness, substrate_layer_thickness = self.get_film_substrate_layer_thickness(match_id, term_id)
-
-            return film_layer_thickness * self.set_fix_thicknesses[0] - 1e-6,\
-                                   substrate_layer_thickness * self.set_fix_thicknesses[1] - 1e-6
-        else:
-            return self.set_fix_thicknesses[0], self.set_fix_thicknesses[1]
+            if self.relax_in_layers:
+                fthk_film = (self.thickness_in_layers[i][0] - set_relax_thicknesses[0]) * self.layer_thicknesses[i][0] - 1e-6
+                fthk_substrate = (self.thickness_in_layers[i][1] - set_relax_thicknesses[1]) * self.layer_thicknesses[i][1] - 1e-6
+            else:
+                fthk_film = self.absolute_thicknesses[i][0] - set_relax_thicknesses[0] - 1e-6
+                fthk_substrate = self.absolute_thicknesses[i][1] - set_relax_thicknesses[1] - 1e-6
+                
+            if fthk_film <= 0:
+                fthk_film = 0
+                warnings.warn('match {i}: set relaxed film thicknesses exceeds the film slab length, the whole film will be relaxed')
+            if fthk_substrate <= 0:
+                fthk_substrate = 0
+                warnings.warn('match {i}: set relaxed substrate thicknesses exceeds the film slab length, the whole film will be relaxed')
+            
+            if not self.double_interface:
+                print(f'match {i}: fix/slab thicknesses (film, substrate) ({round(fthk_film, 2)}/{round(self.absolute_thicknesses[i][0], 2)}, {round(fthk_substrate, 2)}/{round(self.absolute_thicknesses[i][1],2)})')
+            self.absolute_fix_thicknesses.append([fthk_film, fthk_substrate])
 
     def get_specified_match_cib(self, id):
         """
@@ -212,9 +207,11 @@ class InterfaceWorker:
     def calculate_thickness(self):
         self.thickness_in_layers = []
         self.absolute_thicknesses = []
+        self.layer_thicknesses = []
         print('\n')
         for i in range(len(self.unique_matches)):
             film_l, substrate_l = self.get_film_substrate_layer_thickness(i, 0)
+            self.layer_thicknesses.append((film_l, substrate_l))
             film_thickness = int(ceil(self.film_thickness/film_l))
             substrate_thickness = int(ceil(self.substrate_thickness/substrate_l))
             self.thickness_in_layers.append((film_thickness, substrate_thickness))
@@ -234,13 +231,17 @@ class InterfaceWorker:
         (Interface)
         """
         x, y, z = xyz
+        if self.double_interface:
+            vacuum_over_film = z
+        else:
+            vacuum_over_film = self.vacuum_over_film
 
         cib = self.get_specified_match_cib(match_id)
         film_thickness, substrate_thickness = self.thickness_in_layers[match_id]
         interface_here = list(cib.get_interfaces(termination = self.all_unique_terminations[match_id][term_id], \
                                        substrate_thickness = substrate_thickness, film_thickness = film_thickness, \
-                                       vacuum_over_film = z, gap = z, in_layers = True))[0]
-        interface_here = apply_cnid_rbt(interface_here, x, y, 0)
+                                       vacuum_over_film = vacuum_over_film, gap = z, in_layers = True))[0]
+        interface_here = trans_to_bottom(apply_cnid_rbt(interface_here, x, y, 0))
         return interface_here
     
     def set_energy_calculator(self, calc, user_settings = None):
@@ -405,29 +406,6 @@ class InterfaceWorker:
         self.opt_results[(match_id,term_id)]['xyzs_cart'] = xs_cart
         self.opt_results[(match_id,term_id)]['supcl_E'] = ys
     
-    def screen_low_energy_static_interfaces(self, i, j):
-        #select all the interfaces with low energies
-        if self.tol_relax_bayesian > 0:
-            indices = []
-            ys = self.opt_results[(i,j)]['it_Es']
-            ys = ys[(ys - min(ys)) < self.tol_relax_bayesian]
-            print(ys)
-            xs = self.opt_results[(i,j)]['xyzs_cart']
-            for idx in range(len(ys)):
-                if idx == 0:
-                    indices.append(idx)
-                else:
-                    too_close = False
-                    for i_idx in indices:
-                        if norm(xs[i_idx] - xs[indices]) < 1:
-                            too_close = True
-                            break
-                    if not too_close:
-                        indices.append(idx)
-        else:
-            indices = [0]
-        return [self.opt_results[(i,j)]['sampled_interfaces'][it] for it in indices]
-    
     def get_i_j_static_best_it(self, i, j, n_calls, z_range, calc):
         self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
         best_it = self.opt_results[(i,j)]['sampled_interfaces'][0]
@@ -458,7 +436,147 @@ class InterfaceWorker:
         dis_fracs = abs(dis_fracs - round(dis_fracs))
         dis_carts = dot(relaxed_it.lattice.matrix.T, dis_fracs.T).T
         return static_it, relaxed_it,  sum(norm(dis_fracs, axis = 1))/len(relaxed_it), sum(norm(dis_carts, axis = 1))/len(relaxed_it)
+
+    def post_bayesian_process_double_interface(self, i, j, A):
+        #layer thickness
+        self.opt_results[(i,j)]['layer_thickness'] = self.layer_thicknesses[i]
+
+        #fix thickness
+        fthk_film, fthk_substrate = self.absolute_fix_thicknesses[i][0], self.absolute_fix_thicknesses[i][1]
+
+        #relax best interface & slabs
+        self.opt_results[(i,j)]['relaxed_best_interface'] = {}
+
+        #get lowest-energy static it
+        best_it = self.opt_results[(i,j)]['sampled_interfaces'][0]
+        best_it, relaxed_best_sup_E = self.relax_with_selective_dyn_it(best_it, fthk_film, fthk_substrate)
+        
+        #interface energy
+        it_E = (relaxed_best_sup_E - len(best_it.film_indices)/len(self.film) * self.film_e - len(best_it.substrate_indices)/len(self.substrate) * self.substrate_e) / A * 16.02176634 / 2
+        
+        #save to result dict
+        self.opt_results[(i,j)]['relaxed_best_interface']['structure'] = best_it
+        self.opt_results[(i,j)]['relaxed_best_interface']['e'] = relaxed_best_sup_E
+        
+        #energy correction by film strain energy
+        if self.strain_E_correction:
+            
+            #film length
+            fmns_L = self.absolute_thicknesses[i][0]
+            
+            #get film with strain
+            match = self.unique_matches[i]
+            f_vs = match.film_sl_vectors
+            s_vs = match.substrate_sl_vectors
+            Rt, Sr = get_rot_strain(f_vs, s_vs)
+            DST = DeformStructureTransformation(Sr)
+            strain_film = DST.apply_transformation(self.film)
+            strain_E = (self.mc.calculate(strain_film) - self.film_e)/len(self.film)
+            
+            #energy correction
+            strain_E_mod = strain_E * len(best_it.film_indices) * fmns_L / self.film_thickness / A * 16.02176634 / 2
+            it_E += strain_E_mod
+            self.opt_results[(i,j)]['strain_film'] = strain_film
+            self.opt_results[(i,j)]['strain_E'] = strain_E
+            self.opt_results[(i,j)]['length_factor'] = fmns_L / self.film_thickness
+            self.opt_results[(i,j)]['A'] = A
+        else:
+            strain_E = 0
+
+        self.opt_results[(i,j)]['thicknesses'] = self.absolute_thicknesses[i]
+        self.opt_results[(i,j)]['relaxed_min_it_E'] = it_E
+        return it_E, strain_E
     
+    def relax_with_selective_dyn_it(self, it, film_shell, substrate_shell):
+        interface_properties = it.interface_properties
+        film_indices, substrate_indices = it.film_indices, it.substrate_indices
+        it.fatom_ids = []
+        if not self.double_interface:
+            it, mblt_mtx = add_sele_dyn_it(it, film_shell, substrate_shell)
+        it, relaxed_it_sup_E = self.mc.optimize(it, **self.opt_kwargs)
+        it = Structure.from_dict(json.loads(  it.to_json() ) )
+        it = cut_vaccum(it, self.vacuum_over_film)
+        if not self.double_interface:
+            it.add_site_property('selective_dynamics', mblt_mtx)
+        it.interface_properties = interface_properties
+        it.film_indices = film_indices
+        it.substrate_indices = substrate_indices
+        return it, relaxed_it_sup_E
+    
+    def relax_with_selective_dyn_slab(self, slab, shell, left_or_right):
+        slab, mblt_mtx = add_sele_dyn_slab(slab, shell, left_or_right)
+        slab, slab_sup_E = self.mc.optimize(slab, **self.opt_kwargs)
+        slab = Structure.from_dict(json.loads(  slab.to_json() ) )
+        slab = cut_vaccum(slab, self.vacuum_over_film)
+        slab.add_site_property('selective_dynamics', mblt_mtx)
+        return slab, slab_sup_E
+    
+    def post_bayesian_process(self, i, j, A):
+        #layer thickness
+        self.opt_results[(i,j)]['layer_thickness'] = self.layer_thicknesses[i]
+        
+        #fix thickness
+        fthk_film, fthk_substrate = self.absolute_fix_thicknesses[i][0], self.absolute_fix_thicknesses[i][1]
+        
+        #relax best interface & slabs
+        self.opt_results[(i,j)]['relaxed_best_interface'] = {}
+
+        #get lowest-energy static it
+        best_it = self.opt_results[(i,j)]['sampled_interfaces'][0]
+        best_it, relaxed_best_sup_E = self.relax_with_selective_dyn_it(best_it, fthk_film, fthk_substrate)
+        
+        #relax slabs
+        film_slab, substrate_slab = trans_to_bottom(self.opt_results[(i,j)]['sampled_interfaces'][0].film), trans_to_bottom(self.opt_results[(i,j)]['sampled_interfaces'][0].substrate)
+        film_slab, film_slab_E = self.relax_with_selective_dyn_slab(film_slab, fthk_film, 'right')
+        substrate_slab, substrate_slab_E = self.relax_with_selective_dyn_slab(substrate_slab, fthk_substrate, 'left')
+        
+        #binding energy
+        bd_E = (relaxed_best_sup_E - film_slab_E - substrate_slab_E) / A * 16.02176634
+        
+        #save to result dict
+        self.opt_results[(i,j)]['relaxed_best_interface']['structure'] = best_it
+        self.opt_results[(i,j)]['relaxed_best_interface']['e'] = relaxed_best_sup_E
+        
+        self.opt_results[(i,j)]['slabs'] = {}
+        
+        self.opt_results[(i,j)]['slabs']['film'] = {}
+        self.opt_results[(i,j)]['slabs']['film']['structure'] = film_slab
+        self.opt_results[(i,j)]['slabs']['film']['e'] = film_slab_E
+        
+        self.opt_results[(i,j)]['slabs']['substrate'] = {}
+        self.opt_results[(i,j)]['slabs']['substrate']['structure'] = substrate_slab
+        self.opt_results[(i,j)]['slabs']['substrate']['e'] = substrate_slab_E
+        
+        #energy correction by film strain energy
+        if self.strain_E_correction:
+            
+            #film length
+            fmns_L = self.absolute_thicknesses[i][0]
+            
+            #get film with strain
+            match = self.unique_matches[i]
+            f_vs = match.film_sl_vectors
+            s_vs = match.substrate_sl_vectors
+            Rt, Sr = get_rot_strain(f_vs, s_vs)
+            DST = DeformStructureTransformation(Sr)
+            strain_film = DST.apply_transformation(self.film)
+            strain_E = (self.mc.calculate(strain_film) - self.film_e)/len(self.film)
+            
+            #energy correction
+            strain_E_mod = strain_E * len(best_it.film_indices) * fmns_L / self.film_thickness / A * 16.02176634
+            bd_E += strain_E_mod
+            self.opt_results[(i,j)]['strain_film'] = strain_film
+            self.opt_results[(i,j)]['strain_E'] = strain_E
+            self.opt_results[(i,j)]['length_factor'] = fmns_L / self.film_thickness
+            self.opt_results[(i,j)]['A'] = A
+        else:
+            strain_E = 0
+
+        self.opt_results[(i,j)]['thicknesses'] = self.absolute_thicknesses[i]
+        self.opt_results[(i,j)]['relaxed_min_bd_E'] = bd_E
+        return bd_E, strain_E
+
+
     def global_minimization(self, n_calls = 50, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, name = ''):
         """
         apply bassian optimization for the xyz registration of all the interfaces with the predicted
@@ -471,14 +589,19 @@ class InterfaceWorker:
         """
         #optimization results
         self.opt_results = {}
+        if self.double_interface:
+            it_energetic_label = r'$E_{it}$ $(J/m^2)$'
+        else:
+            it_energetic_label = r'$E_{bd}$ $(J/m^2)$'
         columns = [r'$h_f$',r'$k_f$',r'$l_f$',
                   r'$h_s$',r'$k_s$',r'$l_s$',
-                   r'$A$ (' + '\u00C5' + '$^2$)', r'$\epsilon$', r'$E_{it}$ $(J/m^2)$', r'$E_{el}$ $(eV/\atom)$', r'$E_{sp}$',
+                   r'$A$ (' + '\u00C5' + '$^2$)', r'$\epsilon$', it_energetic_label, r'$E_{el}$ $(eV/atom)$',
                    r'$u_{f1}$',r'$v_{f1}$',r'$w_{f1}$',
                    r'$u_{f2}$',r'$v_{f2}$',r'$w_{f2}$',
                    r'$u_{s1}$',r'$v_{s1}$',r'$w_{s1}$',
                    r'$u_{s2}$',r'$v_{s2}$',r'$w_{s2}$', r'$T$', r'$i_m$', r'$i_t$']
-        formated_data = []
+        self.formated_data = []
+        self.strain_E_correction = strain_E_correction
         #set mlip calculator
         self.set_energy_calculator(calc, self.opt_kwargs)
         self.film_e = self.mc.calculate(self.film)
@@ -487,89 +610,44 @@ class InterfaceWorker:
         with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
             #for i in range(1):
             for i in range(len(self.unique_matches)):
+                #lattice matching data
+                m = self.unique_matches
+                idt = self.unique_matches_indices_data
+                hkl_f, hkl_s = idt[i]['film_conventional_miller'], idt[i]['substrate_conventional_miller']
+                epsilon = m[i].von_mises_strain
+                uvw_f1, uvw_f2 = idt[i]['film_conventional_vectors']
+                uvw_s1, uvw_s2 = idt[i]['substrate_conventional_vectors']
                 with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
-                    #for j in range(1):
-                    for j in range(len(self.all_unique_terminations[i])):
+                    for j in range(1):
+                    #for j in range(len(self.all_unique_terminations[i])):
                         #optimize
                         self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
-                        
-                        #lattice matching data
-                        m = self.unique_matches
-                        idt = self.unique_matches_indices_data
-                        hkl_f, hkl_s = idt[i]['film_conventional_miller'], idt[i]['substrate_conventional_miller']
-                        epsilon = m[i].von_mises_strain
-                        uvw_f1, uvw_f2 = idt[i]['film_conventional_vectors']
-                        uvw_s1, uvw_s2 = idt[i]['substrate_conventional_vectors']
                         ltc = self.opt_results[(i,j)]['sampled_interfaces'][0].lattice
                         A = ltc.a * ltc.b
-
-                        #layer thickness
-                        film_dz, substrate_dz = self.get_film_substrate_layer_thickness(i, j)
-                        self.dzs[(i, j)] = [film_dz, substrate_dz]
                         
-                        #relax best interface & slabs
-                        self.opt_results[(i,j)]['relaxed_best_interface'] = {}
-
-                        #get lowest-energy static it
-                        best_it = self.opt_results[(i,j)]['sampled_interfaces'][0]
+                        if self.double_interface:
+                            it_bd_E, strain_E = self.post_bayesian_process_double_interface(i,j,A)
+                        else:
+                            it_bd_E, strain_E = self.post_bayesian_process(i,j,A)
                         
-                        #relax interface
-                        relaxed_best_it, relaxed_best_sup_E = self.mc.optimize(best_it, **self.opt_kwargs)
-                        relaxed_best_it = Structure.from_dict(json.loads(  relaxed_best_it.to_json() ) )
-                        relaxed_best_it.interface_properties = best_it.interface_properties
-                        
-                        #interface energy
-                        it_E = (relaxed_best_sup_E - len(best_it.film)/len(self.film) * self.film_e - len(best_it.substrate)/len(self.substrate) * self.substrate_e) / A * 16.02176634 / 2
-                        
-                        #save to result dict
-                        self.opt_results[(i,j)]['relaxed_best_interface']['structure'] = relaxed_best_it
-                        self.opt_results[(i,j)]['relaxed_best_interface']['e'] = relaxed_best_sup_E
-                        
-                        #energy correction by film strain energy
-                        if strain_E_correction:
-                            
-                            #film length
-                            fmns_L = self.absolute_thicknesses[i][0]
-                            
-                            #get film with strain
-                            match = self.unique_matches[i]
-                            f_vs = match.film_sl_vectors
-                            s_vs = match.substrate_sl_vectors
-                            Rt, Sr = get_rot_strain(f_vs, s_vs)
-                            DST = DeformStructureTransformation(Sr)
-                            strain_film = DST.apply_transformation(self.film)
-                            strain_E = (self.mc.calculate(strain_film) - self.film_e)/len(self.film)
-                            
-                            #energy correction
-                            strain_E_mod = strain_E * len(best_it.film) * fmns_L / self.film_thickness / A * 16.02176634 / 2
-                            it_E += strain_E_mod
-                            self.opt_results[(i,j)]['strain_film'] = strain_film
-                            self.opt_results[(i,j)]['strain_E'] = strain_E
-                            self.opt_results[(i,j)]['length_factor'] = fmns_L / self.film_thickness
-                            self.opt_results[(i,j)]['A'] = A
-
-                        self.opt_results[(i,j)]['thicknesses'] = self.absolute_thicknesses[i]
-                        self.opt_results[(i,j)]['relaxed_min_it_E'] = it_E
-                        
-                        formated_data.append(
+                        self.formated_data.append(
                                 [hkl_f[0], hkl_f[1], hkl_f[2],\
                                 hkl_s[0], hkl_s[1], hkl_s[2], \
-                                A, epsilon, it_E, strain_E,  relaxed_best_sup_E, \
+                                A, epsilon, it_bd_E, strain_E, \
                                 uvw_f1[0], uvw_f1[1], uvw_f1[2], \
                                 uvw_f2[0], uvw_f2[1], uvw_f2[2], \
                                 uvw_s1[0], uvw_s1[1], uvw_s1[2], \
                                 uvw_s2[0], uvw_s2[1], uvw_s2[2], self.all_unique_terminations[i][j], i, j])
                         
-                        
                         term_pbar.update(1)
                     match_pbar.update(1)
-        self.global_optimized_data = pd.DataFrame(formated_data, columns = columns)
-        self.global_optimized_data = self.global_optimized_data.sort_values(by = r'$E_{it}$ $(J/m^2)$')
+        self.global_optimized_data = pd.DataFrame(self.formated_data, columns = columns)
+        self.global_optimized_data = self.global_optimized_data.sort_values(by = it_energetic_label)
 
         self.best_key = (self.global_optimized_data[r'$i_m$'].to_numpy()[0], self.global_optimized_data[r'$i_t$'].to_numpy()[0])
         #close docker container
         self.close_energy_calculator()
-        self.global_optimized_data.to_csv('all_data.csv')
+        self.global_optimized_data.to_csv('all_data_{name}.csv')
         with open(f'opt_results_{name}.pkl','wb') as f:
             pickle.dump(self.opt_results, f)
     
@@ -665,11 +743,18 @@ class InterfaceWorker:
             flows.append(job)
 
         for i in pairs:
-            if not relax_user_incar_settings == None:
-                it_user_incar_settings = relax_user_incar_settings
-                it_user_incar_settings['IOPTCELL'] = "0 0 0 0 0 0 0 0 1"
+            if self.double_interface:
+                if not relax_user_incar_settings == None:
+                    it_user_incar_settings = relax_user_incar_settings
+                    it_user_incar_settings['IOPTCELL'] = "0 0 0 0 0 0 0 0 1"
+                else:
+                    it_user_incar_settings = {'IOPTCELL':"0 0 0 0 0 0 0 0 1"}
             else:
-                it_user_incar_settings = {'IOPTCELL':"0 0 0 0 0 0 0 0 1"}
+                if not relax_user_incar_settings == None:
+                    it_user_incar_settings = relax_user_incar_settings
+                    it_user_incar_settings['ISIF'] = 2
+                else:
+                    it_user_incar_settings = {'ISIF':2}
             #interface here
             it = self.opt_results[i]['relaxed_best_interface']['structure']
             vasp_maker = RelaxMaker(
@@ -699,7 +784,23 @@ class InterfaceWorker:
             job = vasp_maker.make(s_film)
             job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_sfilm'})
             flows.append(job)
-        
+            
+            #film & substrate slab
+            if not self.double_interface:
+                for slab in ['film', 'substrate']:
+                    vasp_maker = RelaxMaker(
+                                            input_set_generator = MPRelaxSet(
+                                                                            self.opt_results[i]['slabs'][slab]['structure'],
+                                                                            user_incar_settings = it_user_incar_settings,
+                                                                            user_potcar_settings = relax_user_potcar_settings,
+                                                                            user_kpoints_settings = relax_user_kpoints_settings,
+                                                                            user_potcar_functional = relax_user_potcar_functional,
+                                                                            )
+                                            )
+                    job = vasp_maker.make(self.opt_results[i]['slabs'][slab]['structure'])
+                    job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_{slab}_slab'})
+                    flows.append(job)
+ 
         return flows
         
     def random_sampling_specified_interface(self, match_id, term_id, n_taget, n_max, sampling_min_displace, discut, set_seed = True, seed = 999):

@@ -1,6 +1,7 @@
 InterOptimus.egg-info/
 __pycache__/
 dist/
+build/
 test/
 new_test/
 *.pyc
@@ -8,3 +9,4 @@ new_test/
 *.DS_Store
 *.gitignore
 *.ckpt
+

@@ -1,5 +1,5 @@
 from ase.filters import UnitCellFilter
-from ase.constraints import FixAtoms, FixedLine
+from ase.constraints import FixAtoms
 from pymatgen.core.structure import Structure
 
 def get_optimizer(optimizer):
@@ -69,7 +69,8 @@ class MlipCalc:
         optimizer = get_optimizer(optimizer)
         atoms = structure.to_ase_atoms()
         atoms.calc = self.calc
-        #atoms.set_constraint([FixAtoms(indices = structure.fatom_ids)])
+        if len(structure.fatom_ids) > 0:
+            atoms.set_constraint([FixAtoms(indices = structure.fatom_ids)])
         ft = UnitCellFilter(atoms, kwargs['fix_cell_booleans'])
         relax = optimizer(ft, logfile = None)
         #relax = optimizer(ft)
