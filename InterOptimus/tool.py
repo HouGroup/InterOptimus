@@ -1,3 +1,10 @@
+"""
+InterOptimus Tool Module
+
+This module provides utility functions for crystal interface analysis,
+structure manipulation, data processing, and visualization.
+"""
+
 from pymatgen.transformations.standard_transformations import DeformStructureTransformation
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
 from pymatgen.core.surface import SlabGenerator
@@ -17,6 +24,18 @@ from scipy.stats.mstats import spearmanr
 from scipy.stats import pearsonr
 
 def convert_dict_to_json(obj):
+    """
+    Recursively convert objects to JSON-serializable format.
+
+    Converts numpy arrays to lists, pymatgen Structures to JSON,
+    and recursively processes dictionaries and lists.
+
+    Args:
+        obj: Object to convert
+
+    Returns:
+        JSON-serializable version of the input object
+    """
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     elif isinstance(obj, dict):
@@ -49,16 +68,46 @@ def dp_vs_ndp(dp_data, ndp_data):
                 ndp_results[ikey] += ndp_data[k]['DFT_results'][ikey]
     return dp_results, ndp_results
 
-def round_sf_np(x,significant_figure=0):
-    r=np.ceil(np.log(x)/np.log(10))
-    f=significant_figure
-    return np.around(np.round(x*(10**(f-r)),0)*(10**(r-f)),6)
+def round_sf_np(x, significant_figure=0):
+    """
+    Round a number to a specified number of significant figures.
+
+    Args:
+        x (float): Number to round
+        significant_figure (int): Number of significant figures
+
+    Returns:
+        float: Rounded number
+    """
+    r = np.ceil(np.log(x) / np.log(10))
+    f = significant_figure
+    return np.around(np.round(x * (10 ** (f - r)), 0) * (10 ** (r - f)), 6)
 
 def mae_ys_xs(ys, xs):
-    return sum(abs(ys - xs))/len(ys)
+    """
+    Calculate Mean Absolute Error between two arrays.
+
+    Args:
+        ys (array): Predicted values
+        xs (array): True values
+
+    Returns:
+        float: Mean absolute error
+    """
+    return sum(abs(ys - xs)) / len(ys)
 
 def mse_ys_xs(ys, xs):
-    return sum((ys - xs) ** 2)/len(ys)
+    """
+    Calculate Mean Squared Error between two arrays.
+
+    Args:
+        ys (array): Predicted values
+        xs (array): True values
+
+    Returns:
+        float: Mean squared error
+    """
+    return sum((ys - xs) ** 2) / len(ys)
 
 def dft_vs_predict_from_dict_old(dft_data, predicted_data):
     dft_results = {}
@@ -511,14 +560,15 @@ def draw_dp_vs_ndp(ax, dp_data, ndp_data, e, title, drop_E_cut = -2.8):
 
 def get_min_nb_distance(atom_index, structure, cutoff):
     """
-    get the minimum neighboring distance for certain atom in a structure
-    
+    Get the minimum neighboring distance for a specific atom in a structure.
+
     Args:
-    atom_index (int): atom index in the structure
-    structure (Structure)
-    
-    Return:
-    (float): nearest neighboring distance
+        atom_index (int): Index of the atom in the structure
+        structure (Structure): pymatgen Structure object
+        cutoff (float): Maximum distance to search for neighbors
+
+    Returns:
+        float: Minimum neighboring distance, or np.inf if no neighbors found
     """
     neighbors = structure.get_neighbors(structure[atom_index], r=cutoff)
     if len(neighbors) == 0:
@@ -528,56 +578,65 @@ def get_min_nb_distance(atom_index, structure, cutoff):
 
 def sort_list(array_to_sort, keys):
     """
-    sort list by keys
-    
+    Sort a list of arrays based on corresponding keys.
+
     Args:
-    array_to_sort (array): array to sort
-    keys (array): sorting keys
-    
-    Return:
-    (array): sorted array
+        array_to_sort (list): List of arrays/items to sort
+        keys (list): Keys to sort by (same length as array_to_sort)
+
+    Returns:
+        list: Sorted version of array_to_sort
     """
     combined_array = []
-    for id, row in enumerate(array_to_sort):
-        combined_array.append((keys[id], row))
-    combined_array_sorted = sorted(combined_array, key = lambda x: x[0])
+    for idx, row in enumerate(array_to_sort):
+        combined_array.append((keys[idx], row))
+    combined_array_sorted = sorted(combined_array, key=lambda x: x[0])
     keys_sorted, array_sorted = zip(*combined_array_sorted)
     return list(array_sorted)
 
 def apply_cnid_rbt(interface, x, y, z):
     """
-    apply rigid body translation to an interface.
-    
+    Apply rigid body translation to an interface using CNID coordinates.
+
     Args:
-    interface (Interface): interface before translation
-    x (float), y (float): fractional cnid coordinates
-    z: fractional coordinates in c
-    Return:
-    interface (Interface): interface after translation
+        interface: Interface object to translate
+        x (float): Fractional CNID x-coordinate
+        y (float): Fractional CNID y-coordinate
+        z (float): Fractional coordinate in c-direction
+
+    Returns:
+        Interface object after rigid body translation
     """
     CNID = calculate_cnid_in_supercell(interface)[0]
-    CNID_translation = TranslateSitesTransformation(interface.film_indices, x*CNID[:,0] + y*CNID[:,1] + [0, 0, z])
+    CNID_translation = TranslateSitesTransformation(
+        interface.film_indices,
+        x * CNID[:, 0] + y * CNID[:, 1] + [0, 0, z]
+    )
     return CNID_translation.apply_transformation(interface)
 
 def existfilehere(filename):
     return os.path.isfile(os.path.join(os.getcwd(), filename))
 
-def get_termination_indices(slab, ftol= 0.25):
+def get_termination_indices(slab, ftol=0.25):
     """
-    get the terminating atom indices of a slab.
-    
+    Get the terminating atom indices of a slab.
+
+    Uses hierarchical clustering to identify atoms at the top and bottom
+    terminations of a slab based on their c-coordinate distances.
+
     Args:
-    (Structure): slab structure.
-    
-    Return:
-    (arrays): terminating atom indices at the top and bottom.
+        slab (Structure): Slab structure to analyze
+        ftol (float): Distance tolerance for clustering (default: 0.25)
+
+    Returns:
+        tuple: (bottom_indices, top_indices) arrays of atom indices
     """
     frac_coords = slab.frac_coords
     n = len(frac_coords)
     dist_matrix = np.zeros((n, n))
     h = slab.lattice.c
-    # Projection of c lattice vector in
-    # direction of surface normal.
+
+    # Calculate distances in c-direction considering periodic boundary
     for ii, jj in combinations(list(range(n)), 2):
         if ii != jj:
             cdist = frac_coords[ii][2] - frac_coords[jj][2]
@@ -588,29 +647,40 @@ def get_termination_indices(slab, ftol= 0.25):
     condensed_m = squareform(dist_matrix)
     z = linkage(condensed_m)
     clusters = fcluster(z, ftol, criterion="distance")
-    clustered_sites: dict[int, list[Site]] = {c: [] for c in clusters}
+
+    clustered_sites = {c: [] for c in clusters}
     for idx, cluster in enumerate(clusters):
         clustered_sites[cluster].append(slab[idx])
-    plane_heights = {np.mean(np.mod([s.frac_coords[2] for s in sites], 1)): c for c, sites in clustered_sites.items()}
+
+    plane_heights = {
+        np.mean(np.mod([s.frac_coords[2] for s in sites], 1)): c
+        for c, sites in clustered_sites.items()
+    }
+
     term_cluster_min = min(plane_heights.items(), key=lambda x: x[0])[1]
     term_cluster_max = max(plane_heights.items(), key=lambda x: x[0])[1]
+
     return np.where(clusters == term_cluster_min)[0], np.where(clusters == term_cluster_max)[0]
 
-def get_termination_indices_shell(slab, shell = 1.5):
+def get_termination_indices_shell(slab, shell=1.5):
     """
-    get the terminating atom indices of a slab.
-    
+    Get terminating atom indices using a shell-based approach.
+
+    Identifies atoms within a specified distance (shell) from the top and
+    bottom surfaces of the slab.
+
     Args:
-    (Structure): slab structure.
-    shell(float): shell size to include termination atoms
-    
-    Return:
-    (arrays): terminating atom indices at the top and bottom.
+        slab (Structure): Slab structure to analyze
+        shell (float): Shell thickness in Angstroms (default: 1.5)
+
+    Returns:
+        tuple: (bottom_indices, top_indices) arrays of atom indices
     """
-    frac_coords_z = slab.cart_coords[:,2]
+    frac_coords_z = slab.cart_coords[:, 2]
     low = min(frac_coords_z)
     high = max(frac_coords_z)
-    return np.where(frac_coords_z < low + shell)[0], np.where(frac_coords_z > high - shell)[0]
+    return (np.where(frac_coords_z < low + shell)[0],
+            np.where(frac_coords_z > high - shell)[0])
     
 def get_it_core_indices(interface):
     """
@@ -650,6 +720,24 @@ def convert_value(value):
         return value
 
 def read_key_item(filename):
+    """
+    Read configuration parameters from a key-value file.
+
+    Parses a configuration file with format "KEY = VALUE" and converts
+    values to appropriate Python types. Skips comments and empty lines.
+
+    Args:
+        filename (str): Path to configuration file
+
+    Returns:
+        dict: Dictionary of configuration parameters with converted values
+
+    Default values set if not specified:
+    - THEORETICAL: False
+    - STABLE: True
+    - NOELEM: True
+    - STCTMP: True
+    """
     data = {}
     with open(filename, 'r') as file:
         for line in file:
@@ -661,7 +749,8 @@ def read_key_item(filename):
                 tag = tag.strip()
                 value = value.strip()
                 data[tag] = convert_value(value)
-                
+
+    # Set default values
     if 'THEORETICAL' not in data.keys():
         data['THEORETICAL'] = False
     if 'STABLE' not in data.keys():
@@ -670,6 +759,7 @@ def read_key_item(filename):
         data['NOELEM'] = True
     if 'STCTMP' not in data.keys():
         data['STCTMP'] = True
+
     return data
     
 def get_one_interface(cib, termination, slab_length, xyz, vacuum_over_film, c_periodic = False):

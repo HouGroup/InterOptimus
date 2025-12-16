@@ -1,3 +1,11 @@
+"""
+InterOptimus VASP Workflow Module
+
+This module provides Fireworks workflows for VASP calculations used in
+interface optimization. It includes workflows for lattice relaxation,
+interface energy calculations, and high-throughput screening.
+"""
+
 from fireworks import FireTaskBase, FWAction, explicit_serialize, Firework, Workflow, ScriptTask
 from atomate.vasp.firetasks.run_calc import RunVaspCustodian
 from atomate.vasp.firetasks.write_inputs import WriteVaspFromIOSet, ModifyIncar

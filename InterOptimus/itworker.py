@@ -1,3 +1,11 @@
+"""
+InterOptimus Interface Worker Module
+
+This module contains core functionality for interface analysis and optimization,
+including gradient descent algorithms, interface structure generation,
+and scoring functions for interface quality assessment.
+"""
+
 from InterOptimus.matching import interface_searching, EquiMatchSorter
 from pymatgen.transformations.standard_transformations import DeformStructureTransformation
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation

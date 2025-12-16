@@ -1,3 +1,11 @@
+"""
+InterOptimus Jobflow Module
+
+This module defines jobflow-based workflows for interface optimization
+calculations, including gradient descent optimization and VASP calculations
+with automatic resource management.
+"""
+
 from pymatgen.core.structure import Structure
 from jobflow import Flow, Response, job, Maker
 from qtoolkit.core.data_objects import QResources

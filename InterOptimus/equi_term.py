@@ -1,5 +1,10 @@
-"""This module provides functions to determine whether two sets of slabs with
-different terminations making identical interfaces"""
+"""
+InterOptimus Equivalent Termination Module
+
+This module provides functions to determine whether different slab terminations
+produce identical crystal interfaces under symmetry operations. It helps
+eliminate redundant calculations by identifying equivalent configurations.
+"""
 
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.structure_matcher import StructureMatcher

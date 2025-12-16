@@ -1,6 +1,9 @@
 """
-This module provide classes to get lattice matching results by sorting the
-results from pymatgen's SubstrateAnalyzer
+InterOptimus Matching Module
+
+This module provides classes and functions to analyze lattice matching
+between crystal structures using pymatgen's SubstrateAnalyzer. It includes
+symmetry analysis to identify equivalent matches and terminations.
 """
 
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
@@ -26,55 +29,88 @@ from adjustText import adjust_text
 from scipy.linalg import polar
 
 def get_identical_pairs(match, film, substrate):
-    film_idtc_millers = get_symmetrically_equivalent_miller_indices(film, match[0], return_hkil = False)
-    substrate_idtc_millers = get_symmetrically_equivalent_miller_indices(substrate, match[1], return_hkil = False)
+    """
+    Get all symmetrically equivalent matching pairs for given Miller indices.
+
+    Generates all combinations of symmetrically equivalent Miller indices
+    for both film and substrate that produce equivalent interfaces.
+
+    Args:
+        match (tuple): (film_miller, substrate_miller) pair
+        film (Structure): Film structure
+        substrate (Structure): Substrate structure
+
+    Returns:
+        list: List of tuples containing equivalent (film_miller, substrate_miller) pairs
+    """
+    film_idtc_millers = get_symmetrically_equivalent_miller_indices(film, match[0], return_hkil=False)
+    substrate_idtc_millers = get_symmetrically_equivalent_miller_indices(substrate, match[1], return_hkil=False)
+
     combs = []
     for i in film_idtc_millers:
         for j in substrate_idtc_millers:
-            combs.append((i,j))
+            combs.append((i, j))
+
     return combs
 
 class equi_directions_identifier:
     """
-    identify whether two vectors of a structure are identical
+    Identify whether two directions in a crystal structure are equivalent.
+
+    Uses symmetry operations to determine if two direction vectors are
+    equivalent under the crystal's space group symmetry.
     """
+
     def __init__(self, structure):
         """
+        Initialize with a crystal structure.
+
         Args:
-        
-        structure (Structure)
+            structure (Structure): pymatgen Structure object
         """
         analyzer = SpacegroupAnalyzer(structure)
-        self.symmetry_operations = analyzer.get_symmetry_operations(cartesian = True)
+        self.symmetry_operations = analyzer.get_symmetry_operations(cartesian=True)
+
     def identify(self, v1, v2):
         """
+        Check if two direction vectors are equivalent under symmetry.
+
         Args:
-        
-        v1, v2 (array): two directions to determine equivalency
-        
-        Return:
-        (bool) : whether being equivalent
+            v1 (array): First direction vector
+            v2 (array): Second direction vector
+
+        Returns:
+            bool: True if directions are equivalent, False otherwise
         """
-        direction1 = v1/norm(v1)
-        direction2 = v2/norm(v2)
+        direction1 = v1 / norm(v1)
+        direction2 = v2 / norm(v2)
         are_equivalent = False
+
         for operation in self.symmetry_operations:
             transformed_direction1 = operation.operate(direction1)
             if norm(cross(transformed_direction1, direction2)) < 1e-2:
                 are_equivalent = True
                 break
+
         return are_equivalent
 
 class equi_match_identifier:
     """
-    determine whether two matches are identical
+    Determine whether two lattice matches are identical under symmetry.
+
+    Analyzes matching pairs between substrate and film slabs to identify
+    equivalent configurations that produce the same interface structure.
     """
+
     def __init__(self, substrate, film, substrate_conv, film_conv):
         """
+        Initialize with substrate and film structures.
+
         Args:
-        
-        substrate (slab): substrate slab.
-        film (slab): film slabs.
+            substrate: Substrate slab structure
+            film: Film slab structure
+            substrate_conv: Conventional substrate unit cell
+            film_conv: Conventional film unit cell
         """
         self.film = film
         self.substrate = substrate

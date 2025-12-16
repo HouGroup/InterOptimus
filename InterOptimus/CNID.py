@@ -1,5 +1,9 @@
 """
-This module calculate CNID vectors for a interface
+InterOptimus CNID Module
+
+This module calculates CNID (Coincidence Lattice Node Interface Displacement)
+vectors for crystal interfaces. CNID vectors describe the rigid body
+translation degrees of freedom in coherent interfaces.
 """
 from numpy import *
 from numpy.linalg import *
