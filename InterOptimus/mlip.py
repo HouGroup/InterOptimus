@@ -59,6 +59,15 @@ class MlipCalc:
                 self.calc = SevenNetCalculator(p, modal='mpa')
             except:
                 self.calc = SevenNetCalculator(model='7net-mf-ompa', modal='mpa')
+        
+        elif calc == 'dpa':
+            from deepmd.calculator import DP
+            try:
+                from pathlib import PurePath
+                p = PurePath(user_settings['ckpt_path'])
+                self.calc = DP(model=p)
+            except:
+                raise ValueError(f'wrong path for dpa checkpoint file {p}')
     
     def calculate(self, structure):
         atoms = structure.to_ase_atoms()
@@ -69,8 +78,8 @@ class MlipCalc:
         optimizer = get_optimizer(optimizer)
         atoms = structure.to_ase_atoms()
         atoms.calc = self.calc
-        if len(structure.fatom_ids) > 0:
-            atoms.set_constraint([FixAtoms(indices = structure.fatom_ids)])
+        #if len(structure.fatom_ids) > 0:
+            #atoms.set_constraint([FixAtoms(indices = structure.fatom_ids)])
         ft = UnitCellFilter(atoms, kwargs['fix_cell_booleans'])
         relax = optimizer(ft, logfile = None)
         #relax = optimizer(ft)

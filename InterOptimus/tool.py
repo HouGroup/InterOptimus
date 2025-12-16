@@ -16,6 +16,22 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from scipy.stats.mstats import spearmanr
 from scipy.stats import pearsonr
 
+def convert_dict_to_json(obj):
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            obj[k] = convert_dict_to_json(v)
+        return obj
+    elif isinstance(obj, list):
+        for k in range(len(obj)):
+            obj[k] = convert_dict_to_json(obj[k])
+        return obj
+    elif isinstance(obj, Structure):
+        return obj.to_json()
+    else:
+        return obj
+
 def dp_vs_ndp(dp_data, ndp_data):
     dp_results = {}
     ndp_results = {}
@@ -876,3 +892,26 @@ def plot_bcmk(mlips, name):
         count+=1
     plt.tight_layout()
     fig.savefig('mlip_bcmk.jpg', format ='jpg', dpi = 600)
+
+def get_average_distance(stct_1, stct_2, smt):
+    stct_2 = smt.get_s2_like_s1(stct_1, stct_2)
+    if stct_2 is None:
+        return np.inf
+    else:
+        distances = np.dot(stct_1.lattice.matrix.T, (stct_2.frac_coords - stct_1.frac_coords).T).T
+        return (np.sum(distances**2)/len(distances))**0.5
+
+def get_non_matching_structures(stcts, tol, smt):
+    nms = []
+    for i in range(len(stcts)):
+        if len(nms) == 0:
+            nms.append(i)
+        else:
+            existing = False
+            for j in nms:
+                if get_average_distance(stcts[j], stcts[i], smt) < tol:
+                    existing = True
+                    break
+            if not existing:
+                nms.append(i)
+    return nms

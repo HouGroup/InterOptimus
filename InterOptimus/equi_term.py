@@ -210,7 +210,7 @@ def get_non_identical_slab_pairs(film, substrate, match, ftol = 1e-1, c_periodic
             primitive=True,
             reorient_lattice=False,  # This is necessary to not screw up the lattice
         )
-    film_slabs = film_sg.get_slabs(ftol=ftol, filter_out_sym_slabs=False)
+    film_slabs = film_sg.get_slabs(ftol=ftol[0], filter_out_sym_slabs=False)
     sub_sg = SlabGenerator(
                 substrate,
                 match.substrate_miller,
@@ -221,7 +221,7 @@ def get_non_identical_slab_pairs(film, substrate, match, ftol = 1e-1, c_periodic
                 primitive=True,
                 reorient_lattice=False,  # This is necessary to not screw up the lattice
             )
-    substrate_slabs = sub_sg.get_slabs(ftol=ftol, filter_out_sym_slabs=False)
+    substrate_slabs = sub_sg.get_slabs(ftol=ftol[1], filter_out_sym_slabs=False)
     slab_pair_groups, slab_pair_id_groups = slab_pair_cluster(film_slabs, substrate_slabs, c_periodic)
     ids = []
     for i in slab_pair_id_groups:
