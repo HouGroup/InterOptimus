@@ -1,7 +1,7 @@
 """
 InterOptimus CNID Module
 
-This module calculates CNID (Coincidence Lattice Node Interface Displacement)
+This module calculates CNID (Cell of non-identical Displacement)
 vectors for crystal interfaces. CNID vectors describe the rigid body
 translation degrees of freedom in coherent interfaces.
 """
@@ -54,7 +54,13 @@ def get_au_lattice(B):
     
 def triple_dot(a, b, c):
     """
-    combined product
+    Compute triple matrix product a @ b @ c.
+
+    Args:
+        a, b, c: Input matrices or arrays
+
+    Returns:
+        array: Result of a @ b @ c matrix multiplication
     """
     return dot(a, dot(b, c))
     
