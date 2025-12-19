@@ -1,3 +1,11 @@
+"""
+InterOptimus Interface Worker Module
+
+This module contains core functionality for interface analysis and optimization,
+including gradient descent algorithms, interface structure generation,
+and scoring functions for interface quality assessment.
+"""
+
 from InterOptimus.matching import interface_searching, EquiMatchSorter
 from pymatgen.transformations.standard_transformations import DeformStructureTransformation
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
@@ -23,6 +31,29 @@ import shutil
 from interfacemaster.cellcalc import get_normal_from_MI, get_primitive_hkl
 
 def gradient_descend(sampling_function, dx, dim, tol, initial_r, initial_xy, min_steps, **kwargs):
+    """
+    Perform gradient descent optimization in multi-dimensional space.
+
+    Uses finite difference method to compute gradients and adaptive step size
+    for optimization. Continues until either tolerance is met or minimum steps
+    are completed.
+
+    Args:
+        sampling_function: Function to evaluate at each point
+        dx (float): Step size for finite difference gradient calculation
+        dim (int): Dimensionality of the optimization space
+        tol (float): Tolerance for convergence (change in function value)
+        initial_r (float): Initial step size for gradient descent
+        initial_xy (tuple): Initial point (x, y) to start optimization from
+        min_steps (int): Minimum number of optimization steps to perform
+        **kwargs: Additional arguments passed to sampling_function
+
+    Returns:
+        tuple: (xs, ys, rs) where:
+            - xs: List of all x positions during optimization
+            - ys: List of function values at each position
+            - rs: List of step sizes used at each iteration
+    """
     dy = inf
     g_n = zeros(dim)
     xs = []
@@ -883,7 +914,7 @@ class InterfaceWorker:
         self.opt_results[(i,j)]['relaxed_min_bd_E'] = bd_E
         return bd_E, strain_E
 
-    def global_minimization(self, n_calls_density = 2, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, name = ''):
+    def global_minimization(self, n_calls_density = 2, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, term_screen_tol = 1, name = ''):
         """
         apply bassian optimization for the xyz registration of all the interfaces with the predicted
         interface energy by machine learning potential, getting ranked interface energies
@@ -892,6 +923,9 @@ class InterfaceWorker:
         n_calls (int): number of calls
         z_range (tuple): sampling range of z
         calc (str): MLIP calculator: orb-models, sevenn
+        strain_E_correction (bool): whether to correct it/cohesive energy by elastic energy
+        term_screen_tol (float): tolerance to screen out terminations for structure optimization; terminations with unrelaxed energy higher than the lowest one by this value will be eliminated
+        name (str): suffix for saved files
         """
         #optimization results
         self.opt_results = {}
@@ -939,13 +973,17 @@ class InterfaceWorker:
                         self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
                         it = self.opt_results[(i,j)]['sampled_interfaces'][0]
                         A = it.lattice.a * it.lattice.b
-                        film_slab = it.film
-                        substrate_slab = it.substrate
-                        bd_E = (self.opt_results[(i,j)]['supcl_E'][0] - self.mc.calculate(film_slab) - self.mc.calculate(substrate_slab)) / A * 16.02176634
-                        e_labels.append(bd_E)
+                        if self.double_interface:
+                            it_E = (self.opt_results[(i,j)]['supcl_E'][0] - len(it.film_indices)/len(self.film) * self.film_e - len(it.substrate_indices)/len(self.substrate) * self.substrate_e) / A * 16.02176634 / 2
+                            e_labels.append(it_E)
+                        else:
+                            film_slab = it.film
+                            substrate_slab = it.substrate
+                            bd_E = (self.opt_results[(i,j)]['supcl_E'][0] - self.mc.calculate(film_slab) - self.mc.calculate(substrate_slab)) / A * 16.02176634
+                            e_labels.append(bd_E)
                     print(e_labels)
                     for j in range(len(self.all_unique_terminations[i])):
-                        if e_labels[j] < min(e_labels) + 1.5:
+                        if e_labels[j] < min(e_labels) + term_screen_tol:
                         
                             ltc = self.opt_results[(i,j)]['sampled_interfaces'][0].lattice
                             A = ltc.a * ltc.b
@@ -962,7 +1000,8 @@ class InterfaceWorker:
                                     uvw_f1[0], uvw_f1[1], uvw_f1[2], \
                                     uvw_f2[0], uvw_f2[1], uvw_f2[2], \
                                     uvw_s1[0], uvw_s1[1], uvw_s1[2], \
-                                    uvw_s2[0], uvw_s2[1], uvw_s2[2], self.all_unique_terminations[i][j], i, j])
+                                    uvw_s2[0], uvw_s2[1], uvw_s2[2], \
+                                    self.all_unique_terminations[i][j], i, j])
                         
                         term_pbar.update(1)
                     
@@ -973,7 +1012,7 @@ class InterfaceWorker:
         self.best_key = (self.global_optimized_data[r'$i_m$'].to_numpy()[0], self.global_optimized_data[r'$i_t$'].to_numpy()[0])
         #close docker container
         self.close_energy_calculator()
-        self.global_optimized_data.to_csv('all_data_{name}.csv')
+        self.global_optimized_data.to_csv(f'all_data_{name}.csv')
         with open(f'opt_results_{name}.pkl','wb') as f:
             pickle.dump(self.opt_results, f)
         self.opt_results = convert_dict_to_json(self.opt_results)
@@ -1295,6 +1334,22 @@ class InterfaceWorker:
         return sampled_interfaces, xyzs, rbt_carts
 
 def with_LDAUU(structure):
+    """
+    Check if a structure requires LDA+U corrections in DFT calculations.
+
+    Determines whether the structure contains elements that typically require
+    Hubbard U corrections when F or O are present (transition metals).
+
+    Args:
+        structure: pymatgen Structure object
+
+    Returns:
+        bool: True if LDA+U corrections are recommended, False otherwise
+
+    Notes:
+        LDA+U is recommended when both oxygen/fluorine and certain transition
+        metals (Co, Cr, Fe, Mn, Mo, Ni, V, W) are present in the structure.
+    """
     elements = [el.symbol for el in structure.elements]
     with_LDAUU = False
     if 'F' in elements or 'O' in elements:

@@ -1,3 +1,10 @@
+"""
+InterOptimus Tool Module
+
+This module provides utility functions for crystal interface analysis,
+structure manipulation, data processing, and visualization.
+"""
+
 from pymatgen.transformations.standard_transformations import DeformStructureTransformation
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
 from pymatgen.core.surface import SlabGenerator
@@ -17,6 +24,18 @@ from scipy.stats.mstats import spearmanr
 from scipy.stats import pearsonr
 
 def convert_dict_to_json(obj):
+    """
+    Recursively convert objects to JSON-serializable format.
+
+    Converts numpy arrays to lists, pymatgen Structures to JSON,
+    and recursively processes dictionaries and lists.
+
+    Args:
+        obj: Object to convert
+
+    Returns:
+        JSON-serializable version of the input object
+    """
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     elif isinstance(obj, dict):
@@ -32,493 +51,17 @@ def convert_dict_to_json(obj):
     else:
         return obj
 
-def dp_vs_ndp(dp_data, ndp_data):
-    dp_results = {}
-    ndp_results = {}
-    for i in dp_data.keys():
-        for key in ['sup_Es', 'it_Es', 'bd_Es']:
-            dp_results[key] = []
-            ndp_results[key] = []
-        for k in dp_data.keys():
-            atom_num = len(Structure.from_dict(json.loads(dp_data[i]['sampled_interfaces'][0])))
-            dp_results['sup_Es'] += list(np.array(dp_data[k]['DFT_results']['xyz_Es'])/atom_num)
-            ndp_results['sup_Es'] += list(np.array(ndp_data[k]['DFT_results']['xyz_Es'])/atom_num)
-
-            for ikey in ['it_Es', 'bd_Es']:
-                dp_results[ikey] += dp_data[k]['DFT_results'][ikey]
-                ndp_results[ikey] += ndp_data[k]['DFT_results'][ikey]
-    return dp_results, ndp_results
-
-def round_sf_np(x,significant_figure=0):
-    r=np.ceil(np.log(x)/np.log(10))
-    f=significant_figure
-    return np.around(np.round(x*(10**(f-r)),0)*(10**(r-f)),6)
-
-def mae_ys_xs(ys, xs):
-    return sum(abs(ys - xs))/len(ys)
-
-def mse_ys_xs(ys, xs):
-    return sum((ys - xs) ** 2)/len(ys)
-
-def dft_vs_predict_from_dict_old(dft_data, predicted_data):
-    dft_results = {}
-    predict_results = {}
-    for mlip in ['grace-2l', 'chgnet', 'mace', 'orb-models', 'sevenn']:
-        dft_results[mlip] = {}
-        predict_results[mlip] = {}
-        dft_results[mlip]['sup_Es'] = []
-        dft_results[mlip]['it_Es'] = []
-        dft_results[mlip]['bd_Es'] = []
-        dft_results[mlip]['slab_Es'] = []
-        
-        predict_results[mlip]['sup_Es'] = []
-        predict_results[mlip]['it_Es'] = []
-        predict_results[mlip]['bd_Es'] = []
-        predict_results[mlip]['slab_Es'] = []
-        
-        for i in predicted_data.keys():
-            atom_num = len(Structure.from_dict(json.loads(predicted_data[i]['sampled_interfaces'][0])))
-            dft_results[mlip]['sup_Es'] += list(np.array(dft_data[i]['DFT_results']['xyz_Es'])/atom_num)
-            
-            predict_results[mlip]['sup_Es'] += list(np.array(predicted_data[i]['predict'][mlip]['sup_Es'])/atom_num)
-            
-            dft_results[mlip]['it_Es'] += dft_data[i]['DFT_results']['it_Es']
-            predict_results[mlip]['it_Es'] += predicted_data[i]['predict'][mlip]['it_Es']
-    
-            dft_results[mlip]['bd_Es'] += dft_data[i]['DFT_results']['bd_Es']
-            predict_results[mlip]['bd_Es'] += predicted_data[i]['predict'][mlip]['bd_Es']
-    return dft_results, predict_results
-
-def dft_vs_predict_from_dict(dft_data, predicted_data):
-    dft_results = {}
-    predict_results = {}
-    for mlip in ['eqv2', 'grace-2l', 'chgnet', 'mace', 'orb-models', 'sevenn']:
-        dft_results[mlip] = {}
-        predict_results[mlip] = {}
-        dft_results[mlip]['sup_Es'] = []
-        dft_results[mlip]['it_Es'] = []
-        dft_results[mlip]['bd_Es'] = []
-        dft_results[mlip]['slab_Es'] = []
-        
-        predict_results[mlip]['sup_Es'] = []
-        predict_results[mlip]['it_Es'] = []
-        predict_results[mlip]['bd_Es'] = []
-        predict_results[mlip]['slab_Es'] = []
-        
-        for i in predicted_data.keys():
-            atom_num = len(Structure.from_dict(json.loads(predicted_data[i]['sampled_interfaces'][0])))
-            dft_results[mlip]['sup_Es'] += list(np.array(dft_data[i]['DFT_results']['xyz_Es'])/atom_num)
-            
-            predict_results[mlip]['sup_Es'] += list(np.array(predicted_data[i]['predict'][mlip]['sup_Es'])/atom_num)
-            
-            dft_results[mlip]['it_Es'] += dft_data[i]['DFT_results']['it_Es']
-            predict_results[mlip]['it_Es'] += predicted_data[i]['predict'][mlip]['it_Es']
-    
-            dft_results[mlip]['bd_Es'] += dft_data[i]['DFT_results']['bd_Es']
-            predict_results[mlip]['bd_Es'] += predicted_data[i]['predict'][mlip]['bd_Es']
-    return dft_results, predict_results
-
-def draw_dft_vs_predict_energies_old(ax, dft_results, predict_results, e, title, drop_E_cut=-2.8):
-    # Initialize lists for DFT and predicted values
-    all_dfts = []
-    all_predicts = []
-    count = 0
-    sizes = []
-    ax.plot([-100, 100], [-100, 100], 'k--', lw=1, zorder=1)
-    for mlip in ['grace-2l', 'chgnet', 'mace', 'orb-models', 'sevenn']:
-        dft_data = np.array(dft_results[mlip][e])
-        predict_data = np.array(predict_results[mlip][e])
-
-        # Filter based on the drop_E_cut condition
-        con = np.array(dft_results[mlip]['sup_Es']) < drop_E_cut
-        predict_data = predict_data[con]
-        dft_data = dft_data[con]
-
-        # Remove zero values
-        non_zero_ids = np.where(dft_data != 0)[0]
-        non_zero_dft = dft_data[non_zero_ids]
-        non_zero_predict = predict_data[non_zero_ids]
-
-        all_dfts += list(non_zero_dft)
-        all_predicts += list(non_zero_predict)
-
-        # Scatter plot with custom markers and color
-        ax.scatter(non_zero_predict, non_zero_dft, alpha=0.5, s=(6-count)*80, label=mlip,
-                   marker='o', color=plt.cm.tab10(count), edgecolor='black', linewidth=0.5, zorder=2)
-
-        count += 1
-        sizes.append((6-count)*80)
-        
-    if e == 'sup_Es':
-        unit = r'$\mathrm{eV/atom}$'
-        sh = 0.1
-        labelpad = 1
-    else:
-        unit = r'$\mathrm{J/m^2}$'
-        sh = 0.5
-        labelpad = 1
-    ax.tick_params(axis='x', labelsize=15)
-    ax.tick_params(axis='y', labelsize=15)
-    # Diagonal line y=x
-    ax.set_xlim(min(min(dft_data), min(predict_data)) - sh, max(max(dft_data), max(predict_data)) + sh)
-    ax.set_ylim(min(min(dft_data), min(predict_data)) - sh, max(max(dft_data), max(predict_data)) + sh)
-    
-    yticks = ax.get_yticks()
-    xticks = ax.get_xticks()
-    if len(yticks) > len(xticks):
-        ax.set_yticks(xticks)
-        ax.set_xticks(xticks)
-    else:
-        ax.set_xticks(yticks)
-        ax.set_yticks(yticks)
-
-    # 获取当前 xlim 和 ylim
-    x_min, x_max = ax.get_xlim()
-    y_min, y_max = ax.get_ylim()
-
-    # 计算边界扩展量
-    x_margin = (x_max - x_min) * 0.007 * np.sqrt(max(sizes))  # 扩展 5% + 考虑散点大小
-    y_margin = (y_max - y_min) * 0.007 * np.sqrt(max(sizes))
-    #print(x_margin)
-    # 自动调整 xlim 和 ylim
-    ax.set_xlim(min(all_predicts) - x_margin, max(all_predicts) + x_margin)
-    ax.set_ylim(min(all_dfts) - y_margin, max(all_dfts) + y_margin)
-
-    # Adjust axis labels and titles
-    ax.set_xlabel(f'MLIP {unit}', fontsize=15, labelpad=1)
-    ax.set_ylabel(f'DFT {unit}', fontsize=15, labelpad=labelpad)
-    ax.set_title(title, fontsize=15)
-    ax.grid(True, linestyle='--', linewidth=0.5)
-
-def draw_dft_vs_predict_energies(dft_results, predict_results, e, title, drop_E_cut=-2.8):
-    # Initialize lists for DFT and predicted values
-    all_dfts = []
-    all_predicts = []
-    count = 0
-    sizes = []
-    fig, axes = plt.subplots(2, 3, figsize=(9, 6))
-    
-    # To store all the data points for axis scaling
-    all_x = []
-    all_y = []
-        
-    mlipnames = ['eqV2', 'GRACE-2L', 'CHGNet', 'MACE', 'ORB', 'SevenNet']
-    for mlip in ['eqv2', 'grace-2l', 'chgnet', 'mace', 'orb-models', 'sevenn']:
-        dft_data = np.array(dft_results[mlip][e])
-        predict_data = np.array(predict_results[mlip][e])
-
-        # Filter based on the drop_E_cut condition
-        con = np.array(dft_results[mlip]['sup_Es']) < drop_E_cut
-        predict_data = predict_data[con]
-        dft_data = dft_data[con]
-
-        # Remove zero values
-        non_zero_ids = np.where(dft_data != 0)[0]
-        non_zero_dft = dft_data[non_zero_ids]
-        non_zero_predict = predict_data[non_zero_ids]
-
-        all_dfts += list(non_zero_dft)
-        all_predicts += list(non_zero_predict)
-        
-        xs, ys = np.array(non_zero_predict), np.array(non_zero_dft)
-        
-        # Store all x and y values for axis scaling
-        all_x.extend(xs)
-        all_y.extend(ys)
-
-        # Scatter plot with custom markers and color
-        axes[int(count/3)][count%3].scatter(non_zero_predict, non_zero_dft, alpha=0.5, label=mlip,
-                   marker='o', color=plt.cm.tab10(count), edgecolor='black', linewidth=0.5, zorder=2)
-
-        sp = np.round(spearmanr(ys, xs).correlation, 2)
-        mae = np.round(mean_absolute_error(ys, xs), 2)
-        #r2sc = np.round(r2_score(ys, xs), 2)
-        #p = np.round(pearsonr(ys, xs),2)[0]
-
-        # 在右下角添加文本
-        axes[int(count/3)][count%3].text(0.95, 0.25, f'MAE = {mae}\n' + r'$\rho$' + f' = {sp}',
-            transform=axes[int(count/3)][count%3].transAxes,
-            fontsize=12,
-            verticalalignment='top',
-            horizontalalignment='right',
-            bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.5'))
-        axes[int(count/3)][count%3].plot([-100,100],[-100,100], color = 'k')
-        sizes.append((6 - count) * 80)
-        
-        if e == 'sup_Es':
-            unit = r'$\mathrm{eV/atom}$'
-            sh = 0.1
-            labelpad = 1
-        else:
-            unit = r'$\mathrm{J/m^2}$'
-            sh = 0.5
-            labelpad = 1
-        
-        axes[int(count/3)][count%3].tick_params(axis='x', labelsize=15)
-        axes[int(count/3)][count%3].tick_params(axis='y', labelsize=15)
-        axes[int(count/3)][count%3].set_xlabel(f'MLIP {unit}', fontsize=15, labelpad=1)
-        axes[int(count/3)][count%3].set_ylabel(f'DFT {unit}', fontsize=15, labelpad=labelpad)
-        axes[int(count/3)][count%3].set_title(mlipnames[count], fontsize=15)
-        axes[int(count/3)][count%3].grid(True, linestyle='--', linewidth=0.5)
-
-        count += 1
-
-    # Set the same axis limits for all subplots based on global min and max
-    x_min, x_max = min(all_x), max(all_x)
-    y_min, y_max = min(all_y), max(all_y)
-    for i in range(2):
-        for j in range(3):
-            axes[i, j].set_xlim(min(x_min, y_min), max(x_max, y_max))
-            axes[i, j].set_ylim(min(x_min, y_min), max(x_max, y_max))
-    plt.tight_layout()
-    # Save the figure
-    fig.savefig(f'{title}.jpg', dpi=600, format='jpg')
-
-def draw_dft_vs_predict_energy_stat(ax, dft_results, predict_results, e, title, drop_E_cut = -2.8):
-    count = 0
-    sizes = []
-    mlips = ['eqv2', 'grace-2l', 'chgnet', 'mace', 'orb-models', 'sevenn']
-    xs = []
-    ys = []
-    for mlip in mlips:
-        dft_data = np.array(dft_results[mlip][e])
-        predict_data = np.array(predict_results[mlip][e])
-
-        # Filter based on the drop_E_cut condition
-        con = np.array(dft_results[mlip]['sup_Es']) < drop_E_cut
-        predict_data = predict_data[con]
-        dft_data = dft_data[con]
-
-        # Remove zero values
-        non_zero_ids = np.where(dft_data != 0)[0]
-        non_zero_dft = dft_data[non_zero_ids]
-        non_zero_predict = predict_data[non_zero_ids]
-        
-        sp = spearmanr(dft_data, predict_data).correlation
-        mse = mean_squared_error(dft_data, predict_data)
-        scatter = ax.scatter(mse, sp, color=plt.cm.tab10(count), s=(len(mlips)-count)*80, edgecolors='black', marker = 'D', label=mlip, alpha = 0.5)
-        count += 1
-        sizes.append((len(mlips)-count)*100)
-        xs.append(mse)
-        ys.append(sp)
-    
-    
-    # 获取当前 xlim 和 ylim
-    x_min, x_max = ax.get_xlim()
-    y_min, y_max = ax.get_ylim()
-
-    # 计算边界扩展量
-    x_margin = (x_max - x_min) * 0.007 * np.sqrt(max(sizes))  # 扩展 5% + 考虑散点大小
-    y_margin = (y_max - y_min) * 0.007 * np.sqrt(max(sizes))
-    #print(x_margin)
-    # 自动调整 xlim 和 ylim
-    ax.set_xlim(min(xs) - x_margin, max(xs) + x_margin)
-    ax.set_ylim(min(ys) - y_margin, max(ys) + y_margin)
-
-    ax.set_xlabel('MSE',fontsize = 15)
-    ax.set_ylabel(r'$\rho$',fontsize = 15)
-    ax.tick_params(axis='x', labelsize=15)
-    ax.tick_params(axis='y', labelsize=15)
-    ax.set_title(title, fontsize = 15)
-    ax.grid(True, linestyle='--', linewidth=0.5)
-
-def draw_dft_vs_predict_energy_stat_old(ax, dft_results, predict_results, e, title, drop_E_cut = -2.8):
-    count = 0
-    sizes = []
-    mlips = ['grace-2l', 'chgnet', 'mace', 'orb-models', 'sevenn']
-    xs = []
-    ys = []
-    for mlip in mlips:
-        dft_data = np.array(dft_results[mlip][e])
-        predict_data = np.array(predict_results[mlip][e])
-
-        # Filter based on the drop_E_cut condition
-        con = np.array(dft_results[mlip]['sup_Es']) < drop_E_cut
-        predict_data = predict_data[con]
-        dft_data = dft_data[con]
-
-        # Remove zero values
-        non_zero_ids = np.where(dft_data != 0)[0]
-        non_zero_dft = dft_data[non_zero_ids]
-        non_zero_predict = predict_data[non_zero_ids]
-        
-        sp = spearmanr(dft_data, predict_data).correlation
-        mse = mean_squared_error(dft_data, predict_data)
-        scatter = ax.scatter(mse, sp, color=plt.cm.tab10(count), s=(len(mlips)-count)*80, edgecolors='black', marker = 'D', label=mlip, alpha = 0.5)
-        count += 1
-        sizes.append((len(mlips)-count)*100)
-        xs.append(mse)
-        ys.append(sp)
-    
-    
-    # 获取当前 xlim 和 ylim
-    x_min, x_max = ax.get_xlim()
-    y_min, y_max = ax.get_ylim()
-
-    # 计算边界扩展量
-    x_margin = (x_max - x_min) * 0.007 * np.sqrt(max(sizes))  # 扩展 5% + 考虑散点大小
-    y_margin = (y_max - y_min) * 0.007 * np.sqrt(max(sizes))
-    #print(x_margin)
-    # 自动调整 xlim 和 ylim
-    ax.set_xlim(min(xs) - x_margin, max(xs) + x_margin)
-    ax.set_ylim(min(ys) - y_margin, max(ys) + y_margin)
-
-    ax.set_xlabel('MSE',fontsize = 15)
-    ax.set_ylabel(r'$\rho$',fontsize = 15)
-    ax.tick_params(axis='x', labelsize=15)
-    ax.tick_params(axis='y', labelsize=15)
-    ax.set_title(title, fontsize = 15)
-    ax.grid(True, linestyle='--', linewidth=0.5)
-
-def plot_random_sampling_results(drop_E_cut = -2.8, show_legend = True, auto_E_cut =False, dp = False):
-    with open('global_random_sampling_predict.json', 'r') as f:
-        predicted_data = json.load(f)
-    with open('global_random_sampling_dft_False.json', 'r') as f:
-        ndp_data = json.load(f)
-    with open('global_random_sampling_dft_True.json', 'r') as f:
-        dp_data = json.load(f)
-    dft_results, predict_results = dft_vs_predict_from_dict(ndp_data, predicted_data)
-    
-    if auto_E_cut:
-        all_dft_sup_Es = []
-        for key in dft_results.keys():
-            all_dft_sup_Es += dft_results[key]['sup_Es']
-        drop_E_cut = min(all_dft_sup_Es) + 1
-    
-    es = ['sup_Es', 'it_Es', 'bd_Es']
-    ttls = [r'$E_{sp}$', r'$E_{it}$', r'$E_{ch}$']
-    for i in range(3):
-        draw_dft_vs_predict_energies(dft_results, predict_results, es[i], ttls[i], drop_E_cut)
-
-def plot_random_sampling_results_old(drop_E_cut = -2.8, show_legend = True, auto_E_cut =False):
-    with open('global_random_sampling_predict.json', 'r') as f:
-        predicted_data = json.load(f)
-    with open('global_random_sampling_dft_False.json', 'r') as f:
-        ndp_data = json.load(f)
-    with open('global_random_sampling_dft_True.json', 'r') as f:
-        dp_data = json.load(f)
-    dft_results, predict_results = dft_vs_predict_from_dict_old(ndp_data, predicted_data)
-
-    if auto_E_cut:
-        all_dft_sup_Es = []
-        for key in dft_results.keys():
-            all_dft_sup_Es += dft_results[key]['sup_Es']
-        drop_E_cut = min(all_dft_sup_Es) + 1
-
-
-    es = ['sup_Es', 'it_Es', 'bd_Es']
-    ttls = [r'$E_{ht}$', r'$E_{it}$', r'$E_{ch}$']
-    fig, axes = plt.subplots(1, 3, figsize=(9, 3))
-    for i in range(3):
-        draw_dft_vs_predict_energies_old(axes[i], dft_results, predict_results, es[i], ttls[i], drop_E_cut)
-         # Add a single legend below all subplots
-        if show_legend:
-            handles, labels = axes[0].get_legend_handles_labels()
-            fig.legend(handles, labels, loc='lower center', ncol=5, \
-                        bbox_to_anchor=(0.5, -0.05), fontsize = 13, \
-                        columnspacing=1, handletextpad=0.1)
-    
-    if len(axes[1].get_xticks()) > len(axes[2].get_xticks()):
-        axes[2].set_xticks(axes[1].get_xticks())
-        axes[2].set_yticks(axes[1].get_yticks())
-    else:
-        axes[1].set_xticks(axes[2].get_xticks())
-        axes[1].set_yticks(axes[2].get_yticks())
-
-    xlim1, ylim1 = axes[1].get_xlim(), axes[1].get_ylim()
-    xlim2, ylim2 = axes[2].get_xlim(), axes[2].get_ylim()
-    
-    for id in range(1, 3):
-        axes[i].set_xlim(min(xlim1[0], xlim2[0]), max(xlim1[1], xlim2[1]))
-        axes[i].set_ylim(min(ylim1[0], ylim2[0]), max(ylim1[1], ylim2[1]))
-    
-        # Adjust layout to avoid overlap
-    if show_legend:
-        plt.tight_layout(rect=[0, 0.05, 1, 1])  # Leave space for the legend at the bottom
-    else:
-        plt.tight_layout()
-    plt.subplots_adjust(hspace=0.2, wspace=0.5)
-    plt.savefig("random_sampling_predict_vs_dft_energies.jpg", dpi=600, format='jpg', bbox_inches='tight')
-
-    fig, axes = plt.subplots(1, 3, figsize=(9, 3))
-    for i in range(3):
-        draw_dft_vs_predict_energy_stat_old(axes[i], dft_results, predict_results, es[i], ttls[i], drop_E_cut)
-        if show_legend:
-            handles, labels = axes[0].get_legend_handles_labels()
-            fig.legend(handles, labels, loc='lower center', ncol=5, \
-                        bbox_to_anchor=(0.5, -0.05), fontsize = 13, \
-                        columnspacing=1, handletextpad=0.1, borderpad=1)
-    xlim1 = axes[1].get_xlim()
-    xlim2 = axes[2].get_xlim()
-    if max(xlim2) > max(xlim1):
-        axes[1].set_xlim(xlim2)
-    else:
-        axes[2].set_xlim(xlim1)
-    if show_legend:
-        plt.tight_layout(rect=[0, 0.11, 1, 1])  # Leave space for the legend at the bottom
-    else:
-        plt.tight_layout()
-    plt.subplots_adjust(hspace=0.2, wspace=0.5)
-    plt.savefig("random_sampling_predict_vs_dft_energies_stat.jpg", dpi=600, format='jpg', bbox_inches='tight')
-    
-
-    fig, axes = plt.subplots(1, 3, figsize=(9, 3))
-    for i in range(3):
-        draw_dp_vs_ndp(axes[i], dp_data, ndp_data, es[i], ttls[i], drop_E_cut)
-    plt.tight_layout()  # Leave space for the legend at the bottom
-    plt.subplots_adjust(hspace=0.2, wspace=0.5)
-    plt.savefig("dp_vs_ndp.jpg", dpi=600, format='jpg', bbox_inches='tight')
-
-def draw_dp_vs_ndp(ax, dp_data, ndp_data, e, title, drop_E_cut = -2.8):
-    dp_results, ndp_results = dp_vs_ndp(dp_data, ndp_data)
-    sp_dps, sp_ndps = np.array(dp_results['sup_Es']), np.array(ndp_results['sup_Es'])
-    dps = np.array(dp_results[e])
-    ndps = np.array(ndp_results[e])
-    con = (sp_dps < drop_E_cut) & (sp_ndps < drop_E_cut) & (dps != 0) & (ndps != 0)
-    dps = dps[con]
-    ndps = ndps[con]
-    ax.scatter(dps, ndps, alpha = 0.2, s =200)
-
-    if e == 'sup_Es':
-        unit = 'eV/atom'
-        sh = 0.05
-    else:
-        unit = 'J/m$^2$'
-        sh = 0.5
-    ax.set_xlabel(f'DPC {unit}', fontsize =15, labelpad = 0)
-    ax.set_ylabel(f'NDPC {unit}', fontsize = 15, labelpad = 0)
-    ax.text(0.95, 0.15, f"MAE = {round_sf_np(mae_ys_xs(np.array(dps), np.array(ndps)),2)}",
-            transform=ax.transAxes,
-            fontsize=12,
-            verticalalignment='top',
-            horizontalalignment='right',
-            bbox=dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.5'))
-    
-    ax.set_title(title, fontsize =15,)
-    ax.plot([-100, 100], [-100, 100], 'k--', lw=1)
-    ax.set_xlim(min(min(dps), min(ndps))-sh, max(max(dps), max(ndps)) +sh)
-    ax.set_ylim(min(min(dps), min(ndps))-sh, max(max(dps), max(ndps)) +sh)
-    ax.tick_params(axis='x', labelsize=15)
-    ax.tick_params(axis='y', labelsize=15)
-    yticks = ax.get_yticks()
-    xticks = ax.get_xticks()
-    if len(yticks) > len(xticks):
-        ax.set_yticks(xticks)
-        ax.set_xticks(xticks)
-    else:
-        ax.set_xticks(yticks)
-        ax.set_yticks(yticks)
-
 def get_min_nb_distance(atom_index, structure, cutoff):
     """
-    get the minimum neighboring distance for certain atom in a structure
-    
+    Get the minimum neighboring distance for a specific atom in a structure.
+
     Args:
-    atom_index (int): atom index in the structure
-    structure (Structure)
-    
-    Return:
-    (float): nearest neighboring distance
+        atom_index (int): Index of the atom in the structure
+        structure (Structure): pymatgen Structure object
+        cutoff (float): Maximum distance to search for neighbors
+
+    Returns:
+        float: Minimum neighboring distance, or np.inf if no neighbors found
     """
     neighbors = structure.get_neighbors(structure[atom_index], r=cutoff)
     if len(neighbors) == 0:
@@ -528,56 +71,74 @@ def get_min_nb_distance(atom_index, structure, cutoff):
 
 def sort_list(array_to_sort, keys):
     """
-    sort list by keys
-    
+    Sort a list of arrays based on corresponding keys.
+
     Args:
-    array_to_sort (array): array to sort
-    keys (array): sorting keys
-    
-    Return:
-    (array): sorted array
+        array_to_sort (list): List of arrays/items to sort
+        keys (list): Keys to sort by (same length as array_to_sort)
+
+    Returns:
+        list: Sorted version of array_to_sort
     """
     combined_array = []
-    for id, row in enumerate(array_to_sort):
-        combined_array.append((keys[id], row))
-    combined_array_sorted = sorted(combined_array, key = lambda x: x[0])
+    for idx, row in enumerate(array_to_sort):
+        combined_array.append((keys[idx], row))
+    combined_array_sorted = sorted(combined_array, key=lambda x: x[0])
     keys_sorted, array_sorted = zip(*combined_array_sorted)
     return list(array_sorted)
 
 def apply_cnid_rbt(interface, x, y, z):
     """
-    apply rigid body translation to an interface.
-    
+    Apply rigid body translation to an interface using CNID coordinates.
+
     Args:
-    interface (Interface): interface before translation
-    x (float), y (float): fractional cnid coordinates
-    z: fractional coordinates in c
-    Return:
-    interface (Interface): interface after translation
+        interface: Interface object to translate
+        x (float): Fractional CNID x-coordinate
+        y (float): Fractional CNID y-coordinate
+        z (float): Fractional coordinate in c-direction
+
+    Returns:
+        Interface object after rigid body translation
     """
     CNID = calculate_cnid_in_supercell(interface)[0]
-    CNID_translation = TranslateSitesTransformation(interface.film_indices, x*CNID[:,0] + y*CNID[:,1] + [0, 0, z])
+    CNID_translation = TranslateSitesTransformation(
+        interface.film_indices,
+        x * CNID[:, 0] + y * CNID[:, 1] + [0, 0, z]
+    )
     return CNID_translation.apply_transformation(interface)
 
 def existfilehere(filename):
+    """
+    Check if a file exists in the current working directory.
+
+    Args:
+        filename (str): Name of the file to check
+
+    Returns:
+        bool: True if file exists, False otherwise
+    """
     return os.path.isfile(os.path.join(os.getcwd(), filename))
 
-def get_termination_indices(slab, ftol= 0.25):
+def get_termination_indices(slab, ftol=0.25):
     """
-    get the terminating atom indices of a slab.
-    
+    Get the terminating atom indices of a slab.
+
+    Uses hierarchical clustering to identify atoms at the top and bottom
+    terminations of a slab based on their c-coordinate distances.
+
     Args:
-    (Structure): slab structure.
-    
-    Return:
-    (arrays): terminating atom indices at the top and bottom.
+        slab (Structure): Slab structure to analyze
+        ftol (float): Distance tolerance for clustering (default: 0.25)
+
+    Returns:
+        tuple: (bottom_indices, top_indices) arrays of atom indices
     """
     frac_coords = slab.frac_coords
     n = len(frac_coords)
     dist_matrix = np.zeros((n, n))
     h = slab.lattice.c
-    # Projection of c lattice vector in
-    # direction of surface normal.
+
+    # Calculate distances in c-direction considering periodic boundary
     for ii, jj in combinations(list(range(n)), 2):
         if ii != jj:
             cdist = frac_coords[ii][2] - frac_coords[jj][2]
@@ -588,39 +149,54 @@ def get_termination_indices(slab, ftol= 0.25):
     condensed_m = squareform(dist_matrix)
     z = linkage(condensed_m)
     clusters = fcluster(z, ftol, criterion="distance")
-    clustered_sites: dict[int, list[Site]] = {c: [] for c in clusters}
+
+    clustered_sites = {c: [] for c in clusters}
     for idx, cluster in enumerate(clusters):
         clustered_sites[cluster].append(slab[idx])
-    plane_heights = {np.mean(np.mod([s.frac_coords[2] for s in sites], 1)): c for c, sites in clustered_sites.items()}
+
+    plane_heights = {
+        np.mean(np.mod([s.frac_coords[2] for s in sites], 1)): c
+        for c, sites in clustered_sites.items()
+    }
+
     term_cluster_min = min(plane_heights.items(), key=lambda x: x[0])[1]
     term_cluster_max = max(plane_heights.items(), key=lambda x: x[0])[1]
+
     return np.where(clusters == term_cluster_min)[0], np.where(clusters == term_cluster_max)[0]
 
-def get_termination_indices_shell(slab, shell = 1.5):
+def get_termination_indices_shell(slab, shell=1.5):
     """
-    get the terminating atom indices of a slab.
-    
+    Get terminating atom indices using a shell-based approach.
+
+    Identifies atoms within a specified distance (shell) from the top and
+    bottom surfaces of the slab.
+
     Args:
-    (Structure): slab structure.
-    shell(float): shell size to include termination atoms
-    
-    Return:
-    (arrays): terminating atom indices at the top and bottom.
+        slab (Structure): Slab structure to analyze
+        shell (float): Shell thickness in Angstroms (default: 1.5)
+
+    Returns:
+        tuple: (bottom_indices, top_indices) arrays of atom indices
     """
-    frac_coords_z = slab.cart_coords[:,2]
+    frac_coords_z = slab.cart_coords[:, 2]
     low = min(frac_coords_z)
     high = max(frac_coords_z)
-    return np.where(frac_coords_z < low + shell)[0], np.where(frac_coords_z > high - shell)[0]
+    return (np.where(frac_coords_z < low + shell)[0],
+            np.where(frac_coords_z > high - shell)[0])
     
 def get_it_core_indices(interface):
     """
-    get the terminating atom indices of a interface.
-    
+    Get the terminating atom indices of an interface structure.
+
+    Identifies the top and bottom terminating atoms for both film and
+    substrate components in an interface structure.
+
     Args:
-    interface (Interface).
-    
+        interface: Interface object containing film and substrate indices
+
     Returns:
-    (arrays): film top & bottom indices; substrate top & bottom indices.
+        tuple: (film_bottom_indices, film_top_indices,
+                substrate_bottom_indices, substrate_top_indices)
     """
     ids = np.array(interface.film_indices)
     slab = interface.film
@@ -633,6 +209,26 @@ def get_it_core_indices(interface):
 
 
 def convert_value(value):
+    """
+    Convert string values to appropriate Python data types.
+
+    Parses configuration file values and converts them to bool, int, float,
+    or arrays as appropriate.
+
+    Args:
+        value (str): String value to convert
+
+    Returns:
+        Converted value (bool, int, float, or array)
+
+    Conversion rules:
+        - '.TRUE.'/TRUE -> True
+        - '.FALSE.'/FALSE -> False
+        - Comma-separated values -> numpy array of ints
+        - Values with '.' -> float
+        - Other numeric values -> int
+        - Everything else -> string (unchanged)
+    """
     if value.upper() == '.TRUE.' or value.upper() == 'TRUE':
         return True
     elif value.upper() == '.FALSE.' or value.upper() == 'FALSE':
@@ -640,7 +236,7 @@ def convert_value(value):
     if '/' in value:
         return value
     if ',' in value:
-        return np.array(value.split(','), dtype = int)
+        return np.array(value.split(','), dtype=int)
     try:
         if '.' in value:
             return float(value)
@@ -650,6 +246,24 @@ def convert_value(value):
         return value
 
 def read_key_item(filename):
+    """
+    Read configuration parameters from a key-value file.
+
+    Parses a configuration file with format "KEY = VALUE" and converts
+    values to appropriate Python types. Skips comments and empty lines.
+
+    Args:
+        filename (str): Path to configuration file
+
+    Returns:
+        dict: Dictionary of configuration parameters with converted values
+
+    Default values set if not specified:
+    - THEORETICAL: False
+    - STABLE: True
+    - NOELEM: True
+    - STCTMP: True
+    """
     data = {}
     with open(filename, 'r') as file:
         for line in file:
@@ -661,7 +275,8 @@ def read_key_item(filename):
                 tag = tag.strip()
                 value = value.strip()
                 data[tag] = convert_value(value)
-                
+
+    # Set default values
     if 'THEORETICAL' not in data.keys():
         data['THEORETICAL'] = False
     if 'STABLE' not in data.keys():
@@ -670,9 +285,27 @@ def read_key_item(filename):
         data['NOELEM'] = True
     if 'STCTMP' not in data.keys():
         data['STCTMP'] = True
+
     return data
     
-def get_one_interface(cib, termination, slab_length, xyz, vacuum_over_film, c_periodic = False):
+def get_one_interface(cib, termination, slab_length, xyz, vacuum_over_film, c_periodic=False):
+    """
+    Generate a single interface structure with specified parameters.
+
+    Creates an interface structure using the CoherentInterfaceBuilder
+    with given termination, slab thickness, and rigid body translation.
+
+    Args:
+        cib: CoherentInterfaceBuilder object
+        termination: Termination specification for the interface
+        slab_length (float): Length of the slab in Angstroms
+        xyz (tuple): Rigid body translation coordinates (x, y, z)
+        vacuum_over_film (float): Vacuum thickness over the film
+        c_periodic (bool): Whether to use periodic boundary conditions in c-direction
+
+    Returns:
+        Interface: Generated interface structure
+    """
     x,y,z = xyz
     if c_periodic:
         gap = vacuum_over_film = z
@@ -690,7 +323,20 @@ def get_one_interface(cib, termination, slab_length, xyz, vacuum_over_film, c_pe
     return CNID_translation.apply_transformation(interface_here)
 
 def get_rot_strain(film_matrix, sub_matrix) -> np.ndarray:
-    """Find transformation matrix that will rotate and strain the film to the substrate while preserving the c-axis."""
+    """
+    Find transformation matrix that rotates and strains film to match substrate.
+
+    Calculates the rotation and strain transformation matrix that will align
+    the film lattice with the substrate lattice while preserving the c-axis.
+    Uses singular value decomposition to find the optimal transformation.
+
+    Args:
+        film_matrix: Film lattice matrix (3x3)
+        sub_matrix: Substrate lattice matrix (3x3)
+
+    Returns:
+        tuple: (rotation_matrix, strain_matrix) for transforming film to substrate
+    """
     film_matrix = np.array(film_matrix)
     film_matrix = film_matrix.tolist()[:2]
     film_matrix.append(np.cross(film_matrix[0], film_matrix[1]))
@@ -714,6 +360,20 @@ def get_rot_strain(film_matrix, sub_matrix) -> np.ndarray:
     return R, S
 
 def get_non_strained_film(match, film):
+    """
+    Get film structure without strain applied for a given match.
+
+    Calculates the rotation transformation to align the film with the
+    substrate lattice vectors without applying strain, preserving the
+    film's original lattice parameters.
+
+    Args:
+        match: Lattice match object containing film and substrate vectors
+        film: Film structure to transform
+
+    Returns:
+        Structure: Transformed film structure aligned but not strained
+    """
     f_vs = match.film_sl_vectors
     s_vs = match.substrate_sl_vectors
     R_21, s_21 = get_rot_strain(f_vs, s_vs)
@@ -725,12 +385,36 @@ def get_non_strained_film(match, film):
     return trans_to_bottom(DST.apply_transformation(film))
 
 def trans_to_bottom(stct):
+    """
+    Translate structure so that the lowest atom is at z=0.
+
+    Shifts the entire structure in the z-direction so that the atom with
+    the lowest z-coordinate is positioned at z = 1e-6 (slightly above 0).
+
+    Args:
+        stct: Structure object to translate
+
+    Returns:
+        Structure: Translated structure with lowest atom at z ≈ 0
+    """
     ids = np.arange(len(stct))
     min_fc = stct.frac_coords[:,2].min()
     TST = TranslateSitesTransformation(ids, [0,0,-min_fc+1e-6])
     return TST.apply_transformation(stct)
 
 def trans_to_top(stct):
+    """
+    Translate structure so that the highest atom is at the top of the cell.
+
+    Shifts the structure so that the highest atom is positioned just below
+    the top of the unit cell, with a small vacuum gap.
+
+    Args:
+        stct: Structure object to translate
+
+    Returns:
+        Structure: Translated structure with highest atom near cell top
+    """
     ids = np.arange(len(stct))
     max_fc = stct.frac_coords[:,2].max()
     TST = TranslateSitesTransformation(ids, [0,0,1-max_fc])
@@ -739,6 +423,20 @@ def trans_to_top(stct):
     return TST.apply_transformation(nstct)
 
 def get_film_length(match, film, it):
+    """
+    Calculate the length of film slab in the interface.
+
+    Determines the film thickness in the interface structure based on
+    the number of layers and the projected height of the film slab.
+
+    Args:
+        match: Lattice match object
+        film: Film structure
+        it: Interface structure
+
+    Returns:
+        float: Film length/thickness in Angstroms
+    """
     film_sg = SlabGenerator(
             film,
             match.film_miller,
@@ -751,7 +449,22 @@ def get_film_length(match, film, it):
         )
     return film_sg._proj_height * it.film_layers
 
-def add_sele_dyn_slab(slab, shell = 0, lr = 'left'):
+def add_sele_dyn_slab(slab, shell=0, lr='left'):
+    """
+    Add selective dynamics constraints to a slab structure.
+
+    Sets atoms within a specified shell distance from the surface to be
+    fixed during geometry optimization.
+
+    Args:
+        slab: Slab structure to modify
+        shell (float): Shell thickness in Angstroms (0 = no constraints)
+        lr (str): Direction to fix ('left' for bottom, 'right' for top)
+
+    Returns:
+        tuple: (modified_slab, mobility_matrix) where mobility_matrix
+               indicates which degrees of freedom are free (True) or fixed (False)
+    """
     slab.fatom_ids = []
     mobility_mtx = np.repeat(np.array([[True, True, True]]), len(slab), axis = 0)
     coords = np.array([i.coords[2] for i in slab])
@@ -771,6 +484,21 @@ def add_sele_dyn_slab(slab, shell = 0, lr = 'left'):
     return slab, mobility_mtx
 
 def add_sele_dyn_it(it, film_shell, sub_shell):
+    """
+    Add selective dynamics constraints to an interface structure.
+
+    Fixes atoms in the substrate bottom and film top regions during
+    geometry optimization of the interface.
+
+    Args:
+        it: Interface structure to modify
+        film_shell (float): Shell thickness for film top atoms
+        sub_shell (float): Shell thickness for substrate bottom atoms
+
+    Returns:
+        tuple: (modified_interface, mobility_matrix) where mobility_matrix
+               indicates free (True) or fixed (False) degrees of freedom
+    """
     coords = np.array([i.coords[2] for i in it])
     it.fatom_ids = []
     sub_bot_indices = np.where(coords < min(coords) + sub_shell)[0]
@@ -787,6 +515,19 @@ def add_sele_dyn_it(it, film_shell, sub_shell):
     return it, mobility_mtx
 
 def cut_vaccum(structure, c):
+    """
+    Adjust the c-lattice parameter to remove excess vacuum.
+
+    Modifies the unit cell c-dimension so that the vacuum gap above
+    the highest atom is exactly the specified thickness.
+
+    Args:
+        structure: Structure to modify
+        c (float): Desired vacuum thickness above the highest atom
+
+    Returns:
+        Structure: Structure with adjusted c-lattice parameter
+    """
     lps = structure.lattice.parameters
     carts = [i.coords for i in structure]
     max_z = max(np.array(carts)[:,2])
@@ -795,6 +536,21 @@ def cut_vaccum(structure, c):
     return Structure(Lattice.from_parameters(*lps), structure.species, [i.coords for i in structure], coords_are_cartesian = True)
 
 def plot_bcmk(mlips, name):
+    """
+    Plot benchmark comparison between DFT and MLIP calculations.
+
+    Creates comprehensive benchmark plots comparing interface energies
+    and atomic displacements between DFT and MLIP predictions for
+    different interface configurations.
+
+    Args:
+        mlips (list): List of MLIP model names to compare
+        name (str): Name/prefix for the benchmark study
+
+    Note:
+        Reads data from 'benchmk.pkl' and 'dft_output.pkl' files.
+        Generates POSCAR files and creates comparison plots.
+    """
     mlip_name_dict = {'orb-models':'ORB', 'sevenn':'SevenNet'}
     with open('benchmk.pkl','rb') as f:
         bcdata = pickle.load(f)
@@ -894,6 +650,20 @@ def plot_bcmk(mlips, name):
     fig.savefig('mlip_bcmk.jpg', format ='jpg', dpi = 600)
 
 def get_average_distance(stct_1, stct_2, smt):
+    """
+    Calculate average atomic distance between two structures.
+
+    Computes the root mean square distance between corresponding atoms
+    in two structures after optimal alignment using StructureMatcher.
+
+    Args:
+        stct_1: First structure
+        stct_2: Second structure
+        smt: StructureMatcher object for alignment
+
+    Returns:
+        float: RMS distance between structures, or inf if alignment fails
+    """
     stct_2 = smt.get_s2_like_s1(stct_1, stct_2)
     if stct_2 is None:
         return np.inf

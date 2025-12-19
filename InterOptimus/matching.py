@@ -1,6 +1,9 @@
 """
-This module provide classes to get lattice matching results by sorting the
-results from pymatgen's SubstrateAnalyzer
+InterOptimus Matching Module
+
+This module provides classes and functions to analyze lattice matching
+between crystal structures using pymatgen's SubstrateAnalyzer. It includes
+symmetry analysis to identify equivalent matches and terminations.
 """
 
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
@@ -26,55 +29,88 @@ from adjustText import adjust_text
 from scipy.linalg import polar
 
 def get_identical_pairs(match, film, substrate):
-    film_idtc_millers = get_symmetrically_equivalent_miller_indices(film, match[0], return_hkil = False)
-    substrate_idtc_millers = get_symmetrically_equivalent_miller_indices(substrate, match[1], return_hkil = False)
+    """
+    Get all symmetrically equivalent matching pairs for given Miller indices.
+
+    Generates all combinations of symmetrically equivalent Miller indices
+    for both film and substrate that produce equivalent interfaces.
+
+    Args:
+        match (tuple): (film_miller, substrate_miller) pair
+        film (Structure): Film structure
+        substrate (Structure): Substrate structure
+
+    Returns:
+        list: List of tuples containing equivalent (film_miller, substrate_miller) pairs
+    """
+    film_idtc_millers = get_symmetrically_equivalent_miller_indices(film, match[0], return_hkil=False)
+    substrate_idtc_millers = get_symmetrically_equivalent_miller_indices(substrate, match[1], return_hkil=False)
+
     combs = []
     for i in film_idtc_millers:
         for j in substrate_idtc_millers:
-            combs.append((i,j))
+            combs.append((i, j))
+
     return combs
 
 class equi_directions_identifier:
     """
-    identify whether two vectors of a structure are identical
+    Identify whether two directions in a crystal structure are equivalent.
+
+    Uses symmetry operations to determine if two direction vectors are
+    equivalent under the crystal's space group symmetry.
     """
+
     def __init__(self, structure):
         """
+        Initialize with a crystal structure.
+
         Args:
-        
-        structure (Structure)
+            structure (Structure): pymatgen Structure object
         """
         analyzer = SpacegroupAnalyzer(structure)
-        self.symmetry_operations = analyzer.get_symmetry_operations(cartesian = True)
+        self.symmetry_operations = analyzer.get_symmetry_operations(cartesian=True)
+
     def identify(self, v1, v2):
         """
+        Check if two direction vectors are equivalent under symmetry.
+
         Args:
-        
-        v1, v2 (array): two directions to determine equivalency
-        
-        Return:
-        (bool) : whether being equivalent
+            v1 (array): First direction vector
+            v2 (array): Second direction vector
+
+        Returns:
+            bool: True if directions are equivalent, False otherwise
         """
-        direction1 = v1/norm(v1)
-        direction2 = v2/norm(v2)
+        direction1 = v1 / norm(v1)
+        direction2 = v2 / norm(v2)
         are_equivalent = False
+
         for operation in self.symmetry_operations:
             transformed_direction1 = operation.operate(direction1)
             if norm(cross(transformed_direction1, direction2)) < 1e-2:
                 are_equivalent = True
                 break
+
         return are_equivalent
 
 class equi_match_identifier:
     """
-    determine whether two matches are identical
+    Determine whether two lattice matches are identical under symmetry.
+
+    Analyzes matching pairs between substrate and film slabs to identify
+    equivalent configurations that produce the same interface structure.
     """
+
     def __init__(self, substrate, film, substrate_conv, film_conv):
         """
+        Initialize with substrate and film structures.
+
         Args:
-        
-        substrate (slab): substrate slab.
-        film (slab): film slabs.
+            substrate: Substrate slab structure
+            film: Film slab structure
+            substrate_conv: Conventional substrate unit cell
+            film_conv: Conventional film unit cell
         """
         self.film = film
         self.substrate = substrate
@@ -85,12 +121,18 @@ class equi_match_identifier:
     
     def identify_by_indices_matching(self, match_1, match_2):
         """
-        Args
-        
-        match_1, match_2 (arrays): two matches to compare
-        
-        Return
-        (bool): whether equivalent
+        Check if two matches are equivalent based on lattice vector indices.
+
+        Compares whether two matching configurations produce the same interface
+        by checking if their substrate and film supercell vectors are equivalent
+        under symmetry operations.
+
+        Args:
+            match_1: First match object to compare
+            match_2: Second match object to compare
+
+        Returns:
+            bool: True if matches are equivalent, False otherwise
         """
         equivalent = False
         substrate_set_1, substrate_set_2 = match_1.substrate_sl_vectors, match_2.substrate_sl_vectors
@@ -121,12 +163,17 @@ class equi_match_identifier:
     
     def identify_by_stct_matching(self, match_1, match_2):
         """
-        Args
-        
-        match_1, match_2 (arrays): two matches to compare
-        
-        Return
-        (bool): whether equivalent
+        Check if two matches produce equivalent interface structures.
+
+        Uses StructureMatcher to compare the actual interface structures
+        generated from two different matches to determine if they are equivalent.
+
+        Args:
+            match_1: First match object to compare
+            match_2: Second match object to compare
+
+        Returns:
+            bool: True if the interface structures are equivalent, False otherwise
         """
         #matcher = StructureMatcher(primitive_cell=False, attempt_supercell=True, scale = True)
         matcher = StructureMatcher(primitive_cell=True)
@@ -149,30 +196,58 @@ class equi_match_identifier:
 
 def get_cos(v1, v2):
     """
-    cosine distance
+    Calculate cosine of the angle between two vectors.
+
+    Computes the cosine similarity between two vectors, which represents
+    the angle between them normalized to [-1, 1].
+
+    Args:
+        v1: First vector
+        v2: Second vector
+
+    Returns:
+        float: Cosine of the angle between the vectors
     """
     return dot(v1, v2) / (norm(v1) * norm(v2))
     
 def get_area_match(match):
     """
-    matching area
+    Calculate the area of the matching interface.
+
+    Computes the area of the supercell formed by the substrate supercell
+    vectors, which represents the interface area for the given match.
+
+    Args:
+        match: Match object containing substrate supercell vectors
+
+    Returns:
+        float: Interface area in Angstroms squared
     """
     return norm(cross(match.substrate_sl_vectors[0], match.substrate_sl_vectors[1]))
 
 
 def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_millers, substrate_millers):
     """
-    given substrate, film lattice structures, \
-    get non-identical matches and identical match groups
-    
+    Search for lattice matches between substrate and film structures.
+
+    Performs comprehensive lattice matching analysis using SubstrateAnalyzer
+    to find all possible epitaxial relationships. Groups equivalent matches
+    that produce the same interface under symmetry operations.
+
     Args:
-    substrate (Structure): primitive structure of the substrate material
-    film (Structure): primitive structure of the film material
-    
-    Return:
-    unique_matches (list): list of non-identical matches.
-    equivalent_matches (list): clustered identical matches.
-    unique_areas (list): list of matching areas of non-identical matches
+        substrate (Structure): Primitive structure of the substrate material
+        film (Structure): Primitive structure of the film material
+        substrate_conv: Conventional substrate unit cell
+        film_conv: Conventional film unit cell
+        sub_analyzer: SubstrateAnalyzer with matching parameters
+        film_millers: List of Miller indices for film surfaces
+        substrate_millers: List of Miller indices for substrate surfaces
+
+    Returns:
+        tuple: (unique_matches, equivalent_matches, unique_areas)
+            - unique_matches: List of non-identical matches
+            - equivalent_matches: Clustered equivalent matches
+            - unique_areas: List of matching areas for unique matches
     """
     matches = list(sub_analyzer.calculate(film=film, substrate=substrate, film_millers = film_millers, substrate_millers = substrate_millers))
     print(len(matches))
@@ -227,7 +302,24 @@ class MatchIdentifier:
         self.film_symops = SpacegroupAnalyzer(film_conv).get_point_group_operations()
         self.substrate_symops = SpacegroupAnalyzer(substrate_conv).get_point_group_operations()
         self.prod_symops = co_point_group_operations(self.film_symops, self.substrate_symops)
-    def is_equivalent(self, normal_1, MR_1, normal_2, MR_2, tol = 0.1):
+    def is_equivalent(self, normal_1, MR_1, normal_2, MR_2, tol=0.1):
+        """
+        Check if two interface orientations are equivalent under symmetry.
+
+        Determines whether two interface configurations defined by their
+        normal vectors and rotation matrices are equivalent considering
+        the combined point group symmetry of film and substrate.
+
+        Args:
+            normal_1: Normal vector of first interface
+            MR_1: Rotation matrix of first interface
+            normal_2: Normal vector of second interface
+            MR_2: Rotation matrix of second interface
+            tol (float): Tolerance for matrix comparison
+
+        Returns:
+            bool: True if interfaces are symmetrically equivalent
+        """
         disorient = dot(MR_1, inv(MR_2))
         for symop_out in self.prod_symops:
             if np.allclose(disorient, symop_out.rotation_matrix, atol=tol):
@@ -372,26 +464,43 @@ class convert_info_forma:
         
 def get_area(v1, v2):
     """
-    get the areas of included by two basic vectors
+    Calculate the area spanned by two vectors.
+
+    Computes the magnitude of the cross product of two vectors,
+    which gives the area of the parallelogram they span.
+
+    Args:
+        v1: First vector
+        v2: Second vector
+
+    Returns:
+        float: Area of the parallelogram spanned by v1 and v2
     """
     return norm(cross(v1,v2))
 
-def interface_searching(substrate_conv, film_conv, sub_analyzer, film_millers = None, substrate_millers = None):
+def interface_searching(substrate_conv, film_conv, sub_analyzer, film_millers=None, substrate_millers=None):
     """
-    given substrate, film lattice structures, \
-    get non-identical matches and identical match groups
-    
+    Perform comprehensive interface searching between substrate and film.
+
+    Conducts lattice matching analysis and generates all possible interface
+    configurations. Converts matching results to both primitive and conventional
+    Miller indices representations.
+
     Args:
-    substrate (Structure): primitive structure of the substrate material
-    film (Structure): primitive structure of the film material
-    sub_analyzer (SubstrateAnalyzer): SubstrateAnalyzer setting lattice matching parameters
-    
-    Return:
-    unique_matches (list): list of non-identical matches.
-    equivalent_matches (list): clustered identical matches.
-    unique_matches_indices_data (list): indices information of non-identical matches.
-    equivalent_matches_indices_data (list): clustered indices information of identical matches
-    areas (list): list of matching areas of non-identical matches
+        substrate_conv: Conventional substrate unit cell
+        film_conv: Conventional film unit cell
+        sub_analyzer: SubstrateAnalyzer with matching parameters
+        film_millers: List of Miller indices for film surfaces (optional)
+        substrate_millers: List of Miller indices for substrate surfaces (optional)
+
+    Returns:
+        tuple: (unique_matches, equivalent_matches, unique_matches_indices_data,
+                equivalent_matches_indices_data, areas)
+            - unique_matches: List of non-identical matches
+            - equivalent_matches: Clustered equivalent matches
+            - unique_matches_indices_data: Miller indices data for unique matches
+            - equivalent_matches_indices_data: Clustered Miller indices data
+            - areas: List of matching areas for unique matches
     """
     unique_matches, equivalent_matches, areas = \
     match_search(substrate_conv.get_primitive_structure(),\
@@ -425,14 +534,37 @@ def interface_searching(substrate_conv, film_conv, sub_analyzer, film_millers = 
             areas
 
 def miller_to_cartesian(miller, lattice):
-    """Convert Miller indices to Cartesian normal vectors"""
+    """
+    Convert Miller indices to Cartesian normal vectors.
+
+    Transforms crystallographic Miller indices to Cartesian coordinates
+    using the reciprocal lattice vectors of the given lattice.
+
+    Args:
+        miller (tuple): Miller indices (h, k, l)
+        lattice: pymatgen Lattice object
+
+    Returns:
+        ndarray: Normalized Cartesian normal vector
+    """
     h, k, l = miller
     recip_lattice = lattice.reciprocal_lattice_crystallographic
     normal = h * recip_lattice.matrix[0] + k * recip_lattice.matrix[1] + l * recip_lattice.matrix[2]
     return normal/np.linalg.norm(normal)
 
 def stereographic_projection(normal):
-    """将法向量 (x, y, z) 投影到二维平面"""
+    """
+    Project a normal vector onto a 2D stereographic projection plane.
+
+    Performs stereographic projection of a 3D unit vector onto a 2D plane,
+    commonly used for visualizing crystal orientations and pole figures.
+
+    Args:
+        normal (tuple): 3D unit vector (x, y, z)
+
+    Returns:
+        tuple: (X, Y) coordinates in the stereographic projection
+    """
     x, y, z = normal
     if abs(np.around(z, 4)) == 1:
         X,Y = x,y
@@ -446,6 +578,18 @@ def stereographic_projection(normal):
     return X, Y
 
 def format_miller_index(miller_index):
+    """
+    Format Miller indices for LaTeX/matplotlib display.
+
+    Converts Miller indices to LaTeX format with overbars for negative values,
+    suitable for mathematical rendering in plots.
+
+    Args:
+        miller_index (tuple): Miller indices (h, k, l)
+
+    Returns:
+        str: LaTeX-formatted Miller index string
+    """
     h, k, l = miller_index
     def format_component(c):
         if c < 0:
@@ -455,6 +599,22 @@ def format_miller_index(miller_index):
     return r"$(" + format_component(h) + format_component(k) + format_component(l) + r")$"
 
 def scatter_by_miller_dict(millers, dict, tuple_id, lattice, strains):
+    """
+    Organize matching data for stereographic projection plotting.
+
+    Processes matching data dictionary to extract stereographic projection
+    coordinates and associated strain information for visualization.
+
+    Args:
+        millers (list): List of Miller indices to process
+        dict (dict): Matching data dictionary
+        tuple_id (int): Index in the tuple key (0 for film, 1 for substrate)
+        lattice: Crystal lattice for coordinate transformation
+        strains (array): Strain values corresponding to match types
+
+    Returns:
+        dict: Processed data with stereographic coordinates and strain info
+    """
     found_data = {}
     for miller in millers:
         for i in list(dict.keys()):
@@ -472,6 +632,21 @@ def scatter_by_miller_dict(millers, dict, tuple_id, lattice, strains):
     return found_data
 
 def draw_circles(ax, data, existing_label, dotscatter):
+    """
+    Draw circles on stereographic projection for matching data.
+
+    Creates circular markers on the stereographic projection plot to
+    represent different types of lattice matches.
+
+    Args:
+        ax: Matplotlib axes object
+        data (dict): Matching data with stereographic coordinates
+        existing_label (list): List of already plotted labels
+        dotscatter (bool): Whether to use dot scatter style
+
+    Returns:
+        tuple: (updated_existing_label, circle_size)
+    """
     for i in range(len(data['type_list'])):
         if dotscatter:
             center_c = f"C{data['type_list'][i]+3}"
@@ -494,6 +669,22 @@ def draw_circles(ax, data, existing_label, dotscatter):
     
 
 def plot_matching_data(matching_data, titles, save_filename, show_millers, show_legend, show_title, special):
+    """
+    Create stereographic projection plots for lattice matching results.
+
+    Generates comprehensive visualization of lattice matching data using
+    stereographic projection, showing film and substrate orientations
+    with corresponding match types and Miller indices.
+
+    Args:
+        matching_data (list): List of matching data dictionaries for film/substrate
+        titles (list): Titles for film and substrate subplots
+        save_filename (str): Output filename for the plot
+        show_millers (bool): Whether to display Miller indices on the plot
+        show_legend (bool): Whether to show the legend
+        show_title (bool): Whether to show subplot titles
+        special (bool): Special plotting mode flag
+    """
     fig, ax = plt.subplots(1, 2, figsize=(20*1.25, 12*1.25))
     #plt.rc('font', family='arial')
     #plt.rc('text', usetex=True)
@@ -636,6 +827,12 @@ class EquiMatchSorter:
         self.get_indices_map()
         self.unique_matches = unique_matches
     def sort_zsl_match_results(self):
+        """
+        Sort and organize ZSL matching results by match types.
+
+        Processes the equivalent matches data to create a dictionary
+        mapping Miller index pairs to their corresponding match type IDs.
+        """
         type_id = 0
         all_matche_data = {}
         for i in self.equivalent_matches_indices_data:
@@ -651,6 +848,12 @@ class EquiMatchSorter:
             type_id += 1
         self.unique_matche_data = all_matche_data
     def generate_all_match_data(self):
+        """
+        Generate complete matching data including symmetrically equivalent pairs.
+
+        Expands the unique match data to include all symmetrically equivalent
+        Miller index combinations that produce the same interface.
+        """
         new_dict = {}
         for i in self.unique_matche_data.keys():
             combs = get_identical_pairs(i, self.film, self.substrate)
@@ -663,6 +866,12 @@ class EquiMatchSorter:
         self.all_matche_data = new_dict
         #print(new_dict)
     def get_indices_map(self):
+        """
+        Create mapping dictionaries for Miller indices.
+
+        Generates lookup dictionaries mapping Miller indices to integer IDs
+        for both film and substrate materials.
+        """
         film_millers = []
         substrate_millers = []
         for i in self.all_matche_data.keys():
@@ -672,7 +881,22 @@ class EquiMatchSorter:
         substrate_millers = list(set(substrate_millers))
         self.film_map = {m_id:id for id, m_id in enumerate(film_millers)}
         self.substrate_map = {m_id:id for id, m_id in enumerate(substrate_millers)}
-    def plot_matching_data(self, names = ['film', 'substrate'], save_filename = 'stereographic_projection.jpg', show_millers = True, show_legend = True, show_title = True, special = False):
+    def plot_matching_data(self, names=['film', 'substrate'], save_filename='stereographic_projection.jpg',
+                          show_millers=True, show_legend=True, show_title=True, special=False):
+        """
+        Create stereographic projection visualization of matching results.
+
+        Generates and saves stereographic projection plots showing the
+        distribution of lattice matches for both film and substrate materials.
+
+        Args:
+            names (list): Names for film and substrate materials
+            save_filename (str): Output filename for the plot
+            show_millers (bool): Whether to display Miller indices
+            show_legend (bool): Whether to show the legend
+            show_title (bool): Whether to show subplot titles
+            special (bool): Special plotting mode flag
+        """
         film_matching_data = scatter_by_miller_dict(list(self.film_map.keys()), self.all_matche_data, 0, self.film.lattice, self.strains)
         substrate_matching_data = scatter_by_miller_dict(list(self.substrate_map.keys()), self.all_matche_data, 1, self.substrate.lattice, self.strains)
         matching_data = [film_matching_data, substrate_matching_data]
@@ -692,7 +916,16 @@ class EquiMatchSorter:
         #plot_matching_data_num(matching_data, names, save_filename)
         #plot_matching_data_strain(matching_data, names, save_filename)
 
-    def plot_unique_matches(self, filename = 'unique_matches.jpg'):
+    def plot_unique_matches(self, filename='unique_matches.jpg'):
+        """
+        Create bar plot showing properties of unique matches.
+
+        Generates a dual-axis bar plot displaying matching areas and
+        von Mises strains for all unique lattice matches.
+
+        Args:
+            filename (str): Output filename for the plot
+        """
         x = []
         strains = []
         areas = []

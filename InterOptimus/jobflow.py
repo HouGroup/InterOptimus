@@ -1,3 +1,11 @@
+"""
+InterOptimus Jobflow Module
+
+This module defines jobflow-based workflows for interface optimization
+calculations, including gradient descent optimization and VASP calculations
+with automatic resource management.
+"""
+
 from pymatgen.core.structure import Structure
 from jobflow import Flow, Response, job, Maker
 from qtoolkit.core.data_objects import QResources
@@ -205,12 +213,36 @@ class IOMaker(Maker):
             return Flow([IO_job])
         
 @job
-def check_it_phase_stability(film_conv, substrate_conv, device = 'cpu',
-                                                        fmax = 0.5,
-                                                        steps = 500,
-                                                        n_calls = 30,
-                                                        calc = 'sevenn',
-                                                        ckpt_path_ENV = 'SEVENN_CHECKPOINT'):
+def check_it_phase_stability(film_conv, substrate_conv, device='cpu',
+                                                        fmax=0.5,
+                                                        steps=500,
+                                                        n_calls=30,
+                                                        calc='sevenn',
+                                                        ckpt_path_ENV='SEVENN_CHECKPOINT'):
+    """
+    Evaluate interface phase stability using MLIP optimization.
+
+    Performs lattice matching, interface structure generation, and phase
+    stability evaluation using machine learning interatomic potentials.
+    Compares static and relaxed interface structures to assess stability.
+
+    Args:
+        film_conv: Conventional unit cell of the film material
+        substrate_conv: Conventional unit cell of the substrate material
+        device (str): Device for MLIP calculations ('cpu' or 'cuda')
+        fmax (float): Maximum force threshold for relaxation
+        steps (int): Maximum steps for geometry optimization
+        n_calls (int): Number of optimization calls for interface registration
+        calc (str): MLIP calculator to use ('sevenn', 'orb-models', etc.)
+        ckpt_path_ENV (str): Environment variable name for model checkpoint path
+
+    Returns:
+        dict: Results containing:
+            - static_it: JSON representation of static interface
+            - relaxed_it: JSON representation of relaxed interface
+            - rms_frac: RMS displacement in fractional coordinates
+            - rms_cart: RMS displacement in Cartesian coordinates
+    """
     
     iw = InterfaceWorker(film_conv, substrate_conv)
     
