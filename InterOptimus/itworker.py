@@ -914,7 +914,7 @@ class InterfaceWorker:
         self.opt_results[(i,j)]['relaxed_min_bd_E'] = bd_E
         return bd_E, strain_E
 
-    def global_minimization(self, n_calls_density = 2, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, name = ''):
+    def global_minimization(self, n_calls_density = 2, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, term_screen_tol = 1, name = ''):
         """
         apply bassian optimization for the xyz registration of all the interfaces with the predicted
         interface energy by machine learning potential, getting ranked interface energies
@@ -923,6 +923,9 @@ class InterfaceWorker:
         n_calls (int): number of calls
         z_range (tuple): sampling range of z
         calc (str): MLIP calculator: orb-models, sevenn
+        strain_E_correction (bool): whether to correct it/cohesive energy by elastic energy
+        term_screen_tol (float): tolerance to screen out terminations for structure optimization; terminations with unrelaxed energy higher than the lowest one by this value will be eliminated
+        name (str): suffix for saved files
         """
         #optimization results
         self.opt_results = {}
@@ -970,13 +973,17 @@ class InterfaceWorker:
                         self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
                         it = self.opt_results[(i,j)]['sampled_interfaces'][0]
                         A = it.lattice.a * it.lattice.b
-                        film_slab = it.film
-                        substrate_slab = it.substrate
-                        bd_E = (self.opt_results[(i,j)]['supcl_E'][0] - self.mc.calculate(film_slab) - self.mc.calculate(substrate_slab)) / A * 16.02176634
-                        e_labels.append(bd_E)
+                        if self.double_interface:
+                            it_E = (self.opt_results[(i,j)]['supcl_E'][0] - len(it.film_indices)/len(self.film) * self.film_e - len(it.substrate_indices)/len(self.substrate) * self.substrate_e) / A * 16.02176634 / 2
+                            e_labels.append(it_E)
+                        else:
+                            film_slab = it.film
+                            substrate_slab = it.substrate
+                            bd_E = (self.opt_results[(i,j)]['supcl_E'][0] - self.mc.calculate(film_slab) - self.mc.calculate(substrate_slab)) / A * 16.02176634
+                            e_labels.append(bd_E)
                     print(e_labels)
                     for j in range(len(self.all_unique_terminations[i])):
-                        if e_labels[j] < min(e_labels) + 1.5:
+                        if e_labels[j] < min(e_labels) + term_screen_tol:
                         
                             ltc = self.opt_results[(i,j)]['sampled_interfaces'][0].lattice
                             A = ltc.a * ltc.b
