@@ -191,7 +191,7 @@ def slab_pair_cluster(film_slabs, sub_slabs, c_periodic = True):
             t_id += 1
     return slab_pair_groups, slab_pair_id_groups
 
-def get_non_identical_slab_pairs(film, substrate, match, ftol = 1e-1, c_periodic = False):
+def get_non_identical_slab_pairs(film, substrate, match, ftol = (1e-1, 1e-1), c_periodic = False):
     """
     get the ids of the non-identical slab pairs
     
