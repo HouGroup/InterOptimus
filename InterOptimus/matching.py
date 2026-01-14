@@ -9,7 +9,7 @@ symmetry analysis to identify equivalent matches and terminations.
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.analysis.interfaces import CoherentInterfaceBuilder
 from InterOptimus.equi_term import get_non_identical_slab_pairs, co_point_group_operations
-from pymatgen.core.structure import Structure
+from pymatgen.core.structure import Structure, IStructure
 from pymatgen.analysis.interfaces.zsl import ZSLGenerator, ZSLMatch, reduce_vectors
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from interfacemaster.cellcalc import get_primitive_hkl
@@ -19,14 +19,123 @@ from numpy import *
 import numpy as np
 from numpy.linalg import *
 from pymatgen.analysis.structure_matcher import StructureMatcher
-from pymatgen.core.surface import get_symmetrically_equivalent_miller_indices
-#from ase.utils.structure_comparator import SymmetryEquivalenceCheck
+#from pymatgen.core.surface import get_symmetrically_equivalent_miller_indices
+# from ase.utils.structure_comparator import SymmetryEquivalenceCheck
 from InterOptimus.equi_term import pair_fit
 from InterOptimus.tool import sort_list
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from adjustText import adjust_text
 from scipy.linalg import polar
+from pymatgen.util.coord import in_coord_list
+from interfacemaster.cellcalc import MID
+from numpy.typing import ArrayLike
+
+from collections.abc import Sequence
+import itertools
+from pymatgen.core.surface import _is_in_miller_family
+
+from functools import reduce
+import math
+
+def get_meshgrid(lim):
+    x = np.arange(-lim, lim, 1)
+    y = x
+    z = x
+    indice = (np.stack(np.meshgrid(x, y, z)).T).reshape(len(x) ** 3, 3)
+    indice_0 = indice[np.where(np.sum(abs(indice), axis=1) != 0)[0]]
+    indice_0 = indice_0[np.argsort(np.linalg.norm(indice_0, axis = 1))]
+    return indice_0[np.where(np.gcd.reduce(indice_0, axis=1) == 1)[0]]
+
+def get_symmetrically_distinct_miller_indices(
+    structure: Structure | IStructure,
+    max_index: int,
+) -> list:
+    """Find all symmetrically distinct indices below a certain max-index
+    for a given structure. Analysis is based on the symmetry of the
+    reciprocal lattice of the structure.
+
+    Args:
+        structure (Structure): The input structure.
+        max_index (int): The maximum index. For example, 1 means that
+            (100), (110), and (111) are returned for the cubic structure.
+            All other indices are equivalent to one of these.
+    """
+    # Get a list of all hkls for conventional (including equivalent)
+    rng = list(range(-max_index, max_index + 1))[::-1]
+    conv_hkl_list = get_meshgrid(max_index)
+
+    # Sort by the maximum absolute values of Miller indices so that
+    # low-index planes come first. This is important for trigonal systems.
+    conv_hkl_list = sorted(conv_hkl_list, key=lambda x: max(np.abs(x)))
+
+    # Get distinct hkl planes from the rhombohedral setting if trigonal
+    spg_analyzer = SpacegroupAnalyzer(structure)
+    miller_list = conv_hkl_list
+    symm_ops = structure.lattice.get_recp_symmetry_operation()
+
+    unique_millers: list = []
+    unique_millers_conv: list = []
+
+    for idx, miller in enumerate(miller_list):
+        denom = abs(reduce(math.gcd, miller))  # type: ignore[arg-type]
+        if not _is_in_miller_family(miller, unique_millers, symm_ops):
+            unique_millers.append(miller)
+            unique_millers_conv.append(miller)
+
+    return unique_millers_conv
+
+def get_symmetrically_equivalent_miller_indices(
+    structure: Structure,
+    miller_index: tuple[int, ...],
+    return_hkil: bool = True
+) -> list:
+    """Get indices for all equivalent sites within a given structure.
+    Analysis is based on the symmetry of its reciprocal lattice.
+
+    Args:
+        structure (Structure): Structure to analyze.
+        miller_index (tuple): Designates the family of Miller indices
+            to find. Can be hkl or hkil for hexagonal systems.
+        return_hkil (bool): Whether to return hkil (True) form of Miller
+            index for hexagonal systems, or hkl (False).
+        system: The crystal system of the structure.
+    """
+    # Convert to hkl if hkil, because in_coord_list only handles tuples of 3
+    if len(miller_index) >= 3:
+        _miller_index: tuple[int, ...] = (
+            miller_index[0],
+            miller_index[1],
+            miller_index[-1],
+        )
+    else:
+        _miller_index = (miller_index[0], miller_index[1], miller_index[2])
+
+    max_idx = max(np.abs(miller_index))
+    idx_range = list(range(-max_idx, max_idx + 1))
+    idx_range.reverse()
+
+    # Skip crystal system analysis if already given
+    symm_ops = structure.lattice.get_recp_symmetry_operation()
+
+    equivalent_millers: list[tuple[int, int, int]] = [_miller_index]  # type: ignore[list-item]
+    for miller in itertools.product(idx_range, idx_range, idx_range):
+        if miller == _miller_index:
+            continue
+
+        if any(idx != 0 for idx in miller):
+            if _is_in_miller_family(miller, equivalent_millers, symm_ops):
+                equivalent_millers += [miller]
+
+            # Include larger Miller indices in the family of planes
+            if (
+                all(max_idx > i for i in np.abs(miller))
+                and not in_coord_list(equivalent_millers, miller)
+                and _is_in_miller_family(max_idx * np.array(miller), equivalent_millers, symm_ops)
+            ):
+                equivalent_millers += [miller]
+
+    return equivalent_millers
 
 def get_identical_pairs(match, film, substrate):
     """
@@ -965,3 +1074,534 @@ class EquiMatchSorter:
         #fig.legend(loc='upper left', bbox_to_anchor=(0.1, 1.25), fontsize = 25)
         plt.tight_layout()
         fig.savefig(filename, dpi = 600, format='jpg')
+
+#!/usr/bin/env python3
+"""
+Stereographic Projection Plot Program
+For analyzing interfacial matching and binding energy distribution between two materials
+"""
+
+import matplotlib.colors as colors
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from scipy.spatial import Delaunay
+
+
+def parse_area_strain_data(filename):
+    """
+    Parse area_strain data file
+
+    Data format:
+    index (h1 k1 l1) (h2 k2 l2) angle strain binding_energy match_score
+
+    Parameters:
+    filename: path to area_strain file
+
+    Returns:
+    material1_planes: crystal planes for material 1 (N, 3)
+    material2_planes: crystal planes for material 2 (N, 3)
+    binding_energies: binding energies array (N,)
+    """
+    material1_planes = []
+    material2_planes = []
+    binding_energies = []
+
+    with open(filename, 'r') as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+
+            # 分割行数据
+            parts = line.split()
+
+            # 跳过序号，提取晶面信息
+            # 格式: (h1 k1 l1) (h2 k2 l2) ...
+            try:
+                # 找到两个晶面的括号位置
+                first_open = line.find('(')
+                first_close = line.find(')')
+                second_open = line.find('(', first_close + 1)
+                second_close = line.find(')', second_open + 1)
+
+                if first_open == -1 or second_open == -1:
+                    continue
+
+                # 提取第一个晶面
+                plane1_str = line[first_open+1:first_close]
+                plane1 = [float(x) for x in plane1_str.split()]
+
+                # 提取第二个晶面
+                plane2_str = line[second_open+1:second_close]
+                plane2 = [float(x) for x in plane2_str.split()]
+
+                # 提取数值部分（结合能是倒数第二列）
+                values_part = line[second_close+1:].strip()
+                values = values_part.split()
+
+                if len(values) >= 2:
+                    # 倒数第二列是结合能
+                    binding_energy = float(values[-2])
+                else:
+                    continue
+
+                material1_planes.append(plane1)
+                material2_planes.append(plane2)
+                binding_energies.append(binding_energy)
+
+            except (ValueError, IndexError) as e:
+                print(f"警告: 第{line_num}行解析失败: {e}")
+                continue
+
+    return (np.array(material1_planes),
+            np.array(material2_planes),
+            np.array(binding_energies))
+
+
+def miller_to_spherical(miller_indices):
+    """
+    Convert Miller indices to spherical coordinates (theta, phi)
+
+    Parameters:
+    miller_indices: Miller indices array (N, 3)
+
+    Returns:
+    theta: polar angle [0, pi]
+    phi: azimuthal angle [-pi, pi]
+    """
+    h, k, l = miller_indices.T
+
+    # 归一化向量
+    norm = np.sqrt(h**2 + k**2 + l**2)
+    norm = np.where(norm == 0, 1, norm)  # 避免除零错误
+
+    x = h / norm
+    y = k / norm
+    z = l / norm
+
+    # 转换为球坐标
+    theta = np.arccos(np.clip(z, -1, 1))  # 极角 [0, pi]
+    phi = np.arctan2(y, x)  # 方位角 [-pi, pi]
+
+    return theta, phi
+
+
+def spherical_to_stereographic(theta, phi):
+    """
+    Convert spherical coordinates to stereographic projection coordinates
+    Lower hemisphere (theta > pi/2) is mapped back inside the unit circle
+
+    Parameters:
+    theta: polar angle [0, pi]
+    phi: azimuthal angle [-pi, pi]
+
+    Returns:
+    x_proj, y_proj: stereographic projection coordinates
+    """
+    # For upper hemisphere (theta <= pi/2): normal projection
+    # For lower hemisphere (theta > pi/2): map back inside unit circle
+    upper_mask = theta <= np.pi / 2
+    lower_mask = theta > np.pi / 2
+    
+    x_proj = np.zeros_like(theta)
+    y_proj = np.zeros_like(theta)
+    
+    # Upper hemisphere: R = tan(theta/2)
+    R_upper = np.tan(theta[upper_mask] / 2)
+    x_proj[upper_mask] = R_upper * np.cos(phi[upper_mask])
+    y_proj[upper_mask] = R_upper * np.sin(phi[upper_mask])
+    
+    # Lower hemisphere: map to inside unit circle
+    # Use complementary angle: theta' = pi - theta
+    # R = tan(theta'/2) = tan((pi - theta)/2) = cot(theta/2)
+    # For lower hemisphere, theta' < pi/2, so R < 1 (inside unit circle)
+    # Reverse phi direction to map back inside
+    theta_complement = np.pi - theta[lower_mask]
+    R_lower = np.tan(theta_complement / 2)
+    # Reverse phi direction (add pi) to map back inside
+    phi_reversed = phi[lower_mask] + np.pi
+    x_proj[lower_mask] = R_lower * np.cos(phi_reversed)
+    y_proj[lower_mask] = R_lower * np.sin(phi_reversed)
+
+    return x_proj, y_proj
+
+
+def draw_plane_connections(ax, planes, x_proj, y_proj):
+    """
+    Draw connections between adjacent crystal planes using Delaunay triangulation
+    Each point only connects to its nearest neighbors, avoiding line crossings
+    
+    Parameters:
+    ax: matplotlib axis object
+    planes: crystal plane Miller indices array (N, 3)
+    x_proj, y_proj: projected coordinates (N,)
+    """
+    # Draw equator circle (outermost circle) - this is the boundary
+    phi_eq = np.linspace(0, 2*np.pi, 200)
+    theta_eq = np.pi/2 * np.ones_like(phi_eq)
+    x_eq, y_eq = spherical_to_stereographic(theta_eq, phi_eq)
+    ax.plot(x_eq, y_eq, 'k-', linewidth=1.5, alpha=0.7, zorder=2)
+    
+    n = len(x_proj)
+    if n < 3:
+        return  # Need at least 3 points for triangulation
+    
+    # Prepare points for Delaunay triangulation
+    points = np.column_stack([x_proj, y_proj])
+    
+    # Filter points inside or near unit circle to avoid issues with far points
+    # Only use points within reasonable range
+    distances = np.sqrt(x_proj**2 + y_proj**2)
+    valid_mask = distances <= 1.5  # Include points slightly outside unit circle
+    
+    if np.sum(valid_mask) < 3:
+        valid_mask = np.ones(n, dtype=bool)  # Use all points if too few valid
+    
+    valid_points = points[valid_mask]
+    valid_indices = np.where(valid_mask)[0]
+    
+    if len(valid_points) < 3:
+        return
+    
+    try:
+        # Perform Delaunay triangulation
+        tri = Delaunay(valid_points)
+        
+        # Draw edges of triangles (each edge connects two adjacent points)
+        # Use a set to avoid drawing the same edge twice
+        edges_drawn = set()
+        
+        for simplex in tri.simplices:
+            # Each simplex is a triangle with 3 vertices
+            for i in range(3):
+                v1_idx = simplex[i]
+                v2_idx = simplex[(i + 1) % 3]
+                
+                # Create a unique key for the edge (smaller index first)
+                edge_key = tuple(sorted([v1_idx, v2_idx]))
+                
+                if edge_key not in edges_drawn:
+                    edges_drawn.add(edge_key)
+                    
+                    # Get actual indices in original array
+                    actual_idx1 = valid_indices[v1_idx]
+                    actual_idx2 = valid_indices[v2_idx]
+                    
+                    # Draw the edge
+                    ax.plot([x_proj[actual_idx1], x_proj[actual_idx2]],
+                           [y_proj[actual_idx1], y_proj[actual_idx2]],
+                           'k-', linewidth=0.5, alpha=0.3, zorder=1)
+    except Exception as e:
+        # If Delaunay triangulation fails, skip drawing connections
+        print(f"Warning: Triangulation failed: {e}")
+        pass
+
+
+def label_planes_in_arc(ax, planes, x_proj, y_proj, theta):
+    """
+    Label crystal planes in 360 degrees, only outer ring and center point
+    Only label upper hemisphere if upper and lower hemisphere overlap
+    
+    Parameters:
+    ax: matplotlib axis object
+    planes: crystal plane Miller indices array (N, 3)
+    x_proj, y_proj: projected coordinates (N,)
+    theta: polar angles (N,) - used to identify upper/lower hemisphere
+    """
+    n = len(x_proj)
+    if n == 0:
+        return
+    
+    # Calculate distances from center
+    distances = np.sqrt(x_proj**2 + y_proj**2)
+    
+    # Only label upper hemisphere (theta <= pi/2)
+    upper_hemisphere = theta <= np.pi / 2
+    
+    # Find outer ring points (close to unit circle boundary)
+    outer_ring = (distances >= 0.85) & (distances <= 1.0) & upper_hemisphere
+    
+    # Find center point (closest to origin)
+    center_mask = upper_hemisphere & (distances <= 1.0)
+    if np.any(center_mask):
+        center_idx = np.argmin(distances[center_mask])
+        # Get the actual index in the full array
+        center_indices = np.where(center_mask)[0]
+        center_point_idx = center_indices[center_idx]
+    else:
+        center_point_idx = None
+    
+    # Get outer ring indices
+    outer_indices = np.where(outer_ring)[0]
+    
+    # Combine outer ring and center point
+    final_indices = list(outer_indices)
+    if center_point_idx is not None:
+        final_indices.append(center_point_idx)
+    
+    if len(final_indices) == 0:
+        return
+    
+    # Remove duplicates
+    final_indices = list(set(final_indices))
+    
+    # For points that might overlap (same x, y position), prefer upper hemisphere
+    # Group by position and keep only upper hemisphere ones
+    position_groups = {}
+    for idx in final_indices:
+        pos_key = (round(x_proj[idx], 4), round(y_proj[idx], 4))
+        if pos_key not in position_groups:
+            position_groups[pos_key] = []
+        position_groups[pos_key].append(idx)
+    
+    # Keep only upper hemisphere points for each position
+    unique_indices = []
+    for pos_key, indices in position_groups.items():
+        # Filter to keep only upper hemisphere
+        upper_indices = [idx for idx in indices if theta[idx] <= np.pi / 2]
+        if len(upper_indices) > 0:
+            # If multiple points at same position, take the first one
+            unique_indices.append(upper_indices[0])
+    
+    if len(unique_indices) == 0:
+        return
+    
+    # Calculate angles for sorting
+    angles = np.arctan2(y_proj[unique_indices], x_proj[unique_indices])
+    
+    # Sort by angle for organized labeling
+    sort_order = np.argsort(angles)
+    sorted_indices = np.array(unique_indices)[sort_order]
+    
+    # Helper function to format Miller index with LaTeX bar notation for negative numbers
+    def format_miller_index(value):
+        """Format Miller index using LaTeX format, adding bar (overline) for negative numbers"""
+        try:
+            val_int = int(value)
+            if val_int < 0:
+                # Use LaTeX overline for negative numbers
+                abs_val = abs(val_int)
+                return rf'\overline{{{abs_val}}}'
+            else:
+                return str(val_int)
+        except ValueError:
+            return f'{value:.1f}'
+    
+    # Label each point with dynamic positioning based on location
+    for idx in sorted_indices:
+        x, y = x_proj[idx], y_proj[idx]
+        h, k, l = planes[idx]
+        
+        # Format label with LaTeX bar notation for negative indices
+        h_str = format_miller_index(h)
+        k_str = format_miller_index(k)
+        l_str = format_miller_index(l)
+        # Combine into LaTeX math format
+        label = f'$({h_str},{k_str},{l_str})$'
+        
+        # Determine label position based on point location
+        # Use origin (0, 0) as center since stereographic projection is centered
+        x_center = 0
+        y_center = 0
+        
+        # Determine offset direction: choose primary direction based on distance from center
+        offset_x = 0
+        offset_y = 0
+        ha = 'center'
+        va = 'center'
+        
+        abs_x = abs(x)
+        abs_y = abs(y)
+        
+        # For points at leftmost or rightmost edges, always place label below
+        # Check if point is near the left or right edge (x close to ±1.0)
+        is_at_edge = abs_x > 0.85
+        
+        if is_at_edge:
+            # Force label below for edge points
+            offset_y = -5
+            va = 'top'
+            ha = 'center'
+        elif abs_y >= abs_x:
+            # Use vertical positioning
+            if y > y_center:
+                # Upper half: label above
+                offset_y = 5
+                va = 'bottom'
+            else:
+                # Lower half: label below
+                offset_y = -5
+                va = 'top'
+            ha = 'center'
+        else:
+            # Use horizontal positioning
+            if x < x_center:
+                # Left half: label to the left
+                offset_x = -5
+                ha = 'right'
+            else:
+                # Right half: label to the right
+                offset_x = 5
+                ha = 'left'
+            va = 'center'
+        
+        # Place label with dynamic positioning
+        ax.annotate(label, (x, y),
+                   xytext=(offset_x, offset_y),
+                   textcoords='offset points',
+                   fontsize=5,
+                   alpha=0.9,
+                   zorder=20,
+                   color='black',
+                   ha=ha,
+                   va=va,
+                   bbox=dict(boxstyle='round,pad=0.2',
+                            facecolor='white',
+                            edgecolor='black',
+                            alpha=0.8,
+                            linewidth=0.5))
+
+
+def create_stereographic_plot(planes, binding_energies, material_name, ax):
+    """
+    Create stereographic projection plot
+
+    Parameters:
+    planes: crystal plane Miller indices array (N, 3)
+    binding_energies: binding energies array (N,)
+    material_name: material name
+    ax: matplotlib axis object
+
+    Returns:
+    im: interpolated image object
+    scatter: scatter plot object
+    """
+    # Convert to spherical coordinates
+    theta, phi = miller_to_spherical(planes)
+
+    # Convert to stereographic projection coordinates
+    x_proj, y_proj = spherical_to_stereographic(theta, phi)
+
+    # Data cleaning: remove invalid values
+    valid_mask = np.isfinite(x_proj) & np.isfinite(y_proj) & np.isfinite(binding_energies)
+    x_proj = x_proj[valid_mask]
+    y_proj = y_proj[valid_mask]
+    binding_energies_clean = binding_energies[valid_mask]
+    planes_clean = planes[valid_mask]
+    theta_clean = theta[valid_mask]
+
+    if len(x_proj) == 0:
+        print(f"警告: {material_name} 没有有效的数据点")
+        return None, None
+
+    # Remove overlapping points: keep only the point with lowest binding energy
+    # Points are considered overlapping if they are within a small distance threshold
+    distance_threshold = 0.01  # Threshold for considering points as overlapping
+    
+    # Group points by their rounded positions
+    position_groups = {}
+    for i in range(len(x_proj)):
+        # Round to 2 decimal places for grouping
+        pos_key = (round(x_proj[i], 2), round(y_proj[i], 2))
+        if pos_key not in position_groups:
+            position_groups[pos_key] = []
+        position_groups[pos_key].append(i)
+    
+    # For each group, keep only the point with lowest binding energy
+    unique_indices = []
+    for pos_key, indices in position_groups.items():
+        if len(indices) == 1:
+            unique_indices.append(indices[0])
+        else:
+            # Multiple points at same position, keep the one with lowest energy
+            energies = binding_energies_clean[indices]
+            min_energy_idx = indices[np.argmin(energies)]
+            unique_indices.append(min_energy_idx)
+    
+    # Filter data to keep only unique points
+    unique_indices = np.array(unique_indices)
+    x_proj_unique = x_proj[unique_indices]
+    y_proj_unique = y_proj[unique_indices]
+    binding_energies_unique = binding_energies_clean[unique_indices]
+    planes_unique = planes_clean[unique_indices]
+    theta_unique = theta_clean[unique_indices]
+
+    # Draw connections between crystal planes first
+    draw_plane_connections(ax, planes_unique, x_proj_unique, y_proj_unique)
+    
+    # Create color mapping (lower binding energy = darker color = stronger binding)
+    vmin = np.min(binding_energies_unique)
+    vmax = np.max(binding_energies_unique)
+
+    # Plot data points only (no interpolation)
+    # Use Nature-recommended colormap: 'viridis' (colorblind-friendly, widely used in Nature)
+    scatter = ax.scatter(x_proj_unique, y_proj_unique, c=binding_energies_unique,
+                        cmap='viridis', s=50, edgecolors='black',
+                        linewidth=0.5, vmin=vmin, vmax=vmax, zorder=10)
+    
+    # Create a dummy image for colorbar (using scatter data)
+    im = scatter
+
+    # Label planes in 360 degrees, only outer ring and center point
+    # Only label upper hemisphere if overlap
+    label_planes_in_arc(ax, planes_unique, x_proj_unique, y_proj_unique, theta_unique)
+
+    # Set plot properties with smaller margins
+    ax.set_xlim(-1.25, 1.25)
+    ax.set_ylim(-1.25, 1.25)
+    ax.set_aspect('equal')
+    ax.set_title(f'{material_name}', fontsize=15, pad=10)
+    
+    # Remove axis labels and ticks
+    ax.set_xlabel('')
+    ax.set_ylabel('')
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    return im, scatter
+
+
+def plot_binding_energy_analysis(material1_planes, material2_planes, binding_energies,
+                                film_name, substrate_name, title):
+    """
+    Create stereographic projection plots for binding energy analysis
+
+    Parameters:
+    material1_planes: crystal planes for material 1 (N, 3)
+    material2_planes: crystal planes for material 2 (N, 3)
+    binding_energies: binding energies array (N,)
+    """
+    # Set matplotlib parameters
+    plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = True
+
+    # Create figure - each subplot is 3x3, so total is 6x3
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(6, 3))
+
+    # Plot stereographic projection for material 1
+    im1, scatter1 = create_stereographic_plot(material1_planes, binding_energies,
+                                                                             film_name, ax1)
+
+    # Plot stereographic projection for material 2
+    im2, scatter2 = create_stereographic_plot(material2_planes, binding_energies,
+                                                                             substrate_name, ax2)
+
+    # Add colorbar
+    fig.subplots_adjust(right=0.85)
+    cbar_ax = fig.add_axes([0.88, 0.15, 0.02, 0.7])
+    cbar = fig.colorbar(scatter2, cax=cbar_ax)
+    cbar.set_label(f'{title} J/m$^2$', rotation=270, labelpad=15, fontsize=15)
+    cbar.ax.tick_params(labelsize=15)
+
+    plt.tight_layout(rect=[0, 0, 0.85, 1], pad=0.1)
+    return fig
+
+def visualize_minimization_results(film_name, substrate_name, title = 'Cohesive Energy'):
+    material1_planes, material2_planes, binding_energies = parse_area_strain_data('area_strain')
+    fig = plot_binding_energy_analysis(material1_planes,
+                                material2_planes,
+                                binding_energies,
+                                film_name,
+                                substrate_name,
+                                title)
+    fig.savefig('stereographic.jpg', dpi=600, bbox_inches='tight', format='jpg')
+    plt.show()

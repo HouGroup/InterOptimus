@@ -209,7 +209,8 @@ class IOMaker(Maker):
             
             return Flow([IO_job, vasp_job])
         else:
-            IO_job = self.IO_HT_job(conv_film, conv_substrate)
+            # NOTE: use the passed-in conventional structures
+            IO_job = self.IO_HT_job(film_conv, substrate_conv)
             return Flow([IO_job])
         
 @job
