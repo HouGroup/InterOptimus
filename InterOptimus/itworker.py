@@ -760,6 +760,9 @@ class InterfaceWorker:
         best_it, relaxed_best_sup_E = relaxed_its[relaxed_min_id], relaxed_Es[relaxed_min_id]
         self.opt_results[(i,j)]['relaxed_interfaces'] = relaxed_its
         self.opt_results[(i,j)]['relaxed_interface_sup_Es'] = relaxed_Es
+        site_properties = self.opt_results[(i,j)]['sampled_interfaces'][0].site_properties
+        for k in site_properties:
+            best_it.add_site_property(k, site_properties[k])
 
         #interface energy
         it_E = (relaxed_best_sup_E - len(best_it.film_indices)/len(self.film) * self.film_e - len(best_it.substrate_indices)/len(self.substrate) * self.substrate_e) / A * 16.02176634 / 2
@@ -966,8 +969,8 @@ class InterfaceWorker:
                     n_calls = int(_A * n_calls_density)
                     
                 with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
-                    #for j in range(1):
                     e_labels = []
+                    #for j in range(1):
                     for j in range(len(self.all_unique_terminations[i])):
                         #optimize
                         self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
@@ -1041,7 +1044,72 @@ class InterfaceWorker:
                     selected_i_ms.append(k)
                     break
         self.selected_i_ms_film = unique(selected_i_ms)
-
+    
+    def get_lowest_energy_pairs_each_match(self,
+                                only_lowest_energy = False,
+                            only_lowest_energy_each_plane = False,
+                            only_substrate = False):
+        
+        if only_lowest_energy_each_plane:
+            self.get_selected_match_ids_per_plane()
+        pd = self.global_optimized_data
+        ids = pd.index.to_numpy()
+        i_s = pd['$i_m$'].to_numpy()
+        j_s = pd['$i_t$'].to_numpy()
+        pairs = []
+        if only_lowest_energy:
+            pairs.append((i_s[0], j_s[0]))
+        else:
+            match_ids = []
+            for i in range(len(i_s)):
+                if only_lowest_energy_each_plane:
+                    if only_substrate:
+                        con = i_s[i] not in match_ids and i_s[i] in self.selected_i_ms_substrate
+                    else:
+                        con = i_s[i] not in match_ids and (i_s[i] in self.selected_i_ms_substrate or
+                                                            i_s[i] in self.selected_i_ms_film)
+                else:
+                    con = i_s[i] not in match_ids
+                if con:
+                    match_ids.append(i_s[i])
+                    pairs.append((i_s[i], j_s[i]))
+        
+        return pairs
+    
+    def visualize_minimization_results(self, film_name, substrate_name):
+        
+        pairs = self.get_lowest_energy_pairs_each_match(only_lowest_energy_each_plane = True)
+        matche_bd_e_dict = {}
+        for key in pairs:
+            if self.double_interface:
+                matche_bd_e_dict[key[0]] = self.opt_results[key]['relaxed_min_it_E']
+            else:
+                matche_bd_e_dict[key[0]] = self.opt_results[key]['relaxed_min_bd_E']
+        from InterOptimus.matching import get_area_match
+        data = []
+        for i in self.ems.all_matche_data.keys():
+            here = self.ems.all_matche_data[i]
+            low_E = inf
+            for tp in here.keys():
+                try:
+                    if matche_bd_e_dict[tp] < low_E:
+                        low_E = matche_bd_e_dict[tp]
+                        low_tp = tp
+                    mt = self.unique_matches[tp]
+                except:
+                    pass
+            data.append([i[0][0], i[0][1], i[0][2], i[1][0], i[1][1], i[1][2],
+                         get_area_match(mt), mt.von_mises_strain, low_E, low_tp])
+        from numpy import savetxt
+        savetxt('area_strain',data,fmt = '(%i %i %i) (%i %i %i) %.4f %.4f %.4f %i')
+        
+        from InterOptimus.matching import visualize_minimization_results
+        if self.double_interface:
+            title = 'Interface Energy'
+        else:
+            title = 'Cohesive Energy'
+        visualize_minimization_results(film_name, substrate_name, title)
+    
     def patch_jobflow_jobs(self,
                             only_lowest_energy = False,
                             only_lowest_energy_each_plane = False,
@@ -1073,29 +1141,9 @@ class InterfaceWorker:
         if do_dft_gd:
             from InterOptimus.jobflow import GDVaspMaker
         
-        if only_lowest_energy_each_plane:
-            self.get_selected_match_ids_per_plane()
-        pd = self.global_optimized_data
-        ids = pd.index.to_numpy()
-        i_s = pd['$i_m$'].to_numpy()
-        j_s = pd['$i_t$'].to_numpy()
-        pairs = []
-        if only_lowest_energy:
-            pairs.append((i_s[0], j_s[0]))
-        else:
-            match_ids = []
-            for i in range(len(i_s)):
-                if only_lowest_energy_each_plane:
-                    if only_substrate:
-                        con = i_s[i] not in match_ids and i_s[i] in self.selected_i_ms_substrate
-                    else:
-                        con = i_s[i] not in match_ids and (i_s[i] in self.selected_i_ms_substrate or
-                                                            i_s[i] in self.selected_i_ms_film)
-                else:
-                    con = i_s[i] not in match_ids
-                if con:
-                    match_ids.append(i_s[i])
-                    pairs.append((i_s[i], j_s[i]))
+        pairs = self.get_lowest_energy_pairs_each_match(only_lowest_energy = only_lowest_energy,
+                            only_lowest_energy_each_plane = only_lowest_energy_each_plane,
+                            only_substrate = only_substrate)
         
         flows = []
         for num in range(2):
@@ -1108,8 +1156,7 @@ class InterfaceWorker:
                                                          user_potcar_settings = static_user_potcar_settings,
                                                           user_kpoints_settings = static_user_kpoints_settings,
                                                            user_potcar_functional = static_user_potcar_functional,
-                                                           ),
-                                    run_vasp_kwargs = {"handlers": []}
+                                                           )
                                     )
             job = vasp_maker.make(structure)
             job.update_metadata({'filter_name':filter_name, 'job': ['film','substrate'][num]})
@@ -1147,8 +1194,7 @@ class InterfaceWorker:
                                                                     user_potcar_settings = relax_user_potcar_settings,
                                                                     user_kpoints_settings = relax_user_kpoints_settings,
                                                                     user_potcar_functional = relax_user_potcar_functional,
-                                                                    ),
-                                    run_vasp_kwargs={"handlers": []}
+                                                                    )
                                     )
             if do_dft_gd:
                 if dipole_correction:
@@ -1161,8 +1207,7 @@ class InterfaceWorker:
                                                                             user_potcar_settings = relax_user_potcar_settings,
                                                                             user_kpoints_settings = relax_user_kpoints_settings,
                                                                             user_potcar_functional = relax_user_potcar_functional,
-                                                                            ),
-                                            run_vasp_kwargs={"handlers": []}
+                                                                            )
                                             )
                 else:
                     vasp_maker_dp = None
@@ -1193,8 +1238,7 @@ class InterfaceWorker:
                                                                             user_potcar_settings = relax_user_potcar_settings,
                                                                             user_kpoints_settings = relax_user_kpoints_settings,
                                                                             user_potcar_functional = relax_user_potcar_functional,
-                                                                            ),
-                                            run_vasp_kwargs={"handlers": []}
+                                                                            )
                                             )
                     job_dp = vasp_maker.make(it, prev_dir = job.output.dir_name)
                     job_dp.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_it_dp'})
@@ -1212,8 +1256,7 @@ class InterfaceWorker:
                                                                         user_potcar_settings = static_user_potcar_settings,
                                                                         user_kpoints_settings = static_user_kpoints_settings,
                                                                         user_potcar_functional = static_user_potcar_functional
-                                                                        ),
-                                        run_vasp_kwargs={"handlers": []}
+                                                                        )
                                         )
                 job = vasp_maker.make(s_film)
                 job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_sfilm'})
@@ -1241,8 +1284,7 @@ class InterfaceWorker:
                                                                             user_potcar_settings = relax_user_potcar_settings,
                                                                             user_kpoints_settings = relax_user_kpoints_settings,
                                                                             user_potcar_functional = relax_user_potcar_functional,
-                                                                            ),
-                                            run_vasp_kwargs={"handlers": []}
+                                                                            )
                                             )
                     job = vasp_maker.make(slab_structure)
                     job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_{slab}_slab'})
@@ -1258,8 +1300,7 @@ class InterfaceWorker:
                                                                                 user_potcar_settings = relax_user_potcar_settings,
                                                                                 user_kpoints_settings = relax_user_kpoints_settings,
                                                                                 user_potcar_functional = relax_user_potcar_functional,
-                                                                                ),
-                                                run_vasp_kwargs={"handlers": []}
+                                                                                )
                                                 )
                         job_dp = vasp_maker.make(slab_structure, prev_dir = job.output.dir_name)
                         job_dp.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_{slab}_slab_dp'})
