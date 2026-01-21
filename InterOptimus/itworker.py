@@ -349,11 +349,33 @@ class InterfaceWorker:
         Args:
         calc (str): mace, orb-models, sevenn, chgnet, grace-2l
         """
-        if calc == 'orb-models' or calc == 'sevenn' or calc == 'dpa':
-            from InterOptimus.mlip import MlipCalc
+        # NOTE: mlipdockers is deprecated in this project; always use InterOptimus.mlip.MlipCalc
+        from InterOptimus.mlip import MlipCalc
+
+        # Defensive copy & defaults
+        if user_settings is None:
+            user_settings = {}
         else:
-            from mlipdockers.core import MlipCalc
-        self.mc = MlipCalc(calc = calc, user_settings = user_settings)
+            user_settings = dict(user_settings)
+
+        # If checkpoint path is not provided, try to read from environment
+        env_dict = {
+            "orb-models": "ORB_CHECKPOINT",
+            "sevenn": "SEVENN_CHECKPOINT",
+            "dpa": "DPA_CHECKPOINT",
+        }
+        if user_settings.get("ckpt_path") is None and calc in env_dict:
+            import os
+
+            ckpt = os.getenv(env_dict[calc])
+            if not ckpt:
+                raise ValueError(
+                    f"ckpt_path is None and env {env_dict[calc]} is not set for calc={calc!r}. "
+                    f"Please set {env_dict[calc]} or pass user_settings['ckpt_path']."
+                )
+            user_settings["ckpt_path"] = ckpt
+
+        self.mc = MlipCalc(calc=calc, user_settings=user_settings)
     
     def close_energy_calculator(self):
         """
@@ -946,6 +968,7 @@ class InterfaceWorker:
         self.formated_data = []
         self.strain_E_correction = strain_E_correction
         #set mlip calculator
+        
         self.set_energy_calculator(calc, self.opt_kwargs)
         self.film_e = self.mc.calculate(self.film)
         self.substrate_e = self.mc.calculate(self.substrate)
@@ -1148,7 +1171,7 @@ class InterfaceWorker:
         flows = []
         for num in range(2):
             structure = [self.film, self.substrate][num]
-            if 'EDIFF_PER_ATOM' in static_user_incar_settings.keys():
+            if static_user_incar_settings and 'EDIFF_PER_ATOM' in static_user_incar_settings.keys():
                 static_user_incar_settings['EDIFF'] = static_user_incar_settings['EDIFF_PER_ATOM'] * len(structure)
             vasp_maker = StaticMaker(
                                     input_set_generator = MPStaticSet(
@@ -1177,10 +1200,10 @@ class InterfaceWorker:
                     it_user_incar_settings = {'ISIF':2}
             #interface here
             it = Structure.from_dict(json.loads(self.opt_results[i]['relaxed_best_interface']['structure']))
-            if 'EDIFF_PER_ATOM' in it_user_incar_settings.keys():
+            if it_user_incar_settings and 'EDIFF_PER_ATOM' in it_user_incar_settings.keys():
                 it_user_incar_settings['EDIFF'] = it_user_incar_settings['EDIFF_PER_ATOM'] * len(it)
             it_user_incar_settings_here = it_user_incar_settings.copy()
-            if not with_LDAUU(it):
+            if not with_LDAUU(it) and 'LDAU' in it_user_incar_settings_here.keys():
                 del it_user_incar_settings_here['LDAU']
                 del it_user_incar_settings_here['LDAUU']
                 del it_user_incar_settings_here['LDAUJ']
@@ -1247,7 +1270,7 @@ class InterfaceWorker:
             if self.strain_E_correction:
                 #strained film
                 s_film = Structure.from_dict(json.loads(self.opt_results[i]['strain_film']))
-                if 'EDIFF_PER_ATOM' in static_user_incar_settings.keys():
+                if static_user_incar_settings and 'EDIFF_PER_ATOM' in static_user_incar_settings.keys():
                     static_user_incar_settings['EDIFF'] = static_user_incar_settings['EDIFF_PER_ATOM'] * len(s_film)
                 vasp_maker = StaticMaker(
                                         input_set_generator = MPStaticSet(
@@ -1266,11 +1289,11 @@ class InterfaceWorker:
             if not self.double_interface:
                 for slab in ['film', 'substrate']:
                     slab_structure = Structure.from_dict(json.loads(self.opt_results[i]['slabs'][slab]['structure']))
-                    if 'EDIFF_PER_ATOM' in it_user_incar_settings.keys():
+                    if it_user_incar_settings and 'EDIFF_PER_ATOM' in it_user_incar_settings.keys():
                         it_user_incar_settings['EDIFF'] = it_user_incar_settings['EDIFF_PER_ATOM'] * len(slab_structure)
                     
                     it_user_incar_settings_here = it_user_incar_settings.copy()
-                    if not with_LDAUU(slab_structure):
+                    if not with_LDAUU(slab_structure) and 'LDAU' in it_user_incar_settings_here.keys():
                         del it_user_incar_settings_here['LDAU']
                         del it_user_incar_settings_here['LDAUU']
                         del it_user_incar_settings_here['LDAUJ']

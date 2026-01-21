@@ -18,8 +18,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import hashlib
+from datetime import datetime
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, List, Literal
+from copy import deepcopy
+from typing import Any, Dict, Optional, Tuple, List, Literal, Callable
 
 from pymatgen.core.structure import Structure
 
@@ -59,7 +62,7 @@ TUTORIAL_WITH_VACUUM = {
         "steps": 200,
         "device": "cpu",
         "discut": 0.8,
-        "ckpt_path": "",
+        "ckpt_path": None,
         "BO_coord_bin_size": 0.25,
         "BO_energy_bin_size": 0.05,
         "BO_rms_bin_size": 0.3,
@@ -116,10 +119,110 @@ def _tutorial_mode_from_prompt(user_prompt: str) -> str:
         return "without_vacuum"
     if "double_interface" in t or "double interface" in t:
         return "without_vacuum"
+    # Chinese: double interface implies no vacuum layer
+    if "双界面" in (user_prompt or ""):
+        return "without_vacuum"
     # Chinese hints
     if "无真空" in t or "不加真空" in t or "不要真空" in t:
         return "without_vacuum"
     return "with_vacuum"
+
+
+def _force_without_vacuum_from_prompt(user_prompt: str) -> bool:
+    """
+    Return True if user explicitly requests a double-interface model.
+    Per requirement: double-interface == without vacuum (no vacuum layer).
+    """
+    raw = user_prompt or ""
+    t = raw.lower()
+    if "double_interface" in t or "double interface" in t:
+        return True
+    if "双界面" in raw:
+        return True
+    return False
+
+
+def _disable_gd_from_prompt(user_prompt: str) -> bool:
+    """
+    Return True if the user explicitly asks to disable gradient descent (GD).
+
+    Examples:
+    - 不要/不做/不进行 梯度下降
+    - 不要 GD / 不用 GD
+    - no gradient descent / disable GD
+    """
+    raw = user_prompt or ""
+    t = raw.lower()
+
+    # Chinese negations around "梯度下降" / "GD"
+    if re.search(r"(不要|不做|不进行|不用|禁止).{0,8}(梯度下降|gd)", raw):
+        return True
+
+    # English phrases
+    if re.search(r"\b(no|without|disable|dont|don't|do not)\b.{0,16}\b(gradient\s*descent|gd)\b", t):
+        return True
+
+    # Short explicit tokens
+    if re.search(r"\bno\s*gd\b", t) or re.search(r"\bdisable\s*gd\b", t):
+        return True
+
+    return False
+
+
+def _slug(text: str, maxlen: int = 32) -> str:
+    """
+    Make a filesystem-safe, compact token for naming.
+    """
+    s = (text or "NA").strip()
+    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"[^A-Za-z0-9._-]+", "", s)
+    return (s[:maxlen] or "NA")
+
+
+def _summarize_key_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Select a stable subset of settings for name hashing.
+    """
+    lm = settings.get("lattice_matching_settings", {}) or {}
+    opt = settings.get("optimization_settings", {}) or {}
+    gm = settings.get("global_minimization_settings", {}) or {}
+    return {
+        "mode": settings.get("mode"),
+        "do_vasp": settings.get("do_vasp"),
+        "calc": gm.get("calc"),
+        "z_range": gm.get("z_range"),
+        "n_calls_density": gm.get("n_calls_density"),
+        "strain_E_correction": gm.get("strain_E_correction"),
+        "max_area": lm.get("max_area"),
+        "max_length_tol": lm.get("max_length_tol"),
+        "max_angle_tol": lm.get("max_angle_tol"),
+        "do_gd": opt.get("do_gd"),
+        "ckpt_path": opt.get("ckpt_path"),
+    }
+
+
+def _auto_iomaker_name(
+    settings: Dict[str, Any],
+    film_label: str,
+    substrate_label: str,
+) -> str:
+    """
+    Build a deterministic, human-readable name for IOMaker jobs.
+    """
+    mode = settings.get("mode", "with_vacuum")
+    do_vasp = bool(settings.get("do_vasp", False))
+    mode_tag = "double" if mode == "without_vacuum" else "vac"
+
+    gm = settings.get("global_minimization_settings", {}) or {}
+    calc = gm.get("calc", "mlip")
+    calc_tag = {"orb-models": "orb", "sevenn": "sevenn", "dpa": "dpa"}.get(calc, _slug(str(calc), 12))
+
+    key_settings = _summarize_key_settings(settings)
+    blob = json.dumps(key_settings, sort_keys=True, ensure_ascii=False)
+    h8 = hashlib.sha1(blob.encode("utf-8")).hexdigest()[:8]
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    return f"IO_{_slug(film_label)}-{_slug(substrate_label)}_m-{mode_tag}_v{1 if do_vasp else 0}_mlip-{calc_tag}_{ts}_{h8}"
 
 
 @dataclass
@@ -149,6 +252,36 @@ class BuildConfig:
     # (Deprecated) previously used for constraint-relaxation MP search.
     # We now only support local CIFs or explicit MP IDs.
     strict_mp_constraints: bool = False
+
+    # Remote submission (optional)
+    # If provided, the generated job will be automatically submitted to the remote server
+    submit_to_remote: bool = False
+    remote_host: Optional[str] = None  # e.g., "xys@10.103.65.21"
+    remote_identity_file: Optional[str] = None  # e.g., "~/.ssh/id_ed25519"
+    remote_workdir: Optional[str] = None  # e.g., "~/io_runs/si_sic_run1"
+    remote_python: str = "python"  # Python command on remote server
+    remote_pre_cmd: Optional[str] = None  # e.g., "source ~/.bashrc && conda activate atomate2"
+    remote_passphrase: Optional[str] = None  # SSH key passphrase
+    remote_use_paramiko: bool = False  # Use paramiko instead of pexpect
+    remote_debug: bool = False  # Enable debug output for remote submission
+
+    # Jobflow resources and workers
+    # These are passed to IOMaker for jobflow_remote configuration
+    mlip_resources: Optional[Callable] = None  # Function returning QResources for MLIP jobs
+    vasp_resources: Optional[Callable] = None  # Function returning QResources for VASP jobs (required if do_vasp=True)
+    mlip_worker: str = "std_worker"  # Worker name for MLIP jobs
+    vasp_worker: str = "std_worker"  # Worker name for VASP jobs (required if do_vasp=True)
+    
+    # VASP settings (optional, defaults to MPRelaxSet/MPStaticSet if None)
+    vasp_relax_settings: Optional[Dict[str, Any]] = None  # VASP relaxation settings dict
+    vasp_static_settings: Optional[Dict[str, Any]] = None  # VASP static settings dict
+    # Whether to run gradient descent for VASP jobs (IO -> VASP GD)
+    do_vasp_gd: bool = False
+
+    # MLIP checkpoint path (optional).
+    # If provided, this will be written into optimization_settings["ckpt_path"].
+    # If None, the workflow will rely on env fallbacks inside InterfaceWorker.set_energy_calculator.
+    ckpt_path: Optional[str] = None
 
 
 def _openai_client(api_key: str, base_url: str):
@@ -431,7 +564,65 @@ def llm_generate_iomaker_settings(
     return data
 
 
-def _print_final_settings(settings: Dict[str, Any], structures_meta: Dict[str, Any], flow_json_path: str) -> None:
+def _clean_for_json_serialization(obj: Any, visited: Optional[set] = None) -> Any:
+    """
+    Recursively remove non-serializable objects (like functions) from a dictionary.
+    This is needed because jobflow Flow objects may contain function references
+    that cannot be serialized to JSON.
+    """
+    if visited is None:
+        visited = set()
+    
+    # Handle circular references
+    if isinstance(obj, (dict, list, tuple)):
+        obj_id = id(obj)
+        if obj_id in visited:
+            return None  # Circular reference detected
+        visited.add(obj_id)
+    
+    try:
+        if isinstance(obj, dict):
+            cleaned = {}
+            for key, value in obj.items():
+                # Skip function objects and other callables (but not types/classes)
+                if callable(value) and not isinstance(value, type):
+                    continue  # Skip functions
+                try:
+                    cleaned[key] = _clean_for_json_serialization(value, visited)
+                except (TypeError, ValueError, RecursionError):
+                    # If we can't serialize it, skip it
+                    continue
+            if isinstance(obj, dict):
+                visited.discard(id(obj))
+            return cleaned
+        elif isinstance(obj, (list, tuple)):
+            cleaned = []
+            for item in obj:
+                if callable(item) and not isinstance(item, type):
+                    continue  # Skip functions
+                try:
+                    cleaned.append(_clean_for_json_serialization(item, visited))
+                except (TypeError, ValueError, RecursionError):
+                    # If we can't serialize it, skip it
+                    continue
+            if isinstance(obj, (list, tuple)):
+                visited.discard(id(obj))
+            return cleaned if isinstance(obj, list) else tuple(cleaned)
+        else:
+            # For other types, check if they're callable (but not types/classes)
+            if callable(obj) and not isinstance(obj, type):
+                return None  # Replace functions with None
+            return obj
+    except (TypeError, ValueError, RecursionError):
+        return None
+
+
+def _print_final_settings(
+    settings: Dict[str, Any], 
+    structures_meta: Dict[str, Any], 
+    flow_json_path: str,
+    cfg: Optional[BuildConfig] = None
+) -> None:
     """
     Print all settings for user visibility after building a job.
     """
@@ -449,6 +640,39 @@ def _print_final_settings(settings: Dict[str, Any], structures_meta: Dict[str, A
     if structures_meta.get("mp_substrate"):
         print("\n🧾 Materials Project (substrate) selection:")
         print(json.dumps(structures_meta["mp_substrate"], indent=2, ensure_ascii=False))
+    
+    # Print jobflow configuration
+    if cfg:
+        print("\n⚙️  Jobflow configuration:")
+        print(f"   MLIP worker: {cfg.mlip_worker}")
+        print(f"   MLIP resources: {'✅ Set' if cfg.mlip_resources else '❌ Not set (using defaults)'}")
+        if settings.get("do_vasp"):
+            print(f"   VASP worker: {cfg.vasp_worker}")
+            print(f"   VASP resources: {'✅ Set' if cfg.vasp_resources else '❌ Not set'}")
+            print(f"   VASP GD: {'✅ On' if settings.get('do_vasp_gd') else '❌ Off'}")
+
+            print("\n🧪 VASP input settings:")
+            vrel = settings.get("vasp_relax_settings", None)
+            vsta = settings.get("vasp_static_settings", None)
+            if vrel is None:
+                print("   - vasp_relax_settings: (default) pymatgen.io.vasp.sets.MPRelaxSet")
+            else:
+                print("   - vasp_relax_settings:")
+                print(json.dumps(vrel, indent=2, ensure_ascii=False))
+            if vsta is None:
+                print("   - vasp_static_settings: (default) pymatgen.io.vasp.sets.MPStaticSet")
+            else:
+                print("   - vasp_static_settings:")
+                print(json.dumps(vsta, indent=2, ensure_ascii=False))
+        
+        if cfg.submit_to_remote:
+            print("\n🌐 Remote submission configuration:")
+            print(f"   Host: {cfg.remote_host}")
+            print(f"   Remote workdir: {cfg.remote_workdir}")
+            print(f"   Python: {cfg.remote_python}")
+            if cfg.remote_pre_cmd:
+                print(f"   Pre-command: {cfg.remote_pre_cmd}")
+    
     print("\n🔧 Parameter settings (LLM output normalized):")
     print(json.dumps(settings, indent=2, ensure_ascii=False))
     print("=" * 80 + "\n")
@@ -477,6 +701,10 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
     if mode not in ("with_vacuum", "without_vacuum"):
         mode = _tutorial_mode_from_prompt(user_prompt)
 
+    # Hard rule: "double interface" / "双界面" => without_vacuum
+    if _force_without_vacuum_from_prompt(user_prompt):
+        mode = "without_vacuum"
+
     preset = TUTORIAL_WITH_VACUUM if mode == "with_vacuum" else TUTORIAL_WITHOUT_VACUUM
 
     # Final settings used by IOMaker: EXACTLY match tutorial presets
@@ -484,18 +712,30 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
         "name": llm_out.get("name", "IO_llm"),
         "mode": mode,
         "inputs": llm_out.get("inputs", {}) or {},
-        "lattice_matching_settings": preset["lattice_matching_settings"],
-        "structure_settings": preset["structure_settings"],
-        "optimization_settings": preset["optimization_settings"],
-        "global_minimization_settings": preset["global_minimization_settings"],
+        # deepcopy so per-run overrides do not mutate module-level presets
+        "lattice_matching_settings": deepcopy(preset["lattice_matching_settings"]),
+        "structure_settings": deepcopy(preset["structure_settings"]),
+        "optimization_settings": deepcopy(preset["optimization_settings"]),
+        "global_minimization_settings": deepcopy(preset["global_minimization_settings"]),
         "do_vasp": bool(llm_out.get("do_vasp", False)),
     }
+
+    # Allow user to override MLIP checkpoint path via BuildConfig
+    # (goes into InterfaceWorker.opt_kwargs via parse_optimization_params)
+    if cfg.ckpt_path is not None:
+        settings["optimization_settings"]["ckpt_path"] = cfg.ckpt_path
+
+    # If user explicitly asks to NOT do gradient descent, force-disable it.
+    # This controls MLIP-side gradient descent in InterfaceWorker.parse_optimization_params().
+    if _disable_gd_from_prompt(user_prompt):
+        settings["optimization_settings"]["do_gd"] = False
 
     inputs = settings.get("inputs", {}) or {}
     in_type = inputs.get("type", "local_cif")
     film_mp_id = inputs.get("film_mp_id")
     substrate_mp_id = inputs.get("substrate_mp_id")
     # (No further normalization needed: preset is authoritative)
+
 
     # Load structures:
     effective_mp_key = cfg.mp_api_key or os.getenv("MP_API_KEY")
@@ -507,36 +747,163 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
         substrate_mp_id=substrate_mp_id if in_type == "mp_id" else None,
     )
 
+    # Validate VASP requirements if do_vasp is True
+    do_vasp = bool(settings.get("do_vasp", False))
+    if do_vasp:
+        if cfg.vasp_resources is None:
+            raise ValueError(
+                "vasp_resources is required when do_vasp=True. "
+                "Please provide a Callable that returns QResources for VASP jobs."
+            )
+        if not cfg.vasp_worker:
+            raise ValueError(
+                "vasp_worker is required when do_vasp=True. "
+                "Please provide the worker name for VASP jobs."
+            )
+
+    # VASP settings priority: BuildConfig > LLM output > None (default MPRelaxSet/MPStaticSet)
+    vasp_relax_settings = cfg.vasp_relax_settings
+    if vasp_relax_settings is None and "vasp_relax_settings" in settings:
+        vasp_relax_settings = settings.get("vasp_relax_settings")
+
+    vasp_static_settings = cfg.vasp_static_settings
+    if vasp_static_settings is None and "vasp_static_settings" in settings:
+        vasp_static_settings = settings.get("vasp_static_settings")
+
+    # If user explicitly asks to disable gradient descent, also disable VASP GD.
+    do_vasp_gd = bool(cfg.do_vasp_gd)
+    if _disable_gd_from_prompt(user_prompt):
+        do_vasp_gd = False
+
+    # Record the effective VASP settings for printing/debugging (only matters when do_vasp=True)
+    if do_vasp:
+        settings["vasp_relax_settings"] = vasp_relax_settings
+        settings["vasp_static_settings"] = vasp_static_settings
+        settings["do_vasp_gd"] = do_vasp_gd
+
+    # Auto-generate IOMaker name if user didn't specify one
+    if not settings.get("name") or settings.get("name") == "IO_llm":
+        if in_type == "mp_id" and film_mp_id and substrate_mp_id:
+            film_label = film_mp_id
+            substrate_label = substrate_mp_id
+        else:
+            film_label = os.path.splitext(os.path.basename(cfg.film_cif))[0]
+            substrate_label = os.path.splitext(os.path.basename(cfg.substrate_cif))[0]
+        settings["name"] = _auto_iomaker_name(
+            settings=settings,
+            film_label=film_label,
+            substrate_label=substrate_label,
+        )
+    
     maker = IOMaker(
         name=settings.get("name", "IO_llm"),
         lattice_matching_settings=settings["lattice_matching_settings"],
         structure_settings=settings["structure_settings"],
         optimization_settings=settings["optimization_settings"],
         global_minimization_settings=settings["global_minimization_settings"],
-        do_vasp=bool(settings.get("do_vasp", False)),
-        vasp_relax_settings=settings.get("vasp_relax_settings"),
-        vasp_static_settings=settings.get("vasp_static_settings"),
-        mlip_worker=settings.get("mlip_worker", "std_worker"),
-        vasp_worker=settings.get("vasp_worker", "std_worker"),
+        do_vasp=do_vasp,
+        do_vasp_gd=do_vasp_gd,
+        vasp_relax_settings=vasp_relax_settings,
+        vasp_static_settings=vasp_static_settings,
+        mlip_resources=cfg.mlip_resources,
+        vasp_resources=cfg.vasp_resources,
+        mlip_worker=cfg.mlip_worker,
+        vasp_worker=cfg.vasp_worker,
     )
 
     flow = maker.make(film_conv, substrate_conv)
 
     # Write Flow to JSON file
-    flow_dict = flow.as_dict() if hasattr(flow, "as_dict") else flow.to_dict()  # jobflow compat
+    # Try to use jobflow's to_json() method first, which handles serialization properly
     out_path = os.path.abspath(cfg.output_flow_json)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(flow_dict, f, indent=2)
+    flow_dict = None
+    flow_json_str = None
+    
+    try:
+        if hasattr(flow, "to_json"):
+            # jobflow Flow has to_json() method that returns a JSON string
+            flow_json_str = flow.to_json()
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(flow_json_str)
+            # Parse back to dict for return value
+            flow_dict = json.loads(flow_json_str)
+    except (TypeError, AttributeError) as e:
+        # If to_json() fails (e.g., due to function objects), try cleaning the dict
+        print(f"Warning: to_json() failed ({e}), attempting to clean and serialize manually...")
+        try:
+            flow_dict = flow.as_dict() if hasattr(flow, "as_dict") else flow.to_dict()
+            # Remove non-serializable objects (like functions) from flow_dict
+            flow_dict = _clean_for_json_serialization(flow_dict)
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(flow_dict, f, indent=2)
+            flow_json_str = json.dumps(flow_dict, indent=2)
+        except Exception as e2:
+            raise RuntimeError(
+                f"Failed to serialize Flow to JSON. "
+                f"to_json() error: {e}, "
+                f"manual serialization error: {e2}. "
+                f"This may be due to non-serializable objects (like functions) in the Flow. "
+                f"Please check that mlip_resources and vasp_resources are not stored in the Flow."
+            ) from e2
+    
+    if flow_dict is None:
+        raise RuntimeError("Failed to serialize Flow to JSON")
 
     if cfg.print_settings:
-        _print_final_settings(settings=settings, structures_meta=meta, flow_json_path=out_path)
+        _print_final_settings(settings=settings, structures_meta=meta, flow_json_path=out_path, cfg=cfg)
 
-    return {
+    result = {
         "flow_json_path": out_path,
         "flow_dict": flow_dict,
         "settings": settings,
         "structures_meta": meta,
     }
+
+    # Submit to remote server if configured
+    if cfg.submit_to_remote:
+        if not cfg.remote_host:
+            raise ValueError("submit_to_remote=True requires remote_host to be set")
+        if not cfg.remote_identity_file:
+            raise ValueError("submit_to_remote=True requires remote_identity_file to be set")
+        if not cfg.remote_workdir:
+            raise ValueError("submit_to_remote=True requires remote_workdir to be set")
+
+        try:
+            from .remote_submit import submit_io_flow_via_ssh
+
+            submit_result = submit_io_flow_via_ssh(
+                host=cfg.remote_host,
+                identity_file=cfg.remote_identity_file,
+                local_io_flow_json=out_path,
+                remote_workdir=cfg.remote_workdir,
+                remote_python=cfg.remote_python,
+                pre_cmd=cfg.remote_pre_cmd or "",
+                passphrase=cfg.remote_passphrase,
+                use_paramiko=cfg.remote_use_paramiko,
+                debug=cfg.remote_debug,
+            )
+
+            result["remote_submission"] = submit_result
+
+            if submit_result["success"]:
+                print(f"\n✅ Job submitted successfully to {cfg.remote_host}")
+                if submit_result.get("job_id"):
+                    print(f"📋 Job ID: {submit_result['job_id']}")
+            else:
+                print(f"\n❌ Remote submission failed:")
+                print(f"   Error: {submit_result.get('error', 'unknown')}")
+                print(f"   Stderr: {submit_result.get('stderr', '')}")
+        except ImportError as e:
+            raise ImportError(
+                f"Remote submission requires 'pexpect' or 'paramiko'. "
+                f"Install with: pip install pexpect (or pip install paramiko). "
+                f"Original error: {e}"
+            )
+        except Exception as e:
+            print(f"\n⚠️  Remote submission failed with error: {e}")
+            result["remote_submission_error"] = str(e)
+
+    return result
 
 
 def main():

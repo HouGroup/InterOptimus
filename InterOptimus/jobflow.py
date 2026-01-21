@@ -141,6 +141,7 @@ class IOMaker(Maker):
     optimization_settings: Dict[str, Any] = None
     global_minimization_settings: Dict[str, Any] = None
     do_vasp: bool = False
+    do_vasp_gd: bool = False
     vasp_relax_settings: Dict[str, Any] = None
     vasp_static_settings: Dict[str, Any] = None
     mlip_resources: Callable = None
@@ -166,21 +167,34 @@ class IOMaker(Maker):
         io_results_bytes = pickle.dumps(results)
         io_results_b64 = base64.b64encode(io_results_bytes).decode('utf-8')
         if self.do_vasp:
+            # Prepare VASP settings, use None (defaults to MPRelaxSet/MPStaticSet) if not provided
+            relax_incar = self.vasp_relax_settings.get('INCAR') if self.vasp_relax_settings else None
+            relax_kpoints = self.vasp_relax_settings.get('KPOINTS') if self.vasp_relax_settings else None
+            relax_potcar_func = self.vasp_relax_settings.get('POTCAR_FUNCTIONAL') if self.vasp_relax_settings else None
+            relax_potcar = self.vasp_relax_settings.get('POTCAR') if self.vasp_relax_settings else None
+            
+            static_incar = self.vasp_static_settings.get('INCAR') if self.vasp_static_settings else None
+            static_kpoints = self.vasp_static_settings.get('KPOINTS') if self.vasp_static_settings else None
+            static_potcar_func = self.vasp_static_settings.get('POTCAR_FUNCTIONAL') if self.vasp_static_settings else None
+            static_potcar = self.vasp_static_settings.get('POTCAR') if self.vasp_static_settings else None
+            
+            # Handle do_dft_gd and gd_kwargs (default to False if not provided)
+            gd_kwargs = {'tol': self.vasp_relax_settings.get('GDTOL', 5e-4)} if self.vasp_relax_settings else {'tol': 5e-4}
+            
             flow = iw.patch_jobflow_jobs(filter_name=self.name,
                             only_lowest_energy_each_plane = True,
-                            relax_user_incar_settings=self.vasp_relax_settings['INCAR'],
-                            relax_user_kpoints_settings=self.vasp_relax_settings['KPOINTS'],
-                            relax_user_potcar_functional=self.vasp_relax_settings['POTCAR_FUNCTIONAL'],
-                            relax_user_potcar_settings=self.vasp_relax_settings['POTCAR'],
+                            relax_user_incar_settings=relax_incar,
+                            relax_user_kpoints_settings=relax_kpoints,
+                            relax_user_potcar_functional=relax_potcar_func,
+                            relax_user_potcar_settings=relax_potcar,
                             
-                            static_user_incar_settings=self.vasp_static_settings['INCAR'],
-                            static_user_kpoints_settings=self.vasp_static_settings['KPOINTS'],
-                            static_user_potcar_functional=self.vasp_static_settings['POTCAR_FUNCTIONAL'],
-                            static_user_potcar_settings=self.vasp_static_settings['POTCAR'],
+                            static_user_incar_settings=static_incar,
+                            static_user_kpoints_settings=static_kpoints,
+                            static_user_potcar_functional=static_potcar_func,
+                            static_user_potcar_settings=static_potcar,
                             
-                            
-                            do_dft_gd = self.vasp_relax_settings['GD'],
-                            gd_kwargs = {'tol':self.vasp_relax_settings['GDTOL']})
+                            do_dft_gd=self.do_vasp_gd,
+                            gd_kwargs=gd_kwargs)
             
             return {'IO_results':io_results_b64, 'flow': Flow(flow).to_json()}
         else:
@@ -194,15 +208,21 @@ class IOMaker(Maker):
         if self.do_vasp:
             IO_job = self.IO_HT_job(film_conv, substrate_conv)
             
+            # Call resources function to get QResources object (not function)
+            mlip_res = self.mlip_resources() if callable(self.mlip_resources) else self.mlip_resources
+            
             IO_job = set_run_config(IO_job, worker = self.mlip_worker,
-                              resources = self.mlip_resources,
+                              resources = mlip_res,
                               priority=10,
                               dynamic = False)
             
             vasp_job = self.vasp_job(IO_job.output['flow'])
             
+            # Call resources function to get QResources object (not function)
+            vasp_res = self.vasp_resources() if callable(self.vasp_resources) else self.vasp_resources
+            
             vasp_job = set_run_config(vasp_job, worker = self.vasp_worker,
-                              resources = self.vasp_resources,
+                              resources = vasp_res,
                               priority=0,
                               exec_config={'pre_run':'module load VASP/6.4.3-optcell'},
                               dynamic = True)
@@ -211,6 +231,13 @@ class IOMaker(Maker):
         else:
             # NOTE: use the passed-in conventional structures
             IO_job = self.IO_HT_job(film_conv, substrate_conv)
+            # Apply MLIP resources if provided
+            if self.mlip_resources is not None:
+                mlip_res = self.mlip_resources() if callable(self.mlip_resources) else self.mlip_resources
+                IO_job = set_run_config(IO_job, worker = self.mlip_worker,
+                                  resources = mlip_res,
+                                  priority=10,
+                                  dynamic = False)
             return Flow([IO_job])
         
 @job
