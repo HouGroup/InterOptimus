@@ -19,6 +19,12 @@ InterOptimus helps generate and optimize film/substrate interfaces (single or do
 - Key deps: `pymatgen`, `interfacemaster`, `atomate2`, `mp-api`
 - MLIP deps: `orb-models`, `sevenn`, `torch`
 
+## Supported MLIPs
+
+- ORB models: https://github.com/orbital-materials/orb-models
+- SevenNet: https://github.com/MDIL-SNU/SevenNet
+- Deep Potential (DPA): https://github.com/deepmodeling/deepmd-kit
+
 ## Installation
 
 ```bash
