@@ -16,6 +16,7 @@ from atomate2.vasp.jobs.core import RelaxMaker
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
 from pymatgen.core.interface import Interface
 from typing import Callable, Dict, Any, Optional, List
+import re
 import numpy as np
 import pickle
 from jobflow_remote import set_run_config
@@ -144,6 +145,8 @@ class IOMaker(Maker):
     do_vasp_gd: bool = False
     vasp_relax_settings: Dict[str, Any] = None
     vasp_static_settings: Dict[str, Any] = None
+    lowest_energy_pairs_settings: Dict[str, Any] = None
+    pairs_output_dir: Optional[str] = None
     mlip_resources: Callable = None
     vasp_resources: Callable = None
     mlip_worker: str = 'std_worker'
@@ -158,6 +161,259 @@ class IOMaker(Maker):
         iw.parse_interface_structure_params(**self.structure_settings)
         iw.parse_optimization_params(**self.optimization_settings)
         iw.global_minimization(**self.global_minimization_settings)
+
+        # Visualize minimization results with formatted reduced formulas
+        def _formula_to_subscript(formula: str) -> str:
+            return re.sub(r"(\d+)", r"$_\1$", formula or "")
+
+        film_formula = getattr(film_conv.composition, "reduced_formula", "film")
+        substrate_formula = getattr(substrate_conv.composition, "reduced_formula", "substrate")
+        iw.visualize_minimization_results(
+            film_name=_formula_to_subscript(film_formula),
+            substrate_name=_formula_to_subscript(substrate_formula),
+        )
+
+        # Save best_it structures for selected pairs
+        pairs_kwargs = self.lowest_energy_pairs_settings or {}
+        pairs = iw.get_lowest_energy_pairs_each_match(**pairs_kwargs)
+        pairs_summary = []
+
+        def _ensure_structure(obj):
+            if isinstance(obj, Structure):
+                return obj
+            if isinstance(obj, dict):
+                return Structure.from_dict(obj)
+            if isinstance(obj, str):
+                try:
+                    return Structure.from_dict(json.loads(obj))
+                except Exception:
+                    return None
+            return None
+
+        preferred_pairs_dir = self.pairs_output_dir
+        fallback_pairs_dir = os.path.join(os.getcwd(), "pairs_best_it")
+        pairs_dir = preferred_pairs_dir or fallback_pairs_dir
+        try:
+            os.makedirs(pairs_dir, exist_ok=True)
+        except PermissionError:
+            pairs_dir = fallback_pairs_dir
+            os.makedirs(pairs_dir, exist_ok=True)
+
+        for (i, j) in pairs:
+            pair_dir = os.path.join(pairs_dir, f"match_{i}_term_{j}")
+            os.makedirs(pair_dir, exist_ok=True)
+
+            best_it_obj = iw.opt_results.get((i, j), {}).get("relaxed_best_interface", {}).get("structure")
+            best_it = _ensure_structure(best_it_obj)
+            if best_it is not None:
+                best_it.to(fmt="poscar", filename=os.path.join(pair_dir, "best_it_POSCAR"))
+
+            # Single-interface extras: slabs + strained film
+            if not iw.double_interface:
+                slabs = iw.opt_results.get((i, j), {}).get("slabs", {})
+                film_slab = _ensure_structure(slabs.get("film", {}).get("structure"))
+                substrate_slab = _ensure_structure(slabs.get("substrate", {}).get("structure"))
+                if film_slab is not None:
+                    film_slab.to(fmt="poscar", filename=os.path.join(pair_dir, "film_slab_POSCAR"))
+                if substrate_slab is not None:
+                    substrate_slab.to(fmt="poscar", filename=os.path.join(pair_dir, "substrate_slab_POSCAR"))
+
+                if iw.strain_E_correction:
+                    sfilm_obj = iw.opt_results.get((i, j), {}).get("strain_film")
+                    sfilm = _ensure_structure(sfilm_obj)
+                    if sfilm is not None:
+                        sfilm.to(fmt="poscar", filename=os.path.join(pair_dir, "sfilm_POSCAR"))
+
+            # Collect summary info for report
+            try:
+                idx_data = iw.unique_matches_indices_data[i]
+                film_hkl = idx_data.get("film_conventional_miller")
+                sub_hkl = idx_data.get("substrate_conventional_miller")
+            except Exception:
+                film_hkl = None
+                sub_hkl = None
+            if iw.double_interface:
+                energy = iw.opt_results.get((i, j), {}).get("relaxed_min_it_E")
+                energy_label = "interface_energy"
+            else:
+                energy = iw.opt_results.get((i, j), {}).get("relaxed_min_bd_E")
+                energy_label = "cohesive_energy"
+            film_atoms = iw.opt_results.get((i, j), {}).get("film_atom_count")
+            substrate_atoms = iw.opt_results.get((i, j), {}).get("substrate_atom_count")
+            try:
+                # Prefer counts from the original interface object if available
+                if hasattr(best_it_obj, "film_indices") and hasattr(best_it_obj, "substrate_indices"):
+                    film_atoms = len(best_it_obj.film_indices)
+                    substrate_atoms = len(best_it_obj.substrate_indices)
+                elif hasattr(best_it_obj, "film") and hasattr(best_it_obj, "substrate"):
+                    film_atoms = len(best_it_obj.film)
+                    substrate_atoms = len(best_it_obj.substrate)
+                elif isinstance(best_it_obj, dict):
+                    if "film_indices" in best_it_obj:
+                        film_atoms = len(best_it_obj.get("film_indices") or [])
+                    if "substrate_indices" in best_it_obj:
+                        substrate_atoms = len(best_it_obj.get("substrate_indices") or [])
+            except Exception:
+                pass
+            # Fallback: use cached indices in opt_results (set in post_bayesian_process)
+            if film_atoms is None:
+                fi = iw.opt_results.get((i, j), {}).get("film_indices")
+                if fi is not None:
+                    film_atoms = len(fi)
+            if substrate_atoms is None:
+                si = iw.opt_results.get((i, j), {}).get("substrate_indices")
+                if si is not None:
+                    substrate_atoms = len(si)
+            # Fallback: use sampled interface indices
+            if film_atoms is None or substrate_atoms is None:
+                try:
+                    sample_it = iw.opt_results.get((i, j), {}).get("sampled_interfaces", [None])[0]
+                    if film_atoms is None and hasattr(sample_it, "film_indices"):
+                        film_atoms = len(sample_it.film_indices)
+                    if substrate_atoms is None and hasattr(sample_it, "substrate_indices"):
+                        substrate_atoms = len(sample_it.substrate_indices)
+                    if film_atoms is None and hasattr(sample_it, "film"):
+                        film_atoms = len(sample_it.film)
+                    if substrate_atoms is None and hasattr(sample_it, "substrate"):
+                        substrate_atoms = len(sample_it.substrate)
+                except Exception:
+                    pass
+            pairs_summary.append(
+                {
+                    "match_id": i,
+                    "term_id": j,
+                    "film_conventional_miller": film_hkl,
+                    "substrate_conventional_miller": sub_hkl,
+                    energy_label: energy,
+                    "film_atom_count": film_atoms,
+                    "substrate_atom_count": substrate_atoms,
+                }
+            )
+
+        # Write pairs summary for downstream report (text table)
+        summary_path = os.path.join(pairs_dir, "pairs_summary.txt")
+        try:
+            with open(summary_path, "w", encoding="utf-8") as f:
+                headers = [
+                    "match_id",
+                    "term_id",
+                    "film_conventional_miller",
+                    "substrate_conventional_miller",
+                    "energy_type",
+                    "energy_value",
+                    "film_atom_count",
+                    "substrate_atom_count",
+                ]
+                f.write("\t".join(headers) + "\n")
+                for item in pairs_summary:
+                    # energy_type is either interface_energy or cohesive_energy
+                    if "interface_energy" in item:
+                        energy_type = "interface_energy"
+                        energy_value = item.get("interface_energy")
+                    else:
+                        energy_type = "cohesive_energy"
+                        energy_value = item.get("cohesive_energy")
+                    row = [
+                        str(item.get("match_id")),
+                        str(item.get("term_id")),
+                        str(item.get("film_conventional_miller")),
+                        str(item.get("substrate_conventional_miller")),
+                        str(energy_type),
+                        str(energy_value),
+                        str(item.get("film_atom_count")),
+                        str(item.get("substrate_atom_count")),
+                    ]
+                    f.write("\t".join(row) + "\n")
+        except Exception:
+            pass
+
+        # Write report locally (server-safe, uses current working dir)
+        try:
+            report_path = os.path.join(os.getcwd(), "io_report.txt")
+            lines = []
+            lines.append("=" * 80)
+            lines.append("InterOptimus IO Report")
+            lines.append("=" * 80)
+            lines.append("")
+            lines.append("Structures")
+            lines.append("-" * 80)
+            try:
+                from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+                film_sg = SpacegroupAnalyzer(film_conv).get_space_group_symbol()
+                film_sg_num = SpacegroupAnalyzer(film_conv).get_space_group_number()
+                sub_sg = SpacegroupAnalyzer(substrate_conv).get_space_group_symbol()
+                sub_sg_num = SpacegroupAnalyzer(substrate_conv).get_space_group_number()
+                lines.append(
+                    f"Film: {film_conv.composition.reduced_formula} | "
+                    f"{film_conv.composition.formula} | SG {film_sg} ({film_sg_num})"
+                )
+                lines.append(
+                    f"Substrate: {substrate_conv.composition.reduced_formula} | "
+                    f"{substrate_conv.composition.formula} | SG {sub_sg} ({sub_sg_num})"
+                )
+            except Exception:
+                lines.append("Film: (info unavailable)")
+                lines.append("Substrate: (info unavailable)")
+            lines.append("")
+            lines.append("Key Settings")
+            lines.append("-" * 80)
+            lm = self.lattice_matching_settings or {}
+            st = self.structure_settings or {}
+            opt = self.optimization_settings or {}
+            gm = self.global_minimization_settings or {}
+            lines.append(f"max_area: {lm.get('max_area')}")
+            lines.append(f"max_length_tol: {lm.get('max_length_tol')}")
+            lines.append(f"max_angle_tol: {lm.get('max_angle_tol')}")
+            lines.append(f"film_thickness: {st.get('film_thickness')}")
+            lines.append(f"substrate_thickness: {st.get('substrate_thickness')}")
+            lines.append(f"vacuum_over_film: {st.get('vacuum_over_film')}")
+            lines.append(f"calc: {gm.get('calc')}")
+            ckpt = opt.get("ckpt_path")
+            lines.append(f"ckpt_path: {ckpt}")
+            if ckpt:
+                lines.append(f"ckpt_model_name: {os.path.basename(str(ckpt))}")
+            lines.append(f"do_mlip_gd: {opt.get('do_mlip_gd')}")
+            lines.append(f"do_vasp: {self.do_vasp}")
+            lines.append(f"do_vasp_gd: {self.do_vasp_gd}")
+            lines.append("")
+            lines.append("IOMaker Parameters (full)")
+            lines.append("-" * 80)
+            lines.append("lattice_matching_settings:")
+            lines.append(json.dumps(self.lattice_matching_settings or {}, indent=2, ensure_ascii=False))
+            lines.append("structure_settings:")
+            lines.append(json.dumps(self.structure_settings or {}, indent=2, ensure_ascii=False))
+            lines.append("optimization_settings:")
+            lines.append(json.dumps(self.optimization_settings or {}, indent=2, ensure_ascii=False))
+            lines.append("global_minimization_settings:")
+            lines.append(json.dumps(self.global_minimization_settings or {}, indent=2, ensure_ascii=False))
+            if self.vasp_relax_settings is not None:
+                lines.append("vasp_relax_settings:")
+                lines.append(json.dumps(self.vasp_relax_settings, indent=2, ensure_ascii=False))
+            if self.vasp_static_settings is not None:
+                lines.append("vasp_static_settings:")
+                lines.append(json.dumps(self.vasp_static_settings, indent=2, ensure_ascii=False))
+            if self.lowest_energy_pairs_settings is not None:
+                lines.append("lowest_energy_pairs_settings:")
+                lines.append(json.dumps(self.lowest_energy_pairs_settings, indent=2, ensure_ascii=False))
+            lines.append("")
+            lines.append("Outputs")
+            lines.append("-" * 80)
+            lines.append(f"Pairs output dir: {pairs_dir}")
+            if os.path.exists(summary_path):
+                lines.append("")
+                lines.append("Pairs Summary")
+                lines.append("-" * 80)
+                with open(summary_path, "r", encoding="utf-8") as f:
+                    lines.extend([line.rstrip("\n") for line in f])
+            lines.append("")
+            lines.append("Interface/Cohesive Energy Formulas")
+            lines.append("-" * 80)
+            lines.append("Interface: E_int = (E_film+sub - E_film - E_sub) / A")
+            lines.append("Cohesive: E_coh = (E_interface - E_film - E_sub) / A")
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+        except Exception:
+            pass
         
         results = {}
         results['unique_matches'] = iw.unique_matches

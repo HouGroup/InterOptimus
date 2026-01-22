@@ -1,31 +1,61 @@
-#
+# macOS
 .DS_Store
-*.DS_Store
 ._*
+.Spotlight-V100
+.Trashes
 
-# Python 
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.pyd
+*.pyo
+*$py.class
+*.so
 
-# 
-dist/
+# Distribution / packaging
 build/
+dist/
 *.egg-info/
 *.egg
+*.whl
+pip-wheel-metadata/
+.eggs/
+*.manifest
 
-#
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.env
+.env.*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Project-specific
 test/
 new_test/
-*.ipynb_checkpoints/
-#
 *.ckpt
 *.tmp
 
 # Xcode
 *.xcodeproj/
-
-#
-.env
-.venv

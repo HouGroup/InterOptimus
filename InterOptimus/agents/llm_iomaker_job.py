@@ -66,7 +66,7 @@ TUTORIAL_WITH_VACUUM = {
         "BO_coord_bin_size": 0.25,
         "BO_energy_bin_size": 0.05,
         "BO_rms_bin_size": 0.3,
-        "do_gd": True,
+        "do_mlip_gd": True,
     },
     "global_minimization_settings": {
         "n_calls_density": 1,
@@ -169,6 +169,132 @@ def _disable_gd_from_prompt(user_prompt: str) -> bool:
     return False
 
 
+def _extract_max_strain_tolerances(user_prompt: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Extract max length/angle strain tolerances from prompt.
+    Examples:
+      - "最大长度、角度应变不超过5%" -> (0.05, 0.05)
+      - "长度5%，角度3%" -> (0.05, 0.03)
+    """
+    raw = user_prompt or ""
+    t = raw.lower()
+
+    # Specific split: "长度5%，角度3%" (order-insensitive)
+    m_len = re.search(r"(长度|length).{0,4}(\d+(?:\.\d+)?)\s*%+", raw, flags=re.IGNORECASE)
+    m_ang = re.search(r"(角度|angle).{0,4}(\d+(?:\.\d+)?)\s*%+", raw, flags=re.IGNORECASE)
+    len_tol = float(m_len.group(2)) / 100.0 if m_len else None
+    ang_tol = float(m_ang.group(2)) / 100.0 if m_ang else None
+    if len_tol is not None or ang_tol is not None:
+        return len_tol, ang_tol
+
+    # Common Chinese phrasing with shared percent
+    m = re.search(
+        r"(最大|最长|长度|角度).{0,8}(应变).{0,8}(不超过|<=|≤|小于等于|低于|小于)\s*(\d+(?:\.\d+)?)\s*%?",
+        raw,
+    )
+    if m:
+        val = float(m.group(4)) / 100.0
+        return val, val
+
+    # Generic percent in prompt when mentioning length/angle strain
+    if ("长度" in raw or "angle" in t or "角度" in raw) and ("应变" in raw or "strain" in t):
+        m2 = re.search(r"(\d+(?:\.\d+)?)\s*%+", raw)
+        if m2:
+            val = float(m2.group(1)) / 100.0
+            return val, val
+
+    return None, None
+
+
+def _extract_thicknesses(user_prompt: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Extract film/substrate thickness from prompt (Angstrom).
+
+    Examples:
+      - "界面厚度为10" -> (10, 10)
+      - "薄膜厚度8 基底厚度12" -> (8, 12)
+      - "film thickness 6, substrate thickness 9" -> (6, 9)
+    """
+    raw = user_prompt or ""
+    t = raw.lower()
+
+    # Film/ substrate specific patterns
+    film_re = re.search(r"(薄膜|film).{0,6}(厚度|thickness).{0,6}(\d+(?:\.\d+)?)", raw, flags=re.IGNORECASE)
+    sub_re = re.search(r"(基底|衬底|substrate).{0,6}(厚度|thickness).{0,6}(\d+(?:\.\d+)?)", raw, flags=re.IGNORECASE)
+    film_thk = float(film_re.group(3)) if film_re else None
+    sub_thk = float(sub_re.group(3)) if sub_re else None
+    if film_thk is not None or sub_thk is not None:
+        return film_thk, sub_thk
+
+    # Generic "thickness=10" applies to both
+    gen = re.search(r"(界面|interface|厚度|thickness).{0,6}(为|=|is)?\s*(\d+(?:\.\d+)?)", raw, flags=re.IGNORECASE)
+    if gen:
+        val = float(gen.group(3))
+        return val, val
+
+    return None, None
+
+
+def _extract_ckpt_path_from_prompt(user_prompt: str) -> Optional[str]:
+    """
+    Extract ckpt_path from prompt.
+    Examples:
+      - "ckpt_path=/path/to/model.ckpt"
+      - "checkpoint: /path/to/model.pth"
+      - "模型路径=/path/to/model"
+    """
+    raw = user_prompt or ""
+    # Prefer quoted path if provided
+    m = re.search(r"(ckpt_path|checkpoint|ckpt|模型路径|权重路径)\s*(=|:|为|是)\s*['\"]([^'\"]+)['\"]", raw, flags=re.IGNORECASE)
+    if m:
+        return m.group(3).strip()
+    # Unquoted path
+    m2 = re.search(r"(ckpt_path|checkpoint|ckpt|模型路径|权重路径)\s*(=|:|为|是)\s*([^\s,;，]+)", raw, flags=re.IGNORECASE)
+    if m2:
+        return m2.group(3).strip()
+    return None
+
+
+def _disable_run_from_prompt(user_prompt: str) -> bool:
+    """
+    Return True if user requests to only generate io_flow.json without running.
+    Examples:
+      - "不运行，只生成io_flow"
+      - "只生成io_flow.json"
+      - "no run, only generate flow"
+    """
+    raw = user_prompt or ""
+    t = raw.lower()
+    # Simple explicit "do not run"
+    if re.search(r"(不运行|不执行)", raw):
+        return True
+    # "only generate" with explicit flow/json mention
+    if re.search(r"(只生成|仅生成).{0,12}(io_flow|flow|json)", raw):
+        return True
+    if re.search(r"\b(no run|only generate|only write).{0,12}(flow|json|io_flow)\b", t):
+        return True
+    return False
+
+
+def _extract_max_area(user_prompt: str) -> Optional[float]:
+    """
+    Extract max matching area from prompt.
+    Examples:
+      - "最大匹配面积不超过25" -> 25
+      - "max area <= 30" -> 30
+    """
+    raw = user_prompt or ""
+    t = raw.lower()
+    m = re.search(r"(最大|最大匹配|匹配)?(面积|area).{0,8}(不超过|<=|≤|小于等于|低于|小于|max)\s*(\d+(?:\.\d+)?)", raw, flags=re.IGNORECASE)
+    if m:
+        return float(m.group(4))
+    # English pattern
+    m2 = re.search(r"\b(max\s*area|max_area)\b.{0,6}(<=|≤|=|is)?\s*(\d+(?:\.\d+)?)", t)
+    if m2:
+        return float(m2.group(3))
+    return None
+
+
 def _slug(text: str, maxlen: int = 32) -> str:
     """
     Make a filesystem-safe, compact token for naming.
@@ -196,7 +322,7 @@ def _summarize_key_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         "max_area": lm.get("max_area"),
         "max_length_tol": lm.get("max_length_tol"),
         "max_angle_tol": lm.get("max_angle_tol"),
-        "do_gd": opt.get("do_gd"),
+        "do_mlip_gd": opt.get("do_mlip_gd"),
         "ckpt_path": opt.get("ckpt_path"),
     }
 
@@ -225,13 +351,234 @@ def _auto_iomaker_name(
     return f"IO_{_slug(film_label)}-{_slug(substrate_label)}_m-{mode_tag}_v{1 if do_vasp else 0}_mlip-{calc_tag}_{ts}_{h8}"
 
 
+def _formula_to_subscript(formula: str) -> str:
+    """
+    Convert a reduced formula like 'Li2S' to 'Li$_2$S' for plotting.
+    """
+    return re.sub(r"(\d+)", r"$_\1$", formula or "")
+
+
+def _local_run_workdir(name: str) -> str:
+    """
+    Local run directory name, based on IOMaker name.
+    """
+    return _slug(name, maxlen=128)
+
+
+def _run_flow_locally(flow, workdir: str) -> None:
+    """
+    Run jobflow locally inside a specific working directory.
+    """
+    os.makedirs(workdir, exist_ok=True)
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(workdir)
+        try:
+            from jobflow import run_locally  # type: ignore
+            run_locally(flow, create_folders=True, ensure_success=True)
+        except Exception:
+            from jobflow.managers.local import run_locally  # type: ignore
+            run_locally(flow, create_folders=True, ensure_success=True)
+    finally:
+        os.chdir(old_cwd)
+
+
+def _write_run_report(report_path: str, settings: Dict[str, Any], structures_meta: Dict[str, Any], result: Dict[str, Any]) -> None:
+    """
+    Write a concise run report to a text file.
+    """
+    lines = []
+    lines.append("InterOptimus LLM IOMaker Run Report")
+    lines.append("=" * 80)
+    lines.append(f"Flow JSON: {result.get('flow_json_path')}")
+    lines.append(f"IOMaker name: {settings.get('name')}")
+    lines.append(f"Mode: {settings.get('mode')}")
+    lines.append(f"Do VASP: {settings.get('do_vasp')}")
+    if settings.get("do_vasp"):
+        lines.append(f"Do VASP GD: {settings.get('do_vasp_gd')}")
+    lines.append("")
+    lines.append("Structures")
+    lines.append("-" * 80)
+    lines.append(f"Source: {structures_meta.get('source')}")
+    struct_info = result.get("structures_info", {})
+    if struct_info:
+        film_info = struct_info.get("film", {})
+        sub_info = struct_info.get("substrate", {})
+        if film_info:
+            lines.append(f"Film: {film_info.get('reduced_formula')} | {film_info.get('pretty_formula')} | SG {film_info.get('spacegroup_symbol')} ({film_info.get('spacegroup_number')})")
+        if sub_info:
+            lines.append(f"Substrate: {sub_info.get('reduced_formula')} | {sub_info.get('pretty_formula')} | SG {sub_info.get('spacegroup_symbol')} ({sub_info.get('spacegroup_number')})")
+    if structures_meta.get("film_cif"):
+        lines.append(f"Film CIF: {structures_meta.get('film_cif')}")
+    if structures_meta.get("substrate_cif"):
+        lines.append(f"Substrate CIF: {structures_meta.get('substrate_cif')}")
+    if structures_meta.get("mp_film"):
+        lines.append(f"MP film: {structures_meta.get('mp_film', {}).get('material_id')}")
+    if structures_meta.get("mp_substrate"):
+        lines.append(f"MP substrate: {structures_meta.get('mp_substrate', {}).get('material_id')}")
+    lines.append("")
+    lines.append("Key Settings")
+    lines.append("-" * 80)
+    lm = settings.get("lattice_matching_settings", {})
+    st = settings.get("structure_settings", {})
+    opt = settings.get("optimization_settings", {})
+    gm = settings.get("global_minimization_settings", {})
+    lines.append(f"max_area: {lm.get('max_area')}")
+    lines.append(f"max_length_tol: {lm.get('max_length_tol')}")
+    lines.append(f"max_angle_tol: {lm.get('max_angle_tol')}")
+    lines.append(f"film_thickness: {st.get('film_thickness')}")
+    lines.append(f"substrate_thickness: {st.get('substrate_thickness')}")
+    lines.append(f"vacuum_over_film: {st.get('vacuum_over_film')}")
+    lines.append(f"calc: {gm.get('calc')}")
+    ckpt = opt.get("ckpt_path")
+    lines.append(f"ckpt_path: {ckpt}")
+    if ckpt:
+        lines.append(f"ckpt_model_name: {os.path.basename(str(ckpt))}")
+    lines.append(f"do_mlip_gd: {opt.get('do_mlip_gd')}")
+    lines.append("")
+    lines.append("IOMaker Parameters (full)")
+    lines.append("-" * 80)
+    lines.append("lattice_matching_settings:")
+    lines.append(json.dumps(settings.get("lattice_matching_settings", {}), indent=2, ensure_ascii=False))
+    lines.append("structure_settings:")
+    lines.append(json.dumps(settings.get("structure_settings", {}), indent=2, ensure_ascii=False))
+    lines.append("optimization_settings:")
+    lines.append(json.dumps(settings.get("optimization_settings", {}), indent=2, ensure_ascii=False))
+    lines.append("global_minimization_settings:")
+    lines.append(json.dumps(settings.get("global_minimization_settings", {}), indent=2, ensure_ascii=False))
+    lines.append(f"do_vasp: {settings.get('do_vasp')}")
+    lines.append(f"do_vasp_gd: {settings.get('do_vasp_gd')}")
+    if settings.get("vasp_relax_settings") is not None:
+        lines.append("vasp_relax_settings:")
+        lines.append(json.dumps(settings.get("vasp_relax_settings"), indent=2, ensure_ascii=False))
+    if settings.get("vasp_static_settings") is not None:
+        lines.append("vasp_static_settings:")
+        lines.append(json.dumps(settings.get("vasp_static_settings"), indent=2, ensure_ascii=False))
+    if settings.get("lowest_energy_pairs_settings") is not None:
+        lines.append("lowest_energy_pairs_settings:")
+        lines.append(json.dumps(settings.get("lowest_energy_pairs_settings"), indent=2, ensure_ascii=False))
+    lines.append("")
+    lines.append("Outputs")
+    lines.append("-" * 80)
+    lines.append(f"Local run dir: {result.get('local_workdir')}")
+    lines.append(f"Pairs output dir: {result.get('pairs_dir')}")
+    # Pair summary if present (text table)
+    pairs_summary_path = None
+    if result.get("pairs_dir"):
+        pairs_summary_path = os.path.join(result.get("pairs_dir"), "pairs_summary.txt")
+    # Fallback: search under local_workdir if not found
+    if (not pairs_summary_path or not os.path.exists(pairs_summary_path)) and result.get("local_workdir"):
+        for root, _, files in os.walk(result.get("local_workdir")):
+            if "pairs_summary.txt" in files:
+                pairs_summary_path = os.path.join(root, "pairs_summary.txt")
+                break
+    if pairs_summary_path and os.path.exists(pairs_summary_path):
+        lines.append("")
+        lines.append("Pairs Summary")
+        lines.append("-" * 80)
+        lines.append(f"(source: {pairs_summary_path})")
+        try:
+            with open(pairs_summary_path, "r", encoding="utf-8") as f:
+                lines.append(f.read())
+        except Exception:
+            lines.append("Failed to read pairs_summary.txt")
+
+    lines.append("")
+    lines.append("Interface Energy / Cohesive Energy Formulas")
+    lines.append("-" * 80)
+    lines.append("Single interface (cohesive energy):")
+    lines.append("  E_bd = (E_it - E_film_slab - E_substrate_slab) / A * 16.02176634")
+    lines.append("Double interface (interface energy):")
+    lines.append("  E_it = (E_sup - (N_f/N_f0)*E_film - (N_s/N_s0)*E_substrate) / A * 16.02176634 / 2")
+    lines.append("  (If strain correction enabled, add strain term as used in InterfaceWorker)")
+    if result.get("remote_submission"):
+        lines.append("")
+        lines.append("Remote Submission")
+        lines.append("-" * 80)
+        rs = result["remote_submission"]
+        lines.append(f"success: {rs.get('success')}")
+        lines.append(f"job_id: {rs.get('job_id')}")
+        if rs.get("error"):
+            lines.append(f"error: {rs.get('error')}")
+    lines.append("=" * 80)
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
+def print_config_help() -> None:
+    """
+    Print a concise help table for BuildConfig parameters.
+    """
+    print("\n" + "=" * 80)
+    print("BuildConfig 使用说明（先实例化了解参数，再传 prompt）")
+    print("")
+    print("【提交模式】")
+    print("- 本地提交：使用 LocalBuildConfig")
+    print("- 远程提交：使用 RemoteBuildConfig")
+    print("")
+    print("【本地模式必填】")
+    print("- api_key, base_url")
+    print("")
+    print("【远程模式必填】")
+    print("- api_key, base_url")
+    print("- mlip_resources, vasp_resources")
+    print("- mlip_worker, vasp_worker")
+    print("- remote_host, remote_identity_file, remote_workdir, remote_passphrase")
+    print("- remote_conda_env（只需填 conda 环境名，如 atomate2）")
+    print("")
+    print("【常用可选参数】")
+    print("- mp_api_key: Materials Project API Key")
+    print("- film_cif / substrate_cif: 本地 CIF 路径")
+    print("- output_flow_json: 输出 JSON 文件名")
+    print("- vasp_relax_settings / vasp_static_settings: VASP 设置")
+    print("- do_mlip_gd: 是否做 MLIP 梯度下降")
+    print("- do_vasp_gd: 是否做 VASP GD")
+    print("- lowest_energy_pairs_settings: 筛选最佳 pairs 的参数（如 only_lowest_energy_each_plane）")
+    print("- ckpt_path: MLIP checkpoint 路径")
+    print("")
+    print("【Prompt 关键词控制（更详细）】")
+    print("- 真空层：")
+    print("  - '无真空/不加真空/不要真空/without vacuum/no vacuum' → without_vacuum")
+    print("  - '双界面/double interface/double_interface' → without_vacuum（强制）")
+    print("- VASP：")
+    print("  - 包含“VASP/DFT/电子结构/静态/弛豫”等关键词 → do_vasp=True")
+    print("  - 本地模式下会强制 do_vasp=False（不跑 VASP）")
+    print("- 梯度下降：")
+    print("  - '不要/不做/不进行 梯度下降' 或 'no GD/disable GD' → do_mlip_gd=False 且 do_vasp_gd=False")
+    print("  - 单界面默认：do_mlip_gd 开启，do_vasp_gd 关闭（不建议开启 VASP GD）")
+    print("- 长度/角度应变：")
+    print("  - '最大长度、角度应变不超过5%' → max_length_tol=max_angle_tol=0.05")
+    print("  - '长度5%，角度3%' → max_length_tol=0.05, max_angle_tol=0.03")
+    print("- MP ID：")
+    print("  - prompt 中包含 mp-xxxx → 使用 MP ID 下载结构")
+    print("- MLIP 模型：")
+    print("  - prompt 中包含 'ckpt_path=/path/to/xxx.ckpt' → 使用指定 checkpoint")
+    print("- 只生成不运行：")
+    print("  - '不运行/只生成 io_flow' 或 'only generate flow' → 仅生成 io_flow.json")
+    print("- 真空/双界面优先级：双界面 > 无真空 > 默认有真空")
+    print("")
+    print("【双界面 vs 单界面 有效参数提示】")
+    print("- 双界面（without_vacuum / double_interface）：")
+    print("  - 结构参数更关键：double_interface=True, vacuum_over_film=0")
+    print("  - 终止面筛选/厚度：termination_ftol, film_thickness, substrate_thickness")
+    print("- 单界面（with_vacuum）：")
+    print("  - 真空层参数有效：vacuum_over_film > 0")
+    print("  - 终止面筛选/厚度：termination_ftol, film_thickness, substrate_thickness")
+    print("  - 仅单界面更常用（含解释）：")
+    print("    - do_mlip_gd：是否进行 MLIP 侧梯度下降（GD）")
+    print("    - set_relax_thicknesses：设置薄膜/基底的放开厚度比例 (film, substrate)")
+    print("    - relax_in_layers：按层放松（True 表示以层为单位选择可动原子）")
+    print("    - relax_in_ratio：按比例放松（True 表示按厚度比例选可动原子）")
+    print("=" * 80 + "\n")
+
+
 @dataclass
-class BuildConfig:
-    """Configuration for building an IOMaker Flow from text."""
+class BaseBuildConfig:
+    """Base configuration for building an IOMaker Flow from text."""
 
     # LLM
-    api_key: str
-    base_url: str
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
     model: str = "gpt-3.5-turbo"
 
     # Materials Project (optional, only needed if CIF files missing)
@@ -253,14 +600,18 @@ class BuildConfig:
     # We now only support local CIFs or explicit MP IDs.
     strict_mp_constraints: bool = False
 
-    # Remote submission (optional)
-    # If provided, the generated job will be automatically submitted to the remote server
+    # Execution target: "local" (default) or "remote"
+    submit_target: Literal["local", "remote"] = "local"
+    # Backward compatibility: if True, treat as submit_target="remote"
     submit_to_remote: bool = False
     remote_host: Optional[str] = None  # e.g., "xys@10.103.65.21"
     remote_identity_file: Optional[str] = None  # e.g., "~/.ssh/id_ed25519"
     remote_workdir: Optional[str] = None  # e.g., "~/io_runs/si_sic_run1"
     remote_python: str = "python"  # Python command on remote server
-    remote_pre_cmd: Optional[str] = None  # e.g., "source ~/.bashrc && conda activate atomate2"
+    # Only conda env name is needed, e.g., "atomate2"
+    remote_conda_env: Optional[str] = None
+    # Deprecated: keep for backward compatibility
+    remote_pre_cmd: Optional[str] = None
     remote_passphrase: Optional[str] = None  # SSH key passphrase
     remote_use_paramiko: bool = False  # Use paramiko instead of pexpect
     remote_debug: bool = False  # Enable debug output for remote submission
@@ -275,13 +626,39 @@ class BuildConfig:
     # VASP settings (optional, defaults to MPRelaxSet/MPStaticSet if None)
     vasp_relax_settings: Optional[Dict[str, Any]] = None  # VASP relaxation settings dict
     vasp_static_settings: Optional[Dict[str, Any]] = None  # VASP static settings dict
+    # Whether to run MLIP gradient descent
+    do_mlip_gd: Optional[bool] = None
     # Whether to run gradient descent for VASP jobs (IO -> VASP GD)
     do_vasp_gd: bool = False
+    # Settings for get_lowest_energy_pairs_each_match
+    lowest_energy_pairs_settings: Optional[Dict[str, Any]] = None
 
     # MLIP checkpoint path (optional).
     # If provided, this will be written into optimization_settings["ckpt_path"].
     # If None, the workflow will rely on env fallbacks inside InterfaceWorker.set_energy_calculator.
     ckpt_path: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # No side effects on init. Use print_config_help() for guidance.
+        return None
+
+
+@dataclass
+class LocalBuildConfig(BaseBuildConfig):
+    """Local execution configuration."""
+
+    submit_target: Literal["local", "remote"] = "local"
+
+
+@dataclass
+class RemoteBuildConfig(BaseBuildConfig):
+    """Remote execution configuration."""
+
+    submit_target: Literal["local", "remote"] = "remote"
+
+
+# Backward compatible alias
+BuildConfig = BaseBuildConfig
 
 
 def _openai_client(api_key: str, base_url: str):
@@ -621,7 +998,7 @@ def _print_final_settings(
     settings: Dict[str, Any], 
     structures_meta: Dict[str, Any], 
     flow_json_path: str,
-    cfg: Optional[BuildConfig] = None
+    cfg: Optional[BaseBuildConfig] = None
 ) -> None:
     """
     Print all settings for user visibility after building a job.
@@ -665,12 +1042,14 @@ def _print_final_settings(
                 print("   - vasp_static_settings:")
                 print(json.dumps(vsta, indent=2, ensure_ascii=False))
         
-        if cfg.submit_to_remote:
+        if cfg.submit_target == "remote":
             print("\n🌐 Remote submission configuration:")
             print(f"   Host: {cfg.remote_host}")
             print(f"   Remote workdir: {cfg.remote_workdir}")
             print(f"   Python: {cfg.remote_python}")
-            if cfg.remote_pre_cmd:
+            if cfg.remote_conda_env:
+                print(f"   Conda env: {cfg.remote_conda_env}")
+            elif cfg.remote_pre_cmd:
                 print(f"   Pre-command: {cfg.remote_pre_cmd}")
     
     print("\n🔧 Parameter settings (LLM output normalized):")
@@ -678,7 +1057,7 @@ def _print_final_settings(
     print("=" * 80 + "\n")
 
 
-def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[str, Any]:
+def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BaseBuildConfig) -> Dict[str, Any]:
     """
     Main entry: build an IOMaker Flow JSON from natural language.
 
@@ -689,6 +1068,9 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
         - settings (llm output)
         - structures_meta
     """
+    if not cfg.api_key or not cfg.base_url:
+        raise ValueError("api_key and base_url are required to run the LLM. Initialize BuildConfig with them.")
+
     llm_out = llm_generate_iomaker_settings(
         user_prompt=user_prompt,
         api_key=cfg.api_key,
@@ -720,15 +1102,44 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
         "do_vasp": bool(llm_out.get("do_vasp", False)),
     }
 
-    # Allow user to override MLIP checkpoint path via BuildConfig
+    # Allow user to override MLIP checkpoint path via BuildConfig or prompt
     # (goes into InterfaceWorker.opt_kwargs via parse_optimization_params)
     if cfg.ckpt_path is not None:
         settings["optimization_settings"]["ckpt_path"] = cfg.ckpt_path
+    else:
+        prompt_ckpt = _extract_ckpt_path_from_prompt(user_prompt)
+        if prompt_ckpt:
+            settings["optimization_settings"]["ckpt_path"] = prompt_ckpt
 
     # If user explicitly asks to NOT do gradient descent, force-disable it.
     # This controls MLIP-side gradient descent in InterfaceWorker.parse_optimization_params().
     if _disable_gd_from_prompt(user_prompt):
-        settings["optimization_settings"]["do_gd"] = False
+        settings["optimization_settings"]["do_mlip_gd"] = False
+    elif cfg.do_mlip_gd is not None:
+        settings["optimization_settings"]["do_mlip_gd"] = cfg.do_mlip_gd
+
+    # If user requests "only generate io_flow", skip any execution
+    if _disable_run_from_prompt(user_prompt):
+        settings["only_generate_flow"] = True
+
+    # If user specifies max length/angle strain tolerance, override both.
+    len_tol, ang_tol = _extract_max_strain_tolerances(user_prompt)
+    if len_tol is not None:
+        settings["lattice_matching_settings"]["max_length_tol"] = len_tol
+    if ang_tol is not None:
+        settings["lattice_matching_settings"]["max_angle_tol"] = ang_tol
+
+    # Max matching area from prompt
+    max_area = _extract_max_area(user_prompt)
+    if max_area is not None:
+        settings["lattice_matching_settings"]["max_area"] = max_area
+
+    # If user specifies interface thickness, set film/substrate thickness (can be split)
+    film_thk, sub_thk = _extract_thicknesses(user_prompt)
+    if film_thk is not None:
+        settings["structure_settings"]["film_thickness"] = film_thk
+    if sub_thk is not None:
+        settings["structure_settings"]["substrate_thickness"] = sub_thk
 
     inputs = settings.get("inputs", {}) or {}
     in_type = inputs.get("type", "local_cif")
@@ -747,8 +1158,40 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
         substrate_mp_id=substrate_mp_id if in_type == "mp_id" else None,
     )
 
+    # Structure info for report (formula + spacegroup)
+    try:
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+        film_sg = SpacegroupAnalyzer(film_conv).get_space_group_symbol()
+        film_sg_num = SpacegroupAnalyzer(film_conv).get_space_group_number()
+        sub_sg = SpacegroupAnalyzer(substrate_conv).get_space_group_symbol()
+        sub_sg_num = SpacegroupAnalyzer(substrate_conv).get_space_group_number()
+        structures_info = {
+            "film": {
+                "reduced_formula": film_conv.composition.reduced_formula,
+                "pretty_formula": film_conv.composition.formula,
+                "spacegroup_symbol": film_sg,
+                "spacegroup_number": film_sg_num,
+            },
+            "substrate": {
+                "reduced_formula": substrate_conv.composition.reduced_formula,
+                "pretty_formula": substrate_conv.composition.formula,
+                "spacegroup_symbol": sub_sg,
+                "spacegroup_number": sub_sg_num,
+            },
+        }
+    except Exception:
+        structures_info = {}
+
+    # Normalize submit target (backward compatibility)
+    if cfg.submit_to_remote:
+        cfg.submit_target = "remote"
+
     # Validate VASP requirements if do_vasp is True
     do_vasp = bool(settings.get("do_vasp", False))
+    # Local mode: force-disable VASP
+    if cfg.submit_target == "local" and do_vasp:
+        do_vasp = False
+        settings["do_vasp"] = False
     if do_vasp:
         if cfg.vasp_resources is None:
             raise ValueError(
@@ -759,6 +1202,32 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
             raise ValueError(
                 "vasp_worker is required when do_vasp=True. "
                 "Please provide the worker name for VASP jobs."
+            )
+
+    # If submitting to remote, enforce required parameters regardless of do_vasp
+    if cfg.submit_target == "remote":
+        missing = []
+        if cfg.vasp_resources is None:
+            missing.append("vasp_resources")
+        if cfg.mlip_resources is None:
+            missing.append("mlip_resources")
+        if not cfg.vasp_worker:
+            missing.append("vasp_worker")
+        if not cfg.mlip_worker:
+            missing.append("mlip_worker")
+        if not cfg.remote_host:
+            missing.append("remote_host")
+        if not cfg.remote_identity_file:
+            missing.append("remote_identity_file")
+        if not cfg.remote_workdir:
+            missing.append("remote_workdir")
+        if not cfg.remote_passphrase:
+            missing.append("remote_passphrase")
+        if not cfg.remote_conda_env:
+            missing.append("remote_conda_env")
+        if missing:
+            raise ValueError(
+                "submit_target='remote' requires: " + ", ".join(missing)
             )
 
     # VASP settings priority: BuildConfig > LLM output > None (default MPRelaxSet/MPStaticSet)
@@ -781,20 +1250,21 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
         settings["vasp_static_settings"] = vasp_static_settings
         settings["do_vasp_gd"] = do_vasp_gd
 
-    # Auto-generate IOMaker name if user didn't specify one
+    # Auto-generate IOMaker name if user didn't specify one.
+    # Use reduced_formula for film/substrate labels.
     if not settings.get("name") or settings.get("name") == "IO_llm":
-        if in_type == "mp_id" and film_mp_id and substrate_mp_id:
-            film_label = film_mp_id
-            substrate_label = substrate_mp_id
-        else:
-            film_label = os.path.splitext(os.path.basename(cfg.film_cif))[0]
-            substrate_label = os.path.splitext(os.path.basename(cfg.substrate_cif))[0]
+        film_label = getattr(film_conv.composition, "reduced_formula", None) or "film"
+        substrate_label = getattr(substrate_conv.composition, "reduced_formula", None) or "substrate"
         settings["name"] = _auto_iomaker_name(
             settings=settings,
             film_label=film_label,
             substrate_label=substrate_label,
         )
     
+    # Local run directory (if submit_target is local)
+    local_workdir = _local_run_workdir(settings.get("name", "IO_llm")) if cfg.submit_target == "local" else None
+    local_workdir_abs = os.path.abspath(local_workdir) if local_workdir else None
+
     maker = IOMaker(
         name=settings.get("name", "IO_llm"),
         lattice_matching_settings=settings["lattice_matching_settings"],
@@ -805,6 +1275,8 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
         do_vasp_gd=do_vasp_gd,
         vasp_relax_settings=vasp_relax_settings,
         vasp_static_settings=vasp_static_settings,
+        lowest_energy_pairs_settings=cfg.lowest_energy_pairs_settings,
+        pairs_output_dir=(os.path.join(local_workdir_abs, "pairs_best_it") if (local_workdir_abs and cfg.submit_target == "local") else None),
         mlip_resources=cfg.mlip_resources,
         vasp_resources=cfg.vasp_resources,
         mlip_worker=cfg.mlip_worker,
@@ -815,7 +1287,11 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
 
     # Write Flow to JSON file
     # Try to use jobflow's to_json() method first, which handles serialization properly
-    out_path = os.path.abspath(cfg.output_flow_json)
+    if local_workdir:
+        os.makedirs(local_workdir, exist_ok=True)
+        out_path = os.path.abspath(os.path.join(local_workdir, cfg.output_flow_json))
+    else:
+        out_path = os.path.abspath(cfg.output_flow_json)
     flow_dict = None
     flow_json_str = None
     
@@ -857,19 +1333,25 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
         "flow_dict": flow_dict,
         "settings": settings,
         "structures_meta": meta,
+        "structures_info": structures_info,
     }
 
-    # Submit to remote server if configured
-    if cfg.submit_to_remote:
-        if not cfg.remote_host:
-            raise ValueError("submit_to_remote=True requires remote_host to be set")
-        if not cfg.remote_identity_file:
-            raise ValueError("submit_to_remote=True requires remote_identity_file to be set")
-        if not cfg.remote_workdir:
-            raise ValueError("submit_to_remote=True requires remote_workdir to be set")
+    # Run locally if configured
+    if cfg.submit_target == "local" and not settings.get("only_generate_flow"):
+        run_dir = local_workdir or _local_run_workdir(settings.get("name", "IO_llm"))
+        _run_flow_locally(flow, run_dir)
+        result["local_workdir"] = os.path.abspath(run_dir)
+        result["pairs_dir"] = os.path.abspath(os.path.join(run_dir, "pairs_best_it"))
 
+    # Submit to remote server if configured
+    if cfg.submit_target == "remote" and not settings.get("only_generate_flow"):
         try:
             from .remote_submit import submit_io_flow_via_ssh
+
+            if cfg.remote_conda_env:
+                pre_cmd = f"source ~/.bashrc && conda activate {cfg.remote_conda_env}"
+            else:
+                pre_cmd = cfg.remote_pre_cmd or ""
 
             submit_result = submit_io_flow_via_ssh(
                 host=cfg.remote_host,
@@ -877,7 +1359,7 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
                 local_io_flow_json=out_path,
                 remote_workdir=cfg.remote_workdir,
                 remote_python=cfg.remote_python,
-                pre_cmd=cfg.remote_pre_cmd or "",
+                pre_cmd=pre_cmd,
                 passphrase=cfg.remote_passphrase,
                 use_paramiko=cfg.remote_use_paramiko,
                 debug=cfg.remote_debug,
@@ -902,6 +1384,11 @@ def build_iomaker_flow_from_prompt(user_prompt: str, cfg: BuildConfig) -> Dict[s
         except Exception as e:
             print(f"\n⚠️  Remote submission failed with error: {e}")
             result["remote_submission_error"] = str(e)
+
+    # Write summary report
+    report_path = os.path.join(os.path.dirname(out_path), "io_report.txt")
+    _write_run_report(report_path, settings=settings, structures_meta=meta, result=result)
+    result["report_path"] = report_path
 
     return result
 

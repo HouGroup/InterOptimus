@@ -1,17 +1,27 @@
-from setuptools import setup, find_packages
+from pathlib import Path
+
+from setuptools import find_packages, setup
+
+here = Path(__file__).resolve().parent
+readme = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="InterOptimus",
     version="0.0.4",
     author="Yaoshu Xie",
     author_email="jasonxie@sz.tsinghua.edu.cn",
-    description="High througput simulation making crystalline interfaces",
-    long_description=open("README.md").read(),
+    description="High throughput simulation for crystalline interfaces",
+    long_description=readme,
     long_description_content_type="text/markdown",
     url="https://github.com/HouGroup/InterOptimus/",
-    packages=find_packages(),
+    license="MIT",
+    packages=find_packages(exclude=("tests", "test", "new_test")),
     classifiers=[
         "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3 :: Only",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
@@ -34,7 +44,9 @@ setup(
     ],
     include_package_data=True,
     package_data={
-        'InterOptimus': ['/data/orb-v3-conservative-20-omat-20250404.ckpt',
-            '/data/checkpoint_sevennet_mf_ompa.pth']
-            },
+        "InterOptimus": [
+            "data/orb-v3-conservative-20-omat-20250404.ckpt",
+            "data/checkpoint_sevennet_mf_ompa.pth",
+        ]
+    },
 )

@@ -198,7 +198,7 @@ class InterfaceWorker:
         self.calculate_thickness()
         self.get_all_unique_terminations()
     
-    def parse_optimization_params(self, set_relax_thicknesses = (0,0), relax_in_layers = False, relax_in_ratio = False, num_relax_bayesian = 0, discut = 0.8, BO_coord_bin_size = 0.5, BO_energy_bin_size = 0.01, BO_rms_bin_size = 0.5, do_gd = False, gd_tol = 5e-4, **kwargs):
+    def parse_optimization_params(self, set_relax_thicknesses = (0,0), relax_in_layers = False, relax_in_ratio = False, num_relax_bayesian = 0, discut = 0.8, BO_coord_bin_size = 0.5, BO_energy_bin_size = 0.01, BO_rms_bin_size = 0.5, do_mlip_gd = False, gd_tol = 5e-4, do_gd = None, **kwargs):
         #number of relaxing steps during BO
         self.num_relax_bayesian = num_relax_bayesian
         #during BO, structures with minimum atomic distance lower than discut will be attached a zero energy
@@ -210,7 +210,11 @@ class InterfaceWorker:
         self.BO_coord_bin_size = BO_coord_bin_size
         self.BO_energy_bin_size = BO_energy_bin_size
         self.BO_rms_bin_size = BO_rms_bin_size
-        self.do_gd = do_gd
+        # Backward compatibility: do_gd -> do_mlip_gd
+        if do_gd is not None:
+            do_mlip_gd = do_gd
+        self.do_gd = do_mlip_gd
+        self.do_mlip_gd = do_mlip_gd
         self.gd_tol = gd_tol
         
         if self.double_interface:
@@ -358,22 +362,45 @@ class InterfaceWorker:
         else:
             user_settings = dict(user_settings)
 
-        # If checkpoint path is not provided, try to read from environment
+        # If checkpoint path is not provided, try environment or auto-download
         env_dict = {
             "orb-models": "ORB_CHECKPOINT",
             "sevenn": "SEVENN_CHECKPOINT",
             "dpa": "DPA_CHECKPOINT",
         }
+        default_filenames = {
+            "orb-models": "orb-v3-conservative-20-omat-20250404.ckpt",
+            "sevenn": "checkpoint_sevennet_mf_ompa.pth",
+            "dpa": None,
+        }
+
+        # Always ensure ckpt_path key exists and normalize empty/invalid values
+        if "ckpt_path" not in user_settings:
+            user_settings["ckpt_path"] = None
+        else:
+            try:
+                import os
+                # Treat empty string or directory as unset
+                if user_settings["ckpt_path"] in ("", None) or (isinstance(user_settings["ckpt_path"], str) and os.path.isdir(user_settings["ckpt_path"])):
+                    user_settings["ckpt_path"] = None
+            except Exception:
+                pass
+
         if user_settings.get("ckpt_path") is None and calc in env_dict:
             import os
-
+            # Prefer server environment variables
             ckpt = os.getenv(env_dict[calc])
             if not ckpt:
-                raise ValueError(
-                    f"ckpt_path is None and env {env_dict[calc]} is not set for calc={calc!r}. "
-                    f"Please set {env_dict[calc]} or pass user_settings['ckpt_path']."
-                )
-            user_settings["ckpt_path"] = ckpt
+                # Try cached default filename
+                cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "InterOptimus", "checkpoints")
+                default_name = default_filenames.get(calc)
+                if default_name:
+                    cached = os.path.join(cache_dir, default_name)
+                    if os.path.exists(cached):
+                        user_settings["ckpt_path"] = cached
+                        ckpt = cached
+            if ckpt:
+                user_settings["ckpt_path"] = ckpt
 
         self.mc = MlipCalc(calc=calc, user_settings=user_settings)
     
@@ -792,6 +819,16 @@ class InterfaceWorker:
         #save to result dict
         self.opt_results[(i,j)]['relaxed_best_interface']['structure'] = best_it
         self.opt_results[(i,j)]['relaxed_best_interface']['e'] = relaxed_best_sup_E
+        # atom counts for reporting
+        try:
+            self.opt_results[(i, j)]['film_atom_count'] = len(best_it.film)
+            self.opt_results[(i, j)]['substrate_atom_count'] = len(best_it.substrate)
+        except Exception:
+            try:
+                self.opt_results[(i, j)]['film_atom_count'] = len(best_it.film_indices)
+                self.opt_results[(i, j)]['substrate_atom_count'] = len(best_it.substrate_indices)
+            except Exception:
+                pass
         
         #energy correction by film strain energy
         if self.strain_E_correction:
@@ -899,6 +936,16 @@ class InterfaceWorker:
         #save to result dict
         self.opt_results[(i,j)]['relaxed_best_interface']['structure'] = best_it
         self.opt_results[(i,j)]['relaxed_best_interface']['e'] = relaxed_best_sup_E
+        # atom counts for reporting
+        try:
+            self.opt_results[(i, j)]['film_atom_count'] = len(best_it.film)
+            self.opt_results[(i, j)]['substrate_atom_count'] = len(best_it.substrate)
+        except Exception:
+            try:
+                self.opt_results[(i, j)]['film_atom_count'] = len(best_it.film_indices)
+                self.opt_results[(i, j)]['substrate_atom_count'] = len(best_it.substrate_indices)
+            except Exception:
+                pass
         
         self.opt_results[(i,j)]['slabs'] = {}
         

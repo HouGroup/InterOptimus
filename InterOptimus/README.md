@@ -21,8 +21,8 @@ InterOptimus now includes powerful LLM-powered agents that can understand natura
 - **`mp_interface_agent_fixed.py`** - Fixed version with error handling
 
 ### Specialized Agents
-- **`llm_interface_agent_yuanbao.py`** - Tencent YuanBao-powered agent
-- **`demo_custom_api.py`** - Custom OpenAI-compatible API demo
+- **`llm_iomaker_job.py`** - LLM IOMaker with LOCAL/REMOTE config
+- **`remote_submit.py`** - Remote submission helper
 
 ### Documentation & Examples
 - **`LLM_AGENT_README.md`** - LLM agent usage guide
