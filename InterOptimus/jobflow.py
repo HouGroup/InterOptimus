@@ -218,11 +218,11 @@ class IOMaker(Maker):
                 if substrate_slab is not None:
                     substrate_slab.to(fmt="poscar", filename=os.path.join(pair_dir, "substrate_slab_POSCAR"))
 
-                if iw.strain_E_correction:
-                    sfilm_obj = iw.opt_results.get((i, j), {}).get("strain_film")
-                    sfilm = _ensure_structure(sfilm_obj)
-                    if sfilm is not None:
-                        sfilm.to(fmt="poscar", filename=os.path.join(pair_dir, "sfilm_POSCAR"))
+            if iw.strain_E_correction:
+                sfilm_obj = iw.opt_results.get((i, j), {}).get("strain_film")
+                sfilm = _ensure_structure(sfilm_obj)
+                if sfilm is not None:
+                    sfilm.to(fmt="poscar", filename=os.path.join(pair_dir, "sfilm_POSCAR"))
 
             # Collect summary info for report
             try:
