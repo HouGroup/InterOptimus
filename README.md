@@ -1,3 +1,6 @@
+
+![Uploading 197a99cc-8f8c-4220-9e95-dc3cae8bbc80.png…]()
+
 # InterOptimus
 
 Crystal interface optimization toolkit with MLIP acceleration and LLM-assisted workflow building.
@@ -97,5 +100,6 @@ Typical run outputs include:
 - `io_report.txt` – full report with settings and results
 
 ## License
+
 
 MIT License. See `LICENSE`.
