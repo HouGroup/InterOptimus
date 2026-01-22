@@ -1,5 +1,5 @@
 
-![Uploading 197a99cc-8f8c-4220-9e95-dc3cae8bbc80.png…]()
+<img width="2752" height="1536" alt="197a99cc-8f8c-4220-9e95-dc3cae8bbc80" src="https://github.com/user-attachments/assets/0934d4f7-56d5-41bd-b71d-c1137920d19e" />
 
 # InterOptimus
 
@@ -103,3 +103,4 @@ Typical run outputs include:
 
 
 MIT License. See `LICENSE`.
+
