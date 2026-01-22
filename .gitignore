@@ -51,6 +51,9 @@ htmlcov/
 # Logs
 *.log
 
+# Slides
+*.pptx
+
 # Project-specific
 test/
 new_test/
