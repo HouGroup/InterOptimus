@@ -16,8 +16,8 @@ InterOptimus helps generate and optimize film/substrate interfaces (single or do
 ## Requirements
 
 - Python >= 3.10 (tested on 3.11)
-- Key deps: `pymatgen`, `interfacemaster`, `atomate2`, `mp-api`
-- MLIP deps: `orb-models`, `sevenn`, `torch`
+- Key deps: `pymatgen`, `interfacemaster`, `atomate2`, `jobflow`, `jobflow-remote`, `mp-api`, `qtoolkit`, `ase`
+- MLIP deps: `orb-models`, `sevenn`, `deepmd-kit`, `torch`
 
 ## Supported MLIPs
 
