@@ -549,7 +549,7 @@ class InterfaceWorker:
         print('\n')
         for i in range(len(self.unique_matches)):
             film_l, substrate_l = self.get_film_substrate_layer_thickness(i)
-            self.ftol_termination_tuples.append((film_l * 0.15, substrate_l * 0.15))
+            self.ftol_termination_tuples.append((film_l * self.termination_ftol, substrate_l * self.termination_ftol))
             self.layer_thicknesses.append((film_l, substrate_l))
             film_thickness = int(round(self.film_thickness/film_l))
             substrate_thickness = int(round(self.substrate_thickness/substrate_l))
