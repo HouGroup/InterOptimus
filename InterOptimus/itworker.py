@@ -182,7 +182,7 @@ class InterfaceWorker:
                 #break
         return screened_matches
     
-    def parse_interface_structure_params(self, termination_ftol = 0.15, film_thickness = 10, substrate_thickness = 10, double_interface = False, vacuum_over_film = 5):
+    def parse_interface_structure_params(self, termination_ftol = 0.15, film_thickness = 15, substrate_thickness = 15, double_interface = False, vacuum_over_film = 5, charge_filter_settings = None):
         """
         parse necessary structure parameters for interface generation in the next steps
 
@@ -192,11 +192,21 @@ class InterfaceWorker:
         film_thickness (float): film slab thickness
         substrate_thickness (float): substrate slab thickness
         vacuum_over_film (float): vacuum over film
+        charge_filter_settings (dict|bool|None): optional termination screening settings.
+            When enabled, removes termination pairs with obviously unreasonable
+            charge matching before MLIP energy estimation.
         """
         self.termination_ftol, self.film_thickness, self.substrate_thickness, self.double_interface, self.vacuum_over_film = \
         termination_ftol, film_thickness, substrate_thickness, double_interface, vacuum_over_film
         self.calculate_thickness()
         self.get_all_unique_terminations()
+        self.charge_filter_settings = charge_filter_settings
+        if charge_filter_settings is not None and charge_filter_settings is not False:
+            if charge_filter_settings is True:
+                charge_filter_settings = {}
+            elif not isinstance(charge_filter_settings, dict):
+                raise TypeError('charge_filter_settings must be None, bool, or dict')
+            self.filter_terminations_by_charge_balance(**charge_filter_settings)
     
     def parse_optimization_params(self, set_relax_thicknesses = (0,0), relax_in_layers = False, relax_in_ratio = False, num_relax_bayesian = 0, discut = 0.8, BO_coord_bin_size = 0.5, BO_energy_bin_size = 0.01, BO_rms_bin_size = 0.5, do_mlip_gd = False, gd_tol = 5e-4, do_gd = None, **kwargs):
         #number of relaxing steps during BO
@@ -303,6 +313,233 @@ class InterfaceWorker:
         for i in range(len(self.unique_matches)):
             all_unique_terminations.append(self.get_unique_terminations(i))
         self.all_unique_terminations = all_unique_terminations
+
+    def _apply_oxidation_states(self, oxidation_states):
+        if oxidation_states is None:
+            return
+        for attr in ['film_conv', 'substrate_conv', 'film', 'substrate']:
+            getattr(self, attr).add_oxidation_state_by_element(oxidation_states)
+
+    def _ensure_oxidation_states_available(self):
+        missing_info = []
+        for label, structure in [('film', self.film), ('substrate', self.substrate)]:
+            missing_elements = sorted({
+                site.specie.symbol
+                for site in structure
+                if getattr(site.specie, 'oxi_state', None) is None
+            })
+            if len(missing_elements) > 0:
+                missing_info.append(f"{label}: {', '.join(missing_elements)}")
+        if len(missing_info) > 0:
+            raise ValueError(
+                'Charge-based termination screening requires oxidation states on both structures. '
+                'Missing oxidation states for ' + '; '.join(missing_info) + '. '
+                "Decorate the input structures first, or pass charge_filter_settings={'oxidation_states': {...}}."
+            )
+
+    def _get_site_charge_sign(self, site, charge_threshold):
+        oxi_state = float(site.specie.oxi_state)
+        if oxi_state > charge_threshold:
+            return 1
+        if oxi_state < -charge_threshold:
+            return -1
+        return 0
+
+    def _summarize_layer_charge(self, structure, atom_ids, site_charge_threshold, layer_charge_threshold, dominant_ratio_threshold):
+        atom_ids = list(atom_ids)
+        oxi_states = [float(structure[i].specie.oxi_state) for i in atom_ids]
+        signs = [self._get_site_charge_sign(structure[i], site_charge_threshold) for i in atom_ids]
+        avg_oxi = mean(oxi_states)
+        pos_ratio = sum(sign == 1 for sign in signs) / len(signs)
+        neg_ratio = sum(sign == -1 for sign in signs) / len(signs)
+        dominant_sign = 0
+        dominant_ratio = max(pos_ratio, neg_ratio)
+        if avg_oxi > layer_charge_threshold and pos_ratio >= dominant_ratio_threshold:
+            dominant_sign = 1
+        elif avg_oxi < -layer_charge_threshold and neg_ratio >= dominant_ratio_threshold:
+            dominant_sign = -1
+        return {
+            'atom_ids': atom_ids,
+            'avg_oxi': avg_oxi,
+            'pos_ratio': pos_ratio,
+            'neg_ratio': neg_ratio,
+            'dominant_sign': dominant_sign,
+            'dominant_ratio': dominant_ratio,
+        }
+
+    def _get_contact_layer_pairs(self, interface):
+        ids_film_min, ids_film_max, ids_substrate_min, ids_substrate_max = get_it_core_indices(interface)
+        contact_pairs = [{
+            'name': 'film_bottom_vs_substrate_top',
+            'film_ids': list(ids_film_min),
+            'substrate_ids': list(ids_substrate_max),
+        }]
+        if self.double_interface:
+            contact_pairs.append({
+                'name': 'film_top_vs_substrate_bottom',
+                'film_ids': list(ids_film_max),
+                'substrate_ids': list(ids_substrate_min),
+            })
+        return contact_pairs
+
+    def evaluate_termination_charge_balance(self, match_id, term_id, initial_gap = 2.0,
+                                            site_charge_threshold = 0.3,
+                                            layer_charge_threshold = 0.3,
+                                            dominant_ratio_threshold = 0.6,
+                                            min_cross_interface_distance = 1.2,
+                                            same_sign_pair_max_distance = 2.5,
+                                            same_sign_pair_ratio_threshold = 0.6,
+                                            pair_cutoff = 3.5,
+                                            max_pairs = 6):
+        interface = self.get_specified_interface(match_id, term_id, [0, 0, initial_gap])
+        pair_reports = []
+        reasons = []
+        for contact in self._get_contact_layer_pairs(interface):
+            film_summary = self._summarize_layer_charge(
+                interface,
+                contact['film_ids'],
+                site_charge_threshold,
+                layer_charge_threshold,
+                dominant_ratio_threshold,
+            )
+            substrate_summary = self._summarize_layer_charge(
+                interface,
+                contact['substrate_ids'],
+                site_charge_threshold,
+                layer_charge_threshold,
+                dominant_ratio_threshold,
+            )
+
+            all_pairs = []
+            for film_id in contact['film_ids']:
+                for substrate_id in contact['substrate_ids']:
+                    all_pairs.append({
+                        'film_id': int(film_id),
+                        'substrate_id': int(substrate_id),
+                        'distance': interface.get_distance(int(film_id), int(substrate_id)),
+                        'film_sign': self._get_site_charge_sign(interface[int(film_id)], site_charge_threshold),
+                        'substrate_sign': self._get_site_charge_sign(interface[int(substrate_id)], site_charge_threshold),
+                    })
+            all_pairs = sorted(all_pairs, key = lambda x: x['distance'])
+            considered_pairs = [p for p in all_pairs if p['distance'] <= pair_cutoff][:max_pairs]
+            if len(considered_pairs) == 0:
+                considered_pairs = all_pairs[:max_pairs]
+            repulsive_pairs = [
+                p for p in considered_pairs
+                if p['film_sign'] != 0 and
+                p['film_sign'] == p['substrate_sign'] and
+                p['distance'] <= same_sign_pair_max_distance
+            ]
+            min_distance = all_pairs[0]['distance'] if len(all_pairs) > 0 else inf
+            repulsive_ratio = len(repulsive_pairs) / len(considered_pairs) if len(considered_pairs) > 0 else 0
+            same_layer_sign = (
+                film_summary['dominant_sign'] != 0 and
+                film_summary['dominant_sign'] == substrate_summary['dominant_sign']
+            )
+
+            if same_layer_sign:
+                layer_label = 'cation-cation' if film_summary['dominant_sign'] > 0 else 'anion-anion'
+                reasons.append(f"{contact['name']}: dominant {layer_label} termination pairing")
+            if min_cross_interface_distance is not None and min_distance < min_cross_interface_distance:
+                reasons.append(
+                    f"{contact['name']}: minimum cross-interface distance {round(min_distance, 3)} A "
+                    f"is below {min_cross_interface_distance} A"
+                )
+            if repulsive_ratio >= same_sign_pair_ratio_threshold and len(repulsive_pairs) > 0:
+                reasons.append(
+                    f"{contact['name']}: {len(repulsive_pairs)}/{len(considered_pairs)} nearest pairs are "
+                    f"same-sign within {same_sign_pair_max_distance} A"
+                )
+
+            pair_reports.append({
+                'contact': contact['name'],
+                'film_layer': film_summary,
+                'substrate_layer': substrate_summary,
+                'min_distance': min_distance,
+                'repulsive_ratio': repulsive_ratio,
+                'considered_pairs': considered_pairs,
+            })
+
+        return {
+            'match_id': match_id,
+            'term_id': term_id,
+            'is_bad': len(reasons) > 0,
+            'reasons': reasons,
+            'contacts': pair_reports,
+        }
+
+    def filter_terminations_by_charge_balance(self, oxidation_states = None,
+                                              initial_gap = 2.0,
+                                              site_charge_threshold = 0.3,
+                                              layer_charge_threshold = 0.3,
+                                              dominant_ratio_threshold = 0.6,
+                                              min_cross_interface_distance = 1.2,
+                                              same_sign_pair_max_distance = 2.5,
+                                              same_sign_pair_ratio_threshold = 0.6,
+                                              pair_cutoff = 3.5,
+                                              max_pairs = 6):
+        """
+        Screen out termination pairs with unreasonable electrostatic matching.
+
+        This removes termination pairs before MLIP energy estimation using two
+        simple heuristics:
+        1. dominant contact layers on both sides have the same charge sign
+        2. nearest cross-interface contacts are too short and/or dominated by
+           same-sign ionic pairs
+        """
+        self._apply_oxidation_states(oxidation_states)
+        self._ensure_oxidation_states_available()
+        self.termination_charge_filter_log = {}
+        total_before = 0
+        total_after = 0
+        for i in range(len(self.all_unique_terminations)):
+            terminations_here = self.all_unique_terminations[i]
+            kept_terminations = []
+            kept_term_ids = []
+            removed_reports = []
+            total_before += len(terminations_here)
+            for j in range(len(terminations_here)):
+                report = self.evaluate_termination_charge_balance(
+                    i,
+                    j,
+                    initial_gap = initial_gap,
+                    site_charge_threshold = site_charge_threshold,
+                    layer_charge_threshold = layer_charge_threshold,
+                    dominant_ratio_threshold = dominant_ratio_threshold,
+                    min_cross_interface_distance = min_cross_interface_distance,
+                    same_sign_pair_max_distance = same_sign_pair_max_distance,
+                    same_sign_pair_ratio_threshold = same_sign_pair_ratio_threshold,
+                    pair_cutoff = pair_cutoff,
+                    max_pairs = max_pairs,
+                )
+                if report['is_bad']:
+                    removed_reports.append(report)
+                else:
+                    kept_terminations.append(terminations_here[j])
+                    kept_term_ids.append(j)
+            self.all_unique_terminations[i] = kept_terminations
+            total_after += len(kept_terminations)
+            self.termination_charge_filter_log[i] = {
+                'num_before': len(terminations_here),
+                'num_after': len(kept_terminations),
+                'kept_term_ids': kept_term_ids,
+                'removed': removed_reports,
+            }
+            print(
+                f'match {i}: kept {len(kept_terminations)}/{len(terminations_here)} '
+                'unique terminations after charge screening'
+            )
+            if len(kept_terminations) == 0:
+                warnings.warn(
+                    f'match {i}: all unique terminations were removed by charge screening; '
+                    'this match will be skipped in global minimization'
+                )
+        print(f'charge screening kept {total_after}/{total_before} unique terminations')
+        if total_after == 0:
+            raise ValueError(
+                'Charge screening removed all unique terminations. '
+                'Please relax the thresholds or check the oxidation states.'
+            )
     
     def calculate_thickness(self):
         self.thickness_in_layers = [] 
@@ -1032,16 +1269,21 @@ class InterfaceWorker:
                 uvw_f1, uvw_f2 = idt[i]['film_conventional_vectors']
                 uvw_s1, uvw_s2 = idt[i]['substrate_conventional_vectors']
                 _A = m[i].match_area
+                num_terms = len(self.all_unique_terminations[i])
+                if num_terms == 0:
+                    warnings.warn(f'match {i}: no unique terminations remain, skipping this match')
+                    match_pbar.update(1)
+                    continue
                 
                 if int(_A * n_calls_density) < 10:
                     n_calls = 10
                 else:
                     n_calls = int(_A * n_calls_density)
                     
-                with tqdm(total = len(self.all_unique_terminations[i]), desc = "unique terminations") as term_pbar:
+                with tqdm(total = num_terms, desc = "unique terminations") as term_pbar:
                     e_labels = []
                     #for j in range(1):
-                    for j in range(len(self.all_unique_terminations[i])):
+                    for j in range(num_terms):
                         #optimize
                         self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
                         it = self.opt_results[(i,j)]['sampled_interfaces'][0]
@@ -1055,7 +1297,7 @@ class InterfaceWorker:
                             bd_E = (self.opt_results[(i,j)]['supcl_E'][0] - self.mc.calculate(film_slab) - self.mc.calculate(substrate_slab)) / A * 16.02176634
                             e_labels.append(bd_E)
                     print(e_labels)
-                    for j in range(len(self.all_unique_terminations[i])):
+                    for j in range(num_terms):
                         if e_labels[j] < min(e_labels) + term_screen_tol:
                         
                             ltc = self.opt_results[(i,j)]['sampled_interfaces'][0].lattice
@@ -1080,6 +1322,14 @@ class InterfaceWorker:
                     
                     match_pbar.update(1)
         self.global_optimized_data = pd.DataFrame(self.formated_data, columns = columns)
+        if len(self.global_optimized_data) == 0:
+            self.best_key = None
+            self.close_energy_calculator()
+            self.global_optimized_data.to_csv(f'all_data_{name}.csv')
+            with open(f'opt_results_{name}.pkl','wb') as f:
+                pickle.dump(self.opt_results, f)
+            self.opt_results = convert_dict_to_json(self.opt_results)
+            raise ValueError('No interfaces remain after termination screening and energy pre-screening.')
         self.global_optimized_data = self.global_optimized_data.sort_values(by = it_energetic_label)
 
         self.best_key = (self.global_optimized_data[r'$i_m$'].to_numpy()[0], self.global_optimized_data[r'$i_t$'].to_numpy()[0])

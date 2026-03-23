@@ -53,10 +53,18 @@ substrate = Structure.from_file("substrate.cif")
 
 iw = InterfaceWorker(film, substrate)
 iw.lattice_matching(max_area=150)
-iw.parse_interface_structure_params()
+iw.parse_interface_structure_params(
+    charge_filter_settings={
+        "oxidation_states": {"Li": 1, "Ni": 2, "P": 5, "S": -2, "O": -2},
+    }
+)
 iw.parse_optimization_params(calc="orb-models")
 iw.global_minimization()
 ```
+
+If the input structures already carry oxidation states, `charge_filter_settings` can be enabled without
+passing `oxidation_states`. The charge filter removes obviously unreasonable terminations before MLIP
+energy estimation by checking same-sign contact layers and overly short cross-interface contacts.
 
 ### LLM + IOMaker Workflow
 

@@ -1,0 +1,2 @@
+match_id	term_id	film_conventional_miller	substrate_conventional_miller	energy_type	energy_value	film_atom_count	substrate_atom_count
+0	2	[-1  0  0]	[1 0 1]	interface_energy	0.7657823213215098	12	10
