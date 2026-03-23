@@ -1056,6 +1056,15 @@ class InterfaceWorker:
         #save to result dict
         self.opt_results[(i,j)]['relaxed_best_interface']['structure'] = best_it
         self.opt_results[(i,j)]['relaxed_best_interface']['e'] = relaxed_best_sup_E
+        try:
+            film_indices = [int(idx) for idx in best_it.film_indices]
+            substrate_indices = [int(idx) for idx in best_it.substrate_indices]
+            self.opt_results[(i, j)]['film_indices'] = film_indices
+            self.opt_results[(i, j)]['substrate_indices'] = substrate_indices
+            self.opt_results[(i, j)]['relaxed_best_interface']['film_indices'] = film_indices
+            self.opt_results[(i, j)]['relaxed_best_interface']['substrate_indices'] = substrate_indices
+        except Exception:
+            pass
         # atom counts for reporting
         try:
             self.opt_results[(i, j)]['film_atom_count'] = len(best_it.film)
