@@ -517,7 +517,7 @@ def check_it_phase_stability(film_conv, substrate_conv, device='cpu',
         fmax (float): Maximum force threshold for relaxation
         steps (int): Maximum steps for geometry optimization
         n_calls (int): Number of optimization calls for interface registration
-        calc (str): MLIP calculator to use ('sevenn', 'orb-models', etc.)
+        calc (str): MLIP calculator to use ('sevenn', 'orb-models', 'matris', 'dpa', etc.)
         ckpt_path_ENV (str): Environment variable name for model checkpoint path
 
     Returns:

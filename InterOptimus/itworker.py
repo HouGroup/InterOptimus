@@ -23,12 +23,61 @@ from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, con
 from numpy.linalg import norm
 from InterOptimus.CNID import calculate_cnid_in_supercell
 import os
+from pathlib import Path
 import pandas as pd
 import json
 import pickle
 import warnings
 import shutil
 from interfacemaster.cellcalc import get_normal_from_MI, get_primitive_hkl
+
+
+def _mlip_checkpoint_search_dirs() -> list[Path]:
+    return [
+        Path.home() / ".cache" / "InterOptimus" / "checkpoints",
+        Path("/Users/jason/Documents/checkpoints"),
+    ]
+
+
+def _auto_checkpoint_candidates(calc: str) -> list[str]:
+    if calc == "orb-models":
+        return [
+            "orb-v3-conservative-20-omat-20250404.ckpt",
+            "orb-v3-conservative-inf-omat-20250404.ckpt",
+            "orb-v3-*.ckpt",
+            "orb-*.ckpt",
+        ]
+    if calc == "sevenn":
+        return [
+            "checkpoint_sevennet_mf_ompa.pth",
+            "checkpoint_sevennet*.pth",
+            "*sevennet*.pth",
+            "*7net*.pth",
+        ]
+    if calc == "dpa":
+        return [
+            "dpa*.pth",
+            "dpa*.pt",
+            "dpa*.pb",
+            "*deepmd*.pth",
+            "*deepmd*.pb",
+        ]
+    return []
+
+
+def _resolve_mlip_checkpoint(calc: str) -> str | None:
+    seen: set[str] = set()
+    for directory in _mlip_checkpoint_search_dirs():
+        if not directory.exists():
+            continue
+        for pattern in _auto_checkpoint_candidates(calc):
+            for path in sorted(directory.glob(pattern), key=lambda item: item.stat().st_mtime, reverse=True):
+                resolved = str(path.resolve())
+                if resolved in seen or not path.is_file():
+                    continue
+                seen.add(resolved)
+                return resolved
+    return None
 
 def gradient_descend(sampling_function, dx, dim, tol, initial_r, initial_xy, min_steps, **kwargs):
     """
@@ -588,7 +637,7 @@ class InterfaceWorker:
         set energy calculator docker container
         
         Args:
-        calc (str): mace, orb-models, sevenn, chgnet, grace-2l
+        calc (str): orb-models, sevenn, matris, dpa
         """
         # NOTE: mlipdockers is deprecated in this project; always use InterOptimus.mlip.MlipCalc
         from InterOptimus.mlip import MlipCalc
@@ -599,16 +648,16 @@ class InterfaceWorker:
         else:
             user_settings = dict(user_settings)
 
-        # If checkpoint path is not provided, try environment or auto-download
+        if calc == "matris":
+            import os
+            user_settings.setdefault("model", os.getenv("MATRIS_MODEL", "matris_10m_oam"))
+            user_settings.setdefault("task", os.getenv("MATRIS_TASK", "efsm"))
+
+        # If checkpoint path is not provided, try environment or auto-discovery.
         env_dict = {
             "orb-models": "ORB_CHECKPOINT",
             "sevenn": "SEVENN_CHECKPOINT",
             "dpa": "DPA_CHECKPOINT",
-        }
-        default_filenames = {
-            "orb-models": "orb-v3-conservative-20-omat-20250404.ckpt",
-            "sevenn": "checkpoint_sevennet_mf_ompa.pth",
-            "dpa": None,
         }
 
         # Always ensure ckpt_path key exists and normalize empty/invalid values
@@ -628,14 +677,7 @@ class InterfaceWorker:
             # Prefer server environment variables
             ckpt = os.getenv(env_dict[calc])
             if not ckpt:
-                # Try cached default filename
-                cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "InterOptimus", "checkpoints")
-                default_name = default_filenames.get(calc)
-                if default_name:
-                    cached = os.path.join(cache_dir, default_name)
-                    if os.path.exists(cached):
-                        user_settings["ckpt_path"] = cached
-                        ckpt = cached
+                ckpt = _resolve_mlip_checkpoint(calc)
             if ckpt:
                 user_settings["ckpt_path"] = ckpt
 
@@ -752,7 +794,7 @@ class InterfaceWorker:
         term_id (int): unique term id
         n_calls (int): number of calls
         z_range (tuple): sampling range of z
-        calc: MLIP calculator (str): mace, orb-models, sevenn, chgnet, grace-2l
+        calc: MLIP calculator (str): orb-models, sevenn, matris, dpa
         """
         #initialize opt info dict
         if not hasattr(self, 'opt_results'):
@@ -1232,7 +1274,7 @@ class InterfaceWorker:
         self.opt_results[(i,j)]['relaxed_min_bd_E'] = bd_E
         return bd_E, strain_E
 
-    def global_minimization(self, n_calls_density = 2, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, term_screen_tol = 1, name = ''):
+    def global_minimization(self, n_calls_density = 4, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, term_screen_tol = 1, name = ''):
         """
         apply bassian optimization for the xyz registration of all the interfaces with the predicted
         interface energy by machine learning potential, getting ranked interface energies
@@ -1240,7 +1282,7 @@ class InterfaceWorker:
         Args:
         n_calls (int): number of calls
         z_range (tuple): sampling range of z
-        calc (str): MLIP calculator: orb-models, sevenn
+        calc (str): MLIP calculator: orb-models, sevenn, matris, dpa
         strain_E_correction (bool): whether to correct it/cohesive energy by elastic energy
         term_screen_tol (float): tolerance to screen out terminations for structure optimization; terminations with unrelaxed energy higher than the lowest one by this value will be eliminated
         name (str): suffix for saved files
@@ -1350,60 +1392,96 @@ class InterfaceWorker:
         self.opt_results = convert_dict_to_json(self.opt_results)
     
     def get_selected_match_ids_per_plane(self):
-        sub_millers = list(self.ems.matching_data[1].keys())
-        type_lists_per_miller = []
-        for i in sub_millers:
-            type_lists_per_miller.append(self.ems.matching_data[1][i]['type_list'])
-        selected_i_ms = []
-        for i in type_lists_per_miller:
-            for k in self.global_optimized_data['$i_m$'].to_numpy():
-                if k in i:
-                    selected_i_ms.append(k)
-                    break
-        self.selected_i_ms_substrate = unique(selected_i_ms)
-        
-        film_millers = list(self.ems.matching_data[0].keys())
-        type_lists_per_miller = []
-        for i in film_millers:
-            type_lists_per_miller.append(self.ems.matching_data[0][i]['type_list'])
-        selected_i_ms = []
-        for i in type_lists_per_miller:
-            for k in self.global_optimized_data['$i_m$'].to_numpy():
-                if k in i:
-                    selected_i_ms.append(k)
-                    break
-        self.selected_i_ms_film = unique(selected_i_ms)
+        ranked_pairs = list(zip(
+            self.global_optimized_data[r'$i_m$'].to_numpy(),
+            self.global_optimized_data[r'$i_t$'].to_numpy(),
+        ))
+
+        def _get_type_lists_per_miller(tuple_id):
+            miller_to_type_ids = {}
+            for match_key, type_data in self.ems.all_matche_data.items():
+                miller = match_key[tuple_id]
+                if miller not in miller_to_type_ids:
+                    miller_to_type_ids[miller] = set()
+                miller_to_type_ids[miller].update(type_data.keys())
+            return {
+                miller: array(sorted(type_ids))
+                for miller, type_ids in miller_to_type_ids.items()
+            }
+
+        def _select_best_pairs_per_miller(tuple_id):
+            selected_pairs = {}
+            type_lists_per_miller = _get_type_lists_per_miller(tuple_id)
+            for miller, type_ids in type_lists_per_miller.items():
+                for pair in ranked_pairs:
+                    if pair[0] in type_ids:
+                        selected_pairs[miller] = pair
+                        break
+            return selected_pairs
+
+        self.selected_pairs_substrate_by_miller = _select_best_pairs_per_miller(1)
+        self.selected_pairs_film_by_miller = _select_best_pairs_per_miller(0)
+
+        self.selected_pairs_substrate = list(dict.fromkeys(self.selected_pairs_substrate_by_miller.values()))
+        self.selected_pairs_film = list(dict.fromkeys(self.selected_pairs_film_by_miller.values()))
+
+        self.selected_i_ms_substrate = unique([i[0] for i in self.selected_pairs_substrate])
+        self.selected_i_ms_film = unique([i[0] for i in self.selected_pairs_film])
     
     def get_lowest_energy_pairs_each_match(self,
                                 only_lowest_energy = False,
                             only_lowest_energy_each_plane = False,
                             only_substrate = False):
         
-        if only_lowest_energy_each_plane:
-            self.get_selected_match_ids_per_plane()
         pd = self.global_optimized_data
-        ids = pd.index.to_numpy()
         i_s = pd['$i_m$'].to_numpy()
         j_s = pd['$i_t$'].to_numpy()
+        ranked_pairs = list(zip(i_s, j_s))
+        pair_order = {pair: idx for idx, pair in enumerate(ranked_pairs)}
         pairs = []
         if only_lowest_energy:
             pairs.append((i_s[0], j_s[0]))
+        elif only_lowest_energy_each_plane:
+            self.get_selected_match_ids_per_plane()
+            if only_substrate:
+                pairs = self.selected_pairs_substrate.copy()
+            else:
+                pairs = list(dict.fromkeys(self.selected_pairs_substrate + self.selected_pairs_film))
+            pairs = sorted(pairs, key=lambda pair: pair_order[pair])
         else:
             match_ids = []
             for i in range(len(i_s)):
-                if only_lowest_energy_each_plane:
-                    if only_substrate:
-                        con = i_s[i] not in match_ids and i_s[i] in self.selected_i_ms_substrate
-                    else:
-                        con = i_s[i] not in match_ids and (i_s[i] in self.selected_i_ms_substrate or
-                                                            i_s[i] in self.selected_i_ms_film)
-                else:
-                    con = i_s[i] not in match_ids
+                con = i_s[i] not in match_ids
                 if con:
                     match_ids.append(i_s[i])
                     pairs.append((i_s[i], j_s[i]))
         
         return pairs
+
+    def get_lowest_energy_pairs_per_plane(self, only_substrate = False):
+        """
+        Get the lowest-energy optimized pair for each film/substrate Miller plane.
+
+        Returns:
+        dict: {
+            'film': {(h, k, l): (i_m, i_t), ...},
+            'substrate': {(h, k, l): (i_m, i_t), ...},
+        }
+        """
+        self.get_selected_match_ids_per_plane()
+
+        def _normalize_mapping(mapping):
+            normalized = {}
+            for miller, pair in mapping.items():
+                normalized[tuple(int(v) for v in miller)] = (int(pair[0]), int(pair[1]))
+            return normalized
+
+        data = {
+            'substrate': _normalize_mapping(self.selected_pairs_substrate_by_miller),
+        }
+        if not only_substrate:
+            data['film'] = _normalize_mapping(self.selected_pairs_film_by_miller)
+        return data
     
     def visualize_minimization_results(self, film_name, substrate_name):
         

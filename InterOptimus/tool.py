@@ -84,6 +84,8 @@ def sort_list(array_to_sort, keys):
     for idx, row in enumerate(array_to_sort):
         combined_array.append((keys[idx], row))
     combined_array_sorted = sorted(combined_array, key=lambda x: x[0])
+    if not combined_array_sorted:
+        return []
     keys_sorted, array_sorted = zip(*combined_array_sorted)
     return list(array_sorted)
 
@@ -551,7 +553,7 @@ def plot_bcmk(mlips, name):
         Reads data from 'benchmk.pkl' and 'dft_output.pkl' files.
         Generates POSCAR files and creates comparison plots.
     """
-    mlip_name_dict = {'orb-models':'ORB', 'sevenn':'SevenNet'}
+    mlip_name_dict = {'orb-models':'ORB', 'sevenn':'SevenNet', 'matris':'MatRIS', 'dpa':'DPA'}
     with open('benchmk.pkl','rb') as f:
         bcdata = pickle.load(f)
 

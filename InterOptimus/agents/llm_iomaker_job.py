@@ -69,7 +69,7 @@ TUTORIAL_WITH_VACUUM = {
         "do_mlip_gd": True,
     },
     "global_minimization_settings": {
-        "n_calls_density": 1,
+        "n_calls_density": 4,
         "z_range": [0.5, 3.0],
         "calc": "orb-models",
         "strain_E_correction": True,
@@ -101,7 +101,7 @@ TUTORIAL_WITHOUT_VACUUM = {
         "ckpt_path": "",
     },
     "global_minimization_settings": {
-        "n_calls_density": 1,
+        "n_calls_density": 4,
         "z_range": [0.5, 3.0],
         "calc": "orb-models",
         "strain_E_correction": True,
@@ -341,7 +341,7 @@ def _auto_iomaker_name(
 
     gm = settings.get("global_minimization_settings", {}) or {}
     calc = gm.get("calc", "mlip")
-    calc_tag = {"orb-models": "orb", "sevenn": "sevenn", "dpa": "dpa"}.get(calc, _slug(str(calc), 12))
+    calc_tag = {"orb-models": "orb", "sevenn": "sevenn", "matris": "matris", "dpa": "dpa"}.get(calc, _slug(str(calc), 12))
 
     key_settings = _summarize_key_settings(settings)
     blob = json.dumps(key_settings, sort_keys=True, ensure_ascii=False)
@@ -779,8 +779,10 @@ def fetch_mp_conventional_structure_by_id(mp_id: str, mp_api_key: str) -> Tuple[
     info = _fetch_mp_summary_info_by_id(mpr, mp_id)
     try:
         st = mpr.get_structure_by_material_id(mp_id, conventional_unit_cell=True)
-    except TypeError:
+    except Exception:
         st = mpr.get_structure_by_material_id(mp_id)
+    if isinstance(st, dict):
+        st = Structure.from_dict(st)
     return st, info
 
 
