@@ -5,7 +5,6 @@ import os
 import sys
 from pathlib import Path
 
-# Allow `python InterOptimus/verify_installation.py` from the repository root.
 def _path0_resolved() -> Path:
     if not sys.path or sys.path[0] == "":
         return Path.cwd().resolve()
