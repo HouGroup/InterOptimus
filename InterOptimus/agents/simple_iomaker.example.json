@@ -1,0 +1,39 @@
+{
+  "workflow_name": "IO_simple_nb",
+  "IO_workflow_config": {
+    "cost_preset": "medium",
+    "bulk_cifs": {
+      "film_cif": "film.cif",
+      "substrate_cif": "substrate.cif"
+    },
+    "lattice_matching_settings": {
+      "max_area": 25.0,
+      "max_length_tol": 0.03,
+      "max_angle_tol": 0.03,
+      "film_max_miller": 3,
+      "substrate_max_miller": 3,
+      "film_millers": null,
+      "substrate_millers": null
+    },
+    "structure_settings": {
+      "termination_ftol": 0.15,
+      "double_interface": true,
+      "vacuum_over_film": 5.0
+    },
+    "optimization_settings": {
+      "n_calls_density": 4,
+      "strain_E_correction": false
+    },
+    "vasp_settings": {
+      "do_vasp": false
+    }
+  },
+  "execution": "server",
+  "cluster": {
+    "mlip": {
+      "slurm_partition": "interactive",
+      "server_pre_cmd": ""
+    },
+    "vasp": {}
+  }
+}
