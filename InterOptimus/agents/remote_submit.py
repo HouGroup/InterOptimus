@@ -900,8 +900,8 @@ def _build_interoptimus_results_markdown(collected: Dict[str, Any]) -> str:
     elif collected.get("pairs"):
         parts.append("## 各 HKL 匹配界面能量\n\n")
         parts.append(
-            "| match | term | film Miller | sub Miller | energy type | energy | film atoms | sub atoms |\n"
-            "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+            "| match | term | film Miller | sub Miller | energy type | energy | film atoms | sub atoms | match_area | strain |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
         )
         for item in collected["pairs"]:
             if "interface_energy" in item:
@@ -917,6 +917,8 @@ def _build_interoptimus_results_markdown(collected: Dict[str, Any]) -> str:
                 str(ev),
                 str(item.get("film_atom_count")),
                 str(item.get("substrate_atom_count")),
+                str(item.get("match_area")),
+                str(item.get("strain")),
             ]
             parts.append("| " + " | ".join(row) + " |\n")
         parts.append("\n")
@@ -2250,9 +2252,11 @@ def _job_tag_from_doc(doc: Any) -> str:
     try:
         md = getattr(doc, "metadata", None) or {}
         if isinstance(md, dict):
-            return str(md.get("job") or md.get("name") or "")
+            val = md.get("job") or md.get("name") or ""
+            return _normalize_jobflow_job_tag(val)
         if hasattr(md, "get"):
-            return str(md.get("job") or md.get("name") or "")
+            val = md.get("job") or md.get("name") or ""
+            return _normalize_jobflow_job_tag(val)
     except Exception:
         pass
     return ""
@@ -2285,6 +2289,31 @@ def _iomaker_deep_get_mapping(obj: Any, path: Tuple[str, ...]) -> Any:
     return cur
 
 
+def _normalize_jobflow_job_tag(val: Any) -> str:
+    """``metadata.job`` may be a str or a one-element list (e.g. ``['film']``) depending on jf-remote version."""
+    if val is None:
+        return ""
+    if isinstance(val, (list, tuple)) and val:
+        val = val[0]
+    if isinstance(val, str):
+        return val.strip()
+    return str(val).strip()
+
+
+def _lookup_tag_energy(energies_by_tag: Dict[str, float], tag: str) -> Optional[float]:
+    """Resolve ``film`` / ``substrate`` / … with case-insensitive key fallback."""
+    if not energies_by_tag:
+        return None
+    v = energies_by_tag.get(tag)
+    if v is not None:
+        return float(v)
+    tlow = tag.lower()
+    for k, ev in energies_by_tag.items():
+        if str(k).strip().lower() == tlow:
+            return float(ev)
+    return None
+
+
 def _job_tag_from_store_doc(doc: Dict[str, Any]) -> str:
     if not isinstance(doc, dict):
         return ""
@@ -2294,9 +2323,10 @@ def _job_tag_from_store_doc(doc: Dict[str, Any]) -> str:
         ("additional_json", "jfremote_in", "job", "metadata", "job"),
         ("additional_json", "jfremote_in", "job", "metadata", "name"),
     ):
-        val = _iomaker_deep_get_mapping(doc, path)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
+        raw = _iomaker_deep_get_mapping(doc, path)
+        tag = _normalize_jobflow_job_tag(raw)
+        if tag:
+            return tag
     return ""
 
 
@@ -2376,6 +2406,40 @@ def _iomaker_required_vasp_tags(mi: int, ti: int, *, double_it: bool) -> List[st
     if double_it:
         return ["film", "substrate", f"{mi}_{ti}_it"]
     return [f"{mi}_{ti}_it", f"{mi}_{ti}_film_slab", f"{mi}_{ti}_substrate_slab"]
+
+
+# Interface relax jobs use metadata job == "{match_id}_{term_id}_it" (see InterfaceWorker.patch_jobflow_jobs).
+_VASP_INTERFACE_IT_TAG_RE = re.compile(r"^(\d+)_(\d+)_it$")
+
+
+def _scheduled_interface_pairs_from_vasp_tags(
+    job_by_tag: Dict[str, Dict[str, Any]],
+    energies_by_tag: Optional[Dict[str, float]] = None,
+) -> set[Tuple[int, int]]:
+    """
+    Pairs ``(match_id, term_id)`` that have a VASP interface job tag ``"{m}_{t}_it"`` in the
+    expanded jobflow-remote rows.
+
+    **Stereographic ``area_strain``** (see ``InterfaceWorker.visualize_minimization_results``) writes
+    one row per stereographic bin; for each bin it picks the **lowest MLIP** energy among competing
+    matches and records that winner's ``(match_id, term_id)``. Those winners are drawn from the **same**
+    per-plane selection as ``patch_jobflow_jobs(..., only_lowest_energy_each_plane=True)``, i.e. the
+    DFT interface set. So each ``area_strain`` row should reference a pair that **ought** to have an
+    ``*_it`` job—if our tag parsing matches jobflow-remote.
+
+    Separately, ``opt_results.pkl`` still lists **every** MLIP-optimized termination; pairs with no
+    ``*_it`` tag in the fetch expansion are labeled ``mlip_only`` when merging so they are not
+    mistaken for incomplete DFT.
+    """
+    out: set[Tuple[int, int]] = set()
+    for mapping in (job_by_tag, energies_by_tag or {}):
+        if not isinstance(mapping, dict):
+            continue
+        for tag in mapping.keys():
+            m = _VASP_INTERFACE_IT_TAG_RE.match(str(tag).strip())
+            if m:
+                out.add((int(m.group(1)), int(m.group(2))))
+    return out
 
 
 def _iomaker_vasp_job_row_by_tag(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -2473,6 +2537,7 @@ def _iomaker_collect_vasp_energy_rows(
     energies_by_tag = _iomaker_collect_vasp_energies_by_tag(rows)
     docs_by_tag = _iomaker_collect_vasp_store_docs_by_tag(rows)
     job_by_tag = _iomaker_vasp_job_row_by_tag(rows)
+    scheduled_pairs = _scheduled_interface_pairs_from_vasp_tags(job_by_tag, energies_by_tag)
     payload = load_opt_results_pickle_payload(str(pkl_path))
     opt_results = payload["opt_results"]
     double_it = bool(payload.get("double_interface", True))
@@ -2485,8 +2550,8 @@ def _iomaker_collect_vasp_energy_rows(
     substrate_formula = getattr(sub_prim.composition, "reduced_formula", "substrate")
 
     j_per_m2 = 16.02176634
-    e_f0 = energies_by_tag.get("film")
-    e_s0 = energies_by_tag.get("substrate")
+    e_f0 = _lookup_tag_energy(energies_by_tag, "film")
+    e_s0 = _lookup_tag_energy(energies_by_tag, "substrate")
     rows_out: List[Dict[str, Any]] = []
     for (mi, ti), od in sorted(opt_results.items(), key=lambda x: (x[0][0], x[0][1])):
         rb = od.get("relaxed_best_interface") or {}
@@ -2532,15 +2597,19 @@ def _iomaker_collect_vasp_energy_rows(
             if e_it is not None and e_film is not None and e_sub is not None and area > 0:
                 vasp_energy = (e_it - e_film - e_sub) / area * j_per_m2
 
-        rollup = _iomaker_pair_vasp_job_rollup(mi, ti, double_it=double_it, job_by_tag=job_by_tag)
-        if rollup == "failed":
-            vasp_pair_status = "failed"
-        elif rollup == "pending":
-            vasp_pair_status = "pending"
-        elif vasp_energy is not None:
-            vasp_pair_status = "complete"
+        if (mi, ti) not in scheduled_pairs:
+            # MLIP optimized this termination, but no interface VASP job was submitted for it.
+            vasp_pair_status = "mlip_only"
         else:
-            vasp_pair_status = "failed"
+            rollup = _iomaker_pair_vasp_job_rollup(mi, ti, double_it=double_it, job_by_tag=job_by_tag)
+            if rollup == "failed":
+                vasp_pair_status = "failed"
+            elif rollup == "pending":
+                vasp_pair_status = "pending"
+            elif vasp_energy is not None:
+                vasp_pair_status = "complete"
+            else:
+                vasp_pair_status = "failed"
 
         rows_out.append(
             {
@@ -2555,6 +2624,8 @@ def _iomaker_collect_vasp_energy_rows(
                 "vasp_energy": vasp_energy,
                 "vasp_pair_status": vasp_pair_status,
                 "E_it_eV": e_it,
+                "match_area": od.get("match_area"),
+                "strain": od.get("strain"),
             }
         )
 
@@ -2573,6 +2644,7 @@ def _iomaker_collect_vasp_energy_rows(
             "energies_by_tag": energies_by_tag,
             "docs_by_tag": docs_by_tag,
             "vasp_job_by_tag": job_by_tag,
+            "vasp_scheduled_pairs": sorted(scheduled_pairs),
             "rows": rows_out,
         }
     )
@@ -2646,10 +2718,14 @@ def iomaker_build_vasp_mlip_style_results(
         if row.get("vasp_pair_status") == "complete" and row.get("vasp_energy") is not None
     }
     partial_note = ""
-    if len(rows_by_pair_complete) < len(pair_row):
+    dft_eligible = len([r for r in rows_out_list if r.get("vasp_pair_status") != "mlip_only"])
+    if len(rows_by_pair_complete) < dft_eligible:
         partial_note = (
-            f"Partial DFT: {len(rows_by_pair_complete)}/{len(pair_row)} pairs have a finished VASP "
-            "interface energy; others are marked pending/failed in pairs_summary and stereographic plots."
+            f"Partial DFT: {len(rows_by_pair_complete)}/{dft_eligible} scheduled VASP pairs have a finished "
+            "interface energy γ; others are pending/failed. "
+            f"{len(rows_out_list) - dft_eligible} extra (match, term) keys in opt_results.pkl have no ``*_it`` "
+            "job in the expanded fetch list (labeled mlip)—stereographic area_strain rows should still map to "
+            "scheduled pairs when tags match."
         )
 
     summary_src = os.path.join(dest_root, "opt_results_summary.json")
@@ -2674,6 +2750,8 @@ def iomaker_build_vasp_mlip_style_results(
         encoding="utf-8",
     )
 
+    # ``area_strain`` from the MLIP worker: per stereographic bin, (match_id, term_id) is the winning pair
+    # among competing matches using the same per-plane selection as DFT (see itworker.visualize_minimization_results).
     area_src = os.path.join(dest_root, "area_strain")
     records = parse_area_strain_records(area_src) if os.path.isfile(area_src) else []
     vasp_area_records: List[Dict[str, Any]] = []
@@ -2684,6 +2762,9 @@ def iomaker_build_vasp_mlip_style_results(
         if prow and prow.get("vasp_pair_status") == "complete" and prow.get("vasp_energy") is not None:
             updated["binding_energy"] = float(prow["vasp_energy"])
             updated["dft_status"] = "complete"
+        elif prow and prow.get("vasp_pair_status") == "mlip_only":
+            updated["binding_energy"] = float(record["binding_energy"])
+            updated["dft_status"] = "mlip"
         elif prow:
             updated["binding_energy"] = float(record["binding_energy"])
             updated["dft_status"] = str(prow.get("vasp_pair_status") or "pending")
@@ -2716,6 +2797,9 @@ def iomaker_build_vasp_mlip_style_results(
         first_record_by_pair.setdefault(pair, record)
     for pair in sorted(pair_row.keys()):
         hit = pair_row[pair]
+        # Table is for DFT workflow only; MLIP-only terminations stay in opt_results.pkl / area_strain.
+        if hit.get("vasp_pair_status") == "mlip_only":
+            continue
         sample = first_record_by_pair.get(pair, {})
         ev = hit.get("vasp_energy")
         st = str(hit.get("vasp_pair_status") or "pending")
@@ -2734,9 +2818,14 @@ def iomaker_build_vasp_mlip_style_results(
                 "film_atom_count": hit.get("film_atom_count"),
                 "substrate_atom_count": hit.get("substrate_atom_count"),
                 "vasp_dft_status": st,
+                "match_area": hit.get("match_area"),
+                "strain": hit.get("strain"),
             }
         )
     with open(pairs_summary_path, "w", encoding="utf-8") as f:
+        f.write(
+            "# DFT-scheduled pairs only (mlip_only terminations omitted; see opt_results.pkl).\n"
+        )
         f.write(
             "\t".join(
                 [
@@ -2749,6 +2838,8 @@ def iomaker_build_vasp_mlip_style_results(
                     "film_atom_count",
                     "substrate_atom_count",
                     "vasp_dft_status",
+                    "match_area",
+                    "strain",
                 ]
             )
             + "\n"
@@ -2766,6 +2857,8 @@ def iomaker_build_vasp_mlip_style_results(
                         str(row["film_atom_count"]),
                         str(row["substrate_atom_count"]),
                         str(row["vasp_dft_status"]),
+                        str(row["match_area"]),
+                        str(row["strain"]),
                     ]
                 )
                 + "\n"
@@ -2814,9 +2907,11 @@ def iomaker_build_vasp_mlip_style_results(
         material1_planes = np.array([r["material1_plane"] for r in vasp_area_records])
         material2_planes = np.array([r["material2_plane"] for r in vasp_area_records])
         dft_status_plot = [str(r.get("dft_status") or "pending").lower() for r in vasp_area_records]
+        # ``mlip`` = no DFT for this termination; still plot MLIP binding energy (must stay finite).
+        # Using NaN for mlip made ``create_stereographic_plot`` treat points as failed (×).
         binding_energies = np.array(
             [
-                float(r["binding_energy"]) if st == "complete" else float("nan")
+                float(r["binding_energy"]) if st in ("complete", "mlip") else float("nan")
                 for r, st in zip(vasp_area_records, dft_status_plot)
             ],
             dtype=float,
@@ -2896,7 +2991,8 @@ def iomaker_build_vasp_mlip_style_results(
         report_lines.extend(["Notes", "-" * 80, partial_note, ""])
     report_lines.extend(
         [
-            "Pairs (interface energy column: VASP J/m^2 when complete, else N/A; vasp_dft_status column)",
+            "Pairs (DFT-scheduled only; MLIP-only terminations are in area_strain / opt_results.pkl)",
+            "(interface energy column: VASP J/m^2 when complete, else N/A; vasp_dft_status column)",
             "-" * 80,
         ]
     )
@@ -3013,6 +3109,10 @@ def iomaker_build_vasp_interface_report(
         if en is not None and tag:
             energies_by_tag[tag] = float(en)
 
+    # Same subset as ``patch_jobflow_jobs(..., only_lowest_energy_each_plane=True)`` — do not
+    # tabulate every MLIP-optimized termination as if it had a VASP row.
+    scheduled_pairs = _scheduled_interface_pairs_from_vasp_tags({}, energies_by_tag)
+
     payload = load_opt_results_pickle_payload(str(pkl_path))
     opt_results = payload["opt_results"]
     double_it = bool(payload.get("double_interface", True))
@@ -3023,10 +3123,12 @@ def iomaker_build_vasp_interface_report(
     n_s0 = max(1, len(sub_prim))
 
     j_per_m2 = 16.02176634
-    e_f0 = energies_by_tag.get("film")
-    e_s0 = energies_by_tag.get("substrate")
+    e_f0 = _lookup_tag_energy(energies_by_tag, "film")
+    e_s0 = _lookup_tag_energy(energies_by_tag, "substrate")
     rows_out: List[Dict[str, Any]] = []
     for (mi, ti), od in sorted(opt_results.items(), key=lambda x: (x[0][0], x[0][1])):
+        if (mi, ti) not in scheduled_pairs:
+            continue
         rb = od.get("relaxed_best_interface") or {}
         st = rb.get("structure")
         if not st:
@@ -3272,6 +3374,14 @@ def iomaker_fetch_results(
             print(" vasp_report:", fr.get("vasp_interface_energy_report_path"))
         if fr.get("vasp_interface_energy_plot_path"):
             print(" vasp_plot:", fr.get("vasp_interface_energy_plot_path"))
+        # Root ``stereographic.jpg`` is the MLIP worker plot; VASP-merged γ uses DFT tags + area_strain.
+        if os.path.isfile(os.path.join(dest_root, "stereographic.jpg")):
+            print(
+                " note: stereographic.jpg in export root = MLIP-only; "
+                "VASP-merged stereographic: vasp_results/stereographic.jpg (if build succeeded)."
+            )
+        if fr.get("vasp_stereographic_path"):
+            print(" vasp stereographic:", fr.get("vasp_stereographic_path"))
     return fr
 
 

@@ -1196,6 +1196,12 @@ class InterfaceWorker:
             film_atom_count=int(len(best_it.film_indices)),
             substrate_atom_count=int(len(best_it.substrate_indices)),
         )
+        try:
+            m_i = self.unique_matches[i]
+            self.opt_results[(i, j)]["match_area"] = float(m_i.match_area)
+            self.opt_results[(i, j)]["strain"] = float(m_i.von_mises_strain)
+        except Exception:
+            pass
         return it_E, strain_E
     
     def relax_with_selective_dyn_it(self, it, film_shell, substrate_shell):
@@ -1322,6 +1328,12 @@ class InterfaceWorker:
 
         self.opt_results[(i,j)]['thicknesses'] = self.absolute_thicknesses[i]
         self.opt_results[(i,j)]['relaxed_min_bd_E'] = bd_E
+        try:
+            m_i = self.unique_matches[i]
+            self.opt_results[(i, j)]["match_area"] = float(m_i.match_area)
+            self.opt_results[(i, j)]["strain"] = float(m_i.von_mises_strain)
+        except Exception:
+            pass
         return bd_E, strain_E
 
     def global_minimization(self, n_calls_density = 4, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, term_screen_tol = 1, name = ''):
@@ -1594,6 +1606,9 @@ class InterfaceWorker:
             else:
                 selected_energy_by_match[key[0]] = self.opt_results[key]['relaxed_min_bd_E']
         from InterOptimus.matching import get_area_match
+        # One row per stereographic bin ``i``: among matches ``tp`` in this bin, pick the lowest
+        # ``selected_energy_by_match[tp]``; ``low_pair`` is from the same ``only_lowest_energy_each_plane``
+        # selection as ``patch_jobflow_jobs`` (DFT interface jobs use these pairs).
         data = []
         for i in self.ems.all_matche_data.keys():
             here = self.ems.all_matche_data[i]
