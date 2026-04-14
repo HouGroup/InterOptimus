@@ -64,6 +64,16 @@ from InterOptimus.agents.iomaker_job import (
 
 Full parameter reference: **[docs/simple_iomaker_parameters.md](docs/simple_iomaker_parameters.md)**.
 
+### Web UI (upload CIFs, MatRIS, stereographic)
+
+```bash
+pip install -e '.[web]'
+interoptimus-web
+# Browser: http://127.0.0.1:8765 — upload film + substrate CIF, run local jobflow, view io_report + stereographic figures.
+```
+
+Session files are stored under `~/.interoptimus/web_sessions/` unless `INTEROPTIMUS_WEB_SESSIONS` is set.
+
 ## Requirements
 
 - Python ≥ 3.10

@@ -16,6 +16,8 @@ setup(
     url="https://github.com/HouGroup/InterOptimus/",
     license="MIT",
     packages=find_packages(exclude=("tests", "test", "new_test")),
+    package_data={"InterOptimus.web": ["static/index.html"]},
+    include_package_data=True,
     classifiers=[
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3 :: Only",
@@ -47,11 +49,18 @@ setup(
         "deepmd-kit",
         "torch",
     ],
-    include_package_data=False,
+    extras_require={
+        "web": [
+            "fastapi>=0.100",
+            "uvicorn[standard]>=0.22",
+            "python-multipart>=0.0.6",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "interoptimus-env=InterOptimus.agents.server_env:main",
             "interoptimus-simple=InterOptimus.agents.simple_iomaker:main",
+            "interoptimus-web=InterOptimus.web.app:main",
         ],
     },
 )

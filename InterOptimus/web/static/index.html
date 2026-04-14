@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>InterOptimus · MatRIS 界面工作流</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e6edf3;
+      --muted: #8b9cb3;
+      --accent: #3d8bfd;
+      --border: #2d3a4d;
+      --err: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 1.5rem; }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 0.5rem; }
+    p.lead { color: var(--muted); margin: 0 0 1.25rem; font-size: 0.95rem; }
+    form.card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.35rem; }
+    input[type="text"], select {
+      width: 100%;
+      padding: 0.5rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      margin-bottom: 1rem;
+    }
+    input[type="file"] { margin-bottom: 1rem; width: 100%; font-size: 0.9rem; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 0.65rem 1.25rem;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .check { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+    .check input { width: auto; }
+    #status { font-size: 0.9rem; color: var(--muted); margin-top: 0.75rem; min-height: 1.5rem; }
+    #status.err { color: var(--err); }
+    section h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+    pre.report {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      overflow: auto;
+      max-height: 420px;
+      font-size: 0.78rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .fig { margin-top: 1rem; text-align: center; }
+    .fig img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--border); }
+    .fig a { color: var(--accent); font-size: 0.9rem; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>InterOptimus · MatRIS MLIP 工作流</h1>
+    <p class="lead">
+      上传薄膜与基底 CIF，使用与 <code>run_simple_iomaker</code> 相同的配置（<code>calc = matris</code>），在本地运行完整 jobflow；
+      完成后可查看 <code>io_report.txt</code> 与极图（<code>stereographic.jpg</code> / 交互 HTML）。
+    </p>
+
+    <form class="card" id="f">
+      <div class="row">
+        <div>
+          <label for="film">薄膜 film.cif</label>
+          <input type="file" id="film" name="film_cif" accept=".cif,.CIF" required />
+        </div>
+        <div>
+          <label for="sub">基底 substrate.cif</label>
+          <input type="file" id="sub" name="substrate_cif" accept=".cif,.CIF" required />
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="wn">任务名称 workflow_name</label>
+          <input type="text" id="wn" name="workflow_name" value="IO_web_matris" />
+        </div>
+        <div>
+          <label for="cp">成本预设 cost_preset</label>
+          <select id="cp" name="cost_preset">
+            <option value="low">low</option>
+            <option value="medium" selected>medium</option>
+            <option value="high">high</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="ex">运行方式 execution</label>
+          <select id="ex" name="execution">
+            <option value="local" selected>local（本机 jobflow）</option>
+            <option value="server">server（本机 jf submit_flow，需 jobflow-remote）</option>
+          </select>
+        </div>
+        <div class="check" style="align-self: end;">
+          <input type="checkbox" id="di" name="double_interface" value="true" />
+          <label for="di" style="margin:0;">双界面 double_interface（无真空层模式）</label>
+        </div>
+      </div>
+      <button type="submit" id="go">运行工作流</button>
+      <div id="status"></div>
+    </form>
+
+    <section id="out" class="hidden">
+      <h2>运行报告</h2>
+      <pre class="report" id="report"></pre>
+      <div class="fig" id="figWrap">
+        <h2 style="text-align:left">立体投影 stereographic</h2>
+        <img id="stereoImg" alt="stereographic" class="hidden" />
+        <p id="stereoMissing" class="hidden" style="color:var(--muted)">未生成 stereographic.jpg（请确认计算已完成且无错误）。</p>
+        <p><a id="stereoLink" href="#" target="_blank" class="hidden">打开交互式 stereographic_interactive.html</a></p>
+        <p><a id="projLink" href="#" target="_blank" class="hidden">Lattice matching project.jpg</a></p>
+      </div>
+    </section>
+  </div>
+  <script>
+    const f = document.getElementById("f");
+    const status = document.getElementById("status");
+    const go = document.getElementById("go");
+    const out = document.getElementById("out");
+    const report = document.getElementById("report");
+    const stereoImg = document.getElementById("stereoImg");
+    const stereoMissing = document.getElementById("stereoMissing");
+    const stereoLink = document.getElementById("stereoLink");
+    const projLink = document.getElementById("projLink");
+
+    f.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      status.textContent = "运行中（可能数分钟至更久，请勿关闭页面）…";
+      status.classList.remove("err");
+      go.disabled = true;
+      out.classList.add("hidden");
+
+      const fd = new FormData();
+      fd.append("film_cif", document.getElementById("film").files[0]);
+      fd.append("substrate_cif", document.getElementById("sub").files[0]);
+      fd.append("workflow_name", document.getElementById("wn").value);
+      fd.append("cost_preset", document.getElementById("cp").value);
+      fd.append("execution", document.getElementById("ex").value);
+      fd.append("double_interface", document.getElementById("di").checked ? "true" : "false");
+
+      try {
+        const r = await fetch("/api/run", { method: "POST", body: fd });
+        const data = await r.json();
+        if (!data.ok) {
+          status.textContent = "错误: " + (data.error || r.statusText);
+          status.classList.add("err");
+          return;
+        }
+        status.textContent = "完成。session: " + data.session_id;
+        report.textContent = data.report_text || "(无报告文本)";
+        out.classList.remove("hidden");
+
+        const art = data.artifacts || {};
+        if (art.stereographic_jpg) {
+          stereoImg.src = art.stereographic_jpg + "?t=" + Date.now();
+          stereoImg.classList.remove("hidden");
+          stereoMissing.classList.add("hidden");
+        } else {
+          stereoImg.classList.add("hidden");
+          stereoMissing.classList.remove("hidden");
+        }
+        if (art.stereographic_interactive_html) {
+          stereoLink.href = art.stereographic_interactive_html;
+          stereoLink.classList.remove("hidden");
+        } else stereoLink.classList.add("hidden");
+        if (art.project_jpg) {
+          projLink.href = art.project_jpg;
+          projLink.classList.remove("hidden");
+        } else projLink.classList.add("hidden");
+      } catch (err) {
+        status.textContent = "请求失败: " + err;
+        status.classList.add("err");
+      } finally {
+        go.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
