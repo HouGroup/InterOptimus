@@ -10,8 +10,9 @@ import json
 import os
 import re
 import hashlib
+import sys
 from datetime import datetime
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from copy import deepcopy
 from typing import Any, Dict, Optional, Tuple, List, Literal, Callable
 from pymatgen.core.structure import Structure
@@ -231,7 +232,7 @@ def print_config_help() -> None:
     print("- mlip_resources: 返回 QResources 的可调用对象（MLIP 作业）")
     print("- mlip_worker, mlip_project（worker 名与 JFREMOTE 项目名，需与 ~/.jfremote/*.yaml 一致）")
     print("- do_vasp=True 时还需: vasp_resources, vasp_worker，以及 settings 里 VASP/potcar 相关配置")
-    print("- server_pre_cmd: 例如 source ~/.bashrc && conda activate <env>")
+    print("- interoptimus-simple 默认: server_python=当前解释器(sys.executable)，server_pre_cmd 为空（一般无需再配 conda）")
     print("- 环境自检: interoptimus-env")
     print("")
     print("【常用可选】")
@@ -250,7 +251,7 @@ class BaseBuildConfig:
     submit_target: Literal['local', 'server'] = 'local'
     server_run_parent: Optional[str] = None
     server_pre_cmd: str = ''
-    server_python: str = 'python'
+    server_python: str = field(default_factory=lambda: sys.executable)
     server_jf_bin: str = 'jf'
     mlip_resources: Optional[Callable] = None
     vasp_resources: Optional[Callable] = None

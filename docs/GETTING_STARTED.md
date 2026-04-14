@@ -24,6 +24,7 @@ This guide lists what a **new administrator** must have in place before `interop
 
 ## 3. jobflow-remote
 
+- **`interoptimus-simple` / `run_simple_iomaker`** 在登录节点提交时，默认用**当前正在运行的 Python**（`sys.executable`，即你启动 Jupyter 或脚本的 conda 环境）去调 `jf submit_flow`，一般**不必**在 JSON 里写 `server_python` / `server_pre_cmd`。若必须用别的解释器，可设环境变量 `INTEROPTIMUS_SERVER_PYTHON` 或配置里的同名键。
 - Configure **`~/.jfremote/<project>.yaml`** with at least one **worker** whose `pre_run` activates the conda env that has InterOptimus + MLIP + (if needed) VASP tooling.
 - Start a **runner** on a machine that can execute those jobs (`jf runner start` — see jobflow-remote docs).
 - Set **`JFREMOTE_PROJECT`** (and optionally `JFREMOTE_PROJECTS_FOLDER`) in the shell where you submit.

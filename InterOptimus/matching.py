@@ -799,6 +799,8 @@ def plot_matching_data(matching_data, titles, save_filename, show_millers, show_
         special (bool): Special plotting mode flag
     """
     fig, ax = plt.subplots(1, 2, figsize=(20*1.25, 12*1.25))
+    # Opt out of global figure.autolayout (see InterOptimus.__init__): manual tight_layout below.
+    fig.set_layout_engine("none")
     #plt.rc('font', family='arial')
     #plt.rc('text', usetex=True)
     plt.subplots_adjust(wspace=0.01)
@@ -1331,14 +1333,15 @@ def _group_projected_points(planes, binding_energies, theta, x_proj, y_proj, rec
     for indices in position_groups.values():
         upper_indices = [idx for idx in indices if theta[idx] <= np.pi / 2]
         candidate_indices = upper_indices if upper_indices else indices
-        energies_here = binding_energies[candidate_indices]
+        cand_arr = np.asarray(candidate_indices, dtype=int)
+        energies_here = binding_energies[cand_arr]
         finite = np.isfinite(energies_here)
         if not np.any(finite):
-            chosen_idx = candidate_indices[0]
+            chosen_idx = int(cand_arr[0])
         else:
-            sub_idx = candidate_indices[finite]
+            sub_idx = cand_arr[finite]
             sub_e = binding_energies[sub_idx]
-            chosen_idx = sub_idx[int(np.argmin(sub_e))]
+            chosen_idx = int(sub_idx[int(np.argmin(sub_e))])
         grouped.append(
             {
                 "index": chosen_idx,
@@ -2062,6 +2065,8 @@ def plot_binding_energy_analysis(
 
     # Create figure - each subplot is 3x3, so total is 6x3
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(6, 3))
+    # Opt out of global figure.autolayout: colorbar uses fixed axes + tight_layout(rect=...).
+    fig.set_layout_engine("none")
 
     # Plot stereographic projection for material 1
     im1, scatter1 = create_stereographic_plot(

@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from copy import deepcopy
 from typing import Any, Callable, Dict, Optional
 
@@ -664,8 +665,13 @@ def build_config_from_simple_dict(d: Dict[str, Any], settings: Dict[str, Any]) -
     print_settings = bool(d.get("print_settings", True))
 
     server_run_parent = d.get("server_run_parent")
-    server_pre_cmd = str(d.get("server_pre_cmd", os.getenv("INTEROPTIMUS_SERVER_PRE_CMD", "")))
-    server_python = str(d.get("server_python", "python"))
+    # 默认用当前进程的解释器（如 Jupyter / CLI 所在 conda 环境），避免子进程 `python` 找不到 jobflow-remote
+    server_pre_cmd = str(
+        d.get("server_pre_cmd", os.getenv("INTEROPTIMUS_SERVER_PRE_CMD", ""))
+    )
+    server_python = str(
+        d.get("server_python", os.getenv("INTEROPTIMUS_SERVER_PYTHON", sys.executable))
+    )
     server_jf_bin = str(d.get("server_jf_bin", "jf"))
 
     mlip_worker = str(d.get("mlip_worker", "std_worker"))
