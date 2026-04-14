@@ -1,6 +1,9 @@
 """
 Local web UI: upload film / substrate CIFs, run the simple_iomaker pipeline with **MatRIS** MLIP,
-then show ``io_report.txt`` and stereographic figures from the run directory.
+then show ``io_report.txt``, stereographic figures, and materialized pair POSCARs.
+
+For a **native desktop GUI** (no browser), use ``interoptimus-desktop`` or
+``python -m InterOptimus.desktop_app.gui``.
 
 Run::
 
@@ -18,18 +21,12 @@ import os
 import sys
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from InterOptimus.agents.simple_iomaker import run_simple_iomaker
-
-def _sessions_root() -> Path:
-    env = os.environ.get("INTEROPTIMUS_WEB_SESSIONS", "").strip()
-    root = Path(env) if env else (Path.home() / ".interoptimus" / "web_sessions")
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+from InterOptimus.web.local_workflow import run_matris_session, sessions_root
 
 
 def _safe_session_dir(session_id: str) -> Path:
@@ -37,78 +34,49 @@ def _safe_session_dir(session_id: str) -> Path:
         sid = uuid.UUID(session_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail="Invalid session id") from e
-    d = _sessions_root() / str(sid)
+    d = sessions_root() / str(sid)
     if not d.is_dir():
         raise HTTPException(status_code=404, detail="Session not found")
     return d.resolve()
 
 
-def _build_config(
-    *,
-    workflow_name: str,
-    cost_preset: str,
-    double_interface: bool,
-    execution: str,
-    cluster: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    cfg: Dict[str, Any] = {
-        "workflow_name": workflow_name.strip() or "IO_web_matris",
-        "IO_workflow_config": {
-            "cost_preset": cost_preset,
-            "bulk_cifs": {
-                "film_cif": "film.cif",
-                "substrate_cif": "substrate.cif",
-            },
-            "lattice_matching_settings": {},
-            "structure_settings": {"double_interface": double_interface},
-            # ``calc`` is merged into global_minimization_settings by simple_iomaker
-            "optimization_settings": {"calc": "matris"},
-            "vasp_settings": {"do_vasp": False},
-        },
-        "execution": execution,
-    }
-    if cluster:
-        cfg["cluster"] = cluster
-    return cfg
+def _artifacts_with_web_urls(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Turn local paths in ``artifacts`` into ``/api/sessions/...`` URLs for the HTML client."""
+    if not payload.get("ok"):
+        return payload
+    sid = payload["session_id"]
+    art = dict(payload.get("artifacts") or {})
+    wd = art.get("local_workdir") or ""
 
+    def _u(local_path: str | None, name: str) -> str | None:
+        if not local_path or not os.path.isfile(local_path):
+            return None
+        return f"/api/sessions/{sid}/artifact/{name}"
 
-def _run_in_workdir(workdir: Path, config: Dict[str, Any]) -> Dict[str, Any]:
-    old = os.getcwd()
-    try:
-        os.chdir(workdir)
-        return run_simple_iomaker(config)
-    finally:
-        os.chdir(old)
+    stereo = os.path.join(wd, "stereographic.jpg") if wd else None
+    stereo_html = os.path.join(wd, "stereographic_interactive.html") if wd else None
+    project_jpg = os.path.join(wd, "project.jpg") if wd else None
 
+    art["stereographic_jpg"] = _u(stereo, "stereographic.jpg")
+    art["stereographic_interactive_html"] = _u(stereo_html, "stereographic_interactive.html")
+    art["project_jpg"] = _u(project_jpg, "project.jpg")
 
-def _json_safe_result(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Drop non-JSON entries (e.g. flow_dict) for API responses."""
-    skip = {"flow_dict", "settings"}
-    out: Dict[str, Any] = {}
-    for k, v in result.items():
-        if k in skip:
-            continue
-        if isinstance(v, (str, int, float, bool)) or v is None:
-            out[k] = v
-        elif isinstance(v, dict):
-            try:
-                import json
+    zpath = art.get("poscars_zip_path")
+    if zpath and os.path.isfile(zpath):
+        art["poscars_zip"] = f"/api/sessions/{sid}/poscars.zip"
+    else:
+        art["poscars_zip"] = None
+    art.pop("poscars_zip_path", None)
 
-                json.dumps(v)
-                out[k] = v
-            except (TypeError, ValueError):
-                out[k] = f"<{type(v).__name__}>"
-        elif isinstance(v, list):
-            out[k] = v
-        else:
-            out[k] = str(v)[:500]
-    return out
+    payload = dict(payload)
+    payload["artifacts"] = art
+    return payload
 
 
 app = FastAPI(
     title="InterOptimus simple_iomaker (MatRIS)",
-    description="Upload substrate and film CIFs; run MLIP workflow; view report and stereographic plots.",
-    version="0.1.0",
+    description="Upload substrate and film CIFs; run MLIP workflow; view report, stereographic plots, and POSCARs.",
+    version="0.2.0",
 )
 
 
@@ -128,103 +96,73 @@ async def api_run(
     cost_preset: str = Form("medium"),
     double_interface: str = Form("false"),
     execution: str = Form("local"),
+    lm_max_area: str = Form("60"),
+    lm_max_length_tol: str = Form("0.03"),
+    lm_max_angle_tol: str = Form("0.03"),
+    lm_film_max_miller: str = Form("3"),
+    lm_substrate_max_miller: str = Form("3"),
+    st_film_thickness: str = Form("10"),
+    st_substrate_thickness: str = Form("10"),
+    st_termination_ftol: str = Form("0.15"),
+    st_vacuum_over_film: str = Form("5"),
+    opt_device: str = Form("cpu"),
+    opt_steps: str = Form("500"),
+    do_mlip_gd: str = Form("false"),
+    relax_in_ratio: str = Form("true"),
+    relax_in_layers: str = Form("false"),
+    fix_film_fraction: str = Form("0.5"),
+    fix_substrate_fraction: str = Form("0.5"),
+    set_relax_film_ang: str = Form("0"),
+    set_relax_substrate_ang: str = Form("0"),
 ) -> JSONResponse:
-    """
-    Save CIFs to a new session directory, ``chdir`` there, and call :func:`run_simple_iomaker`
-    with MatRIS as ``global_minimization_settings.calc``.
+    film_bytes = await film_cif.read()
+    sub_bytes = await substrate_cif.read()
 
-    Default ``execution`` is ``local`` (full jobflow run on this machine). Use ``server`` only if
-    jobflow-remote is configured on this host (same as CLI).
-    """
-    if cost_preset not in ("low", "medium", "high"):
-        raise HTTPException(status_code=400, detail="cost_preset must be low, medium, or high")
-    ex = execution.strip().lower().replace("-", "_")
-    if ex not in ("local", "server"):
-        raise HTTPException(status_code=400, detail="execution must be local or server")
-    di = str(double_interface).lower() in ("1", "true", "yes", "on")
-
-    sid = str(uuid.uuid4())
-    workdir = _sessions_root() / sid
-    workdir.mkdir(parents=True, exist_ok=True)
-
-    film_path = workdir / "film.cif"
-    sub_path = workdir / "substrate.cif"
-
-    try:
-        film_path.write_bytes(await film_cif.read())
-        sub_path.write_bytes(await substrate_cif.read())
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save uploads: {e}") from e
-
-    cluster = None
-    if ex == "server":
-        # Minimal nested cluster; user can override via env / full CLI for production.
-        cluster = {
-            "mlip": {
-                "slurm_partition": os.environ.get("INTEROPTIMUS_SLURM_PARTITION", "interactive"),
-            },
-            "vasp": {},
-        }
-
-    config = _build_config(
-        workflow_name=workflow_name,
-        cost_preset=cost_preset,
-        double_interface=di,
-        execution=ex,
-        cluster=cluster,
-    )
-
-    try:
-        result = _run_in_workdir(workdir, config)
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "ok": False,
-                "session_id": sid,
-                "error": str(e),
-                "error_type": type(e).__name__,
-            },
-        )
-
-    wd = result.get("local_workdir") or str(workdir)
-    report_path = result.get("report_path")
-    report_text = ""
-    if report_path and os.path.isfile(report_path):
-        try:
-            report_text = Path(report_path).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            report_text = ""
-
-    stereo = os.path.join(wd, "stereographic.jpg")
-    stereo_url = f"/api/sessions/{sid}/artifact/stereographic.jpg" if os.path.isfile(stereo) else None
-    stereo_html = os.path.join(wd, "stereographic_interactive.html")
-    stereo_html_url = (
-        f"/api/sessions/{sid}/artifact/stereographic_interactive.html"
-        if os.path.isfile(stereo_html)
-        else None
-    )
-    project_jpg = os.path.join(wd, "project.jpg")
-    project_url = f"/api/sessions/{sid}/artifact/project.jpg" if os.path.isfile(project_jpg) else None
-
-    payload = {
-        "ok": True,
-        "session_id": sid,
-        "result": _json_safe_result(result),
-        "report_text": report_text,
-        "artifacts": {
-            "stereographic_jpg": stereo_url,
-            "stereographic_interactive_html": stereo_html_url,
-            "project_jpg": project_url,
-            "local_workdir": wd,
-        },
+    form: Dict[str, Any] = {
+        "workflow_name": workflow_name,
+        "cost_preset": cost_preset,
+        "double_interface": double_interface,
+        "execution": execution,
+        "lm_max_area": lm_max_area,
+        "lm_max_length_tol": lm_max_length_tol,
+        "lm_max_angle_tol": lm_max_angle_tol,
+        "lm_film_max_miller": lm_film_max_miller,
+        "lm_substrate_max_miller": lm_substrate_max_miller,
+        "st_film_thickness": st_film_thickness,
+        "st_substrate_thickness": st_substrate_thickness,
+        "st_termination_ftol": st_termination_ftol,
+        "st_vacuum_over_film": st_vacuum_over_film,
+        "opt_device": opt_device,
+        "opt_steps": opt_steps,
+        "do_mlip_gd": do_mlip_gd,
+        "relax_in_ratio": relax_in_ratio,
+        "relax_in_layers": relax_in_layers,
+        "fix_film_fraction": fix_film_fraction,
+        "fix_substrate_fraction": fix_substrate_fraction,
+        "set_relax_film_ang": set_relax_film_ang,
+        "set_relax_substrate_ang": set_relax_substrate_ang,
     }
+
+    payload = run_matris_session(film_bytes=film_bytes, substrate_bytes=sub_bytes, form=form)
+    payload = _artifacts_with_web_urls(payload)
+
+    if not payload.get("ok"):
+        return JSONResponse(status_code=500, content=payload)
+
     return JSONResponse(content=payload)
+
+
+@app.get("/api/sessions/{session_id}/poscars.zip")
+async def download_poscars_zip(session_id: str) -> FileResponse:
+    d = _safe_session_dir(session_id)
+    zpath = d / "pairs_poscars.zip"
+    if not zpath.is_file():
+        raise HTTPException(status_code=404, detail="pairs_poscars.zip not found; run local MLIP first.")
+    return FileResponse(zpath, filename="pairs_poscars.zip", media_type="application/zip")
 
 
 @app.get("/api/sessions/{session_id}/artifact/{name}")
 async def get_artifact(session_id: str, name: str) -> FileResponse:
-    """Serve files from the session directory (only basenames allowed)."""
     if name != os.path.basename(name) or ".." in name:
         raise HTTPException(status_code=400, detail="Invalid artifact name")
     allowed = {
@@ -248,8 +186,23 @@ async def get_artifact(session_id: str, name: str) -> FileResponse:
 def main() -> None:
     import argparse
 
+    try:
+        from InterOptimus.web.runtime_bootstrap import maybe_reexec_into_managed_venv
+
+        maybe_reexec_into_managed_venv()
+    except Exception as e:
+        print(
+            f"InterOptimus: managed venv bootstrap failed ({e}); continuing with {sys.executable}\n",
+            file=sys.stderr,
+            flush=True,
+        )
+
     p = argparse.ArgumentParser(description="InterOptimus web UI (MatRIS simple_iomaker)")
-    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument(
+        "--host",
+        default=os.environ.get("INTEROPTIMUS_WEB_HOST", "0.0.0.0"),
+        help="Bind address (default 0.0.0.0 for Cursor port-forward / LAN; set INTEROPTIMUS_WEB_HOST=127.0.0.1 to listen on localhost only).",
+    )
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--reload", action="store_true", help="Dev only: auto-reload on code changes")
     args = p.parse_args()

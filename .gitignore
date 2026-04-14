@@ -13,4 +13,6 @@ build/
 *.ckpt
 *.pth
 *.pth.tar
+# InterOptimus Desktop: this file is embedded in the PyInstaller .app; allow tracking for release builds.
+!desktop/bundled_home/.cache/matris/MatRIS_10M_OAM.pth.tar
 abstract.png

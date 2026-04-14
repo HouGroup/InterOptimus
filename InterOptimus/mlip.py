@@ -8,10 +8,9 @@ ORB, SevenNet, MatRIS, and DPA models, along with ASE optimizer configurations.
 import os
 from pathlib import Path
 
-from ase.filters import UnitCellFilter
 from ase.constraints import FixAtoms
+from ase.filters import UnitCellFilter
 from pymatgen.core.structure import Structure
-
 
 def default_mlip_checkpoint_dir() -> Path:
     """
@@ -292,7 +291,15 @@ class MlipCalc:
             model = user_settings.get('model', 'matris_10m_oam')
             task = user_settings.get('task', 'efsm')
             device = user_settings['device']
-            self.calc = MatRISCalculator(model=model, task=task, device=device)
+            cache_hint = Path.home() / ".cache" / "matris"
+            try:
+                self.calc = MatRISCalculator(model=model, task=task, device=device)
+            except EOFError as e:
+                raise RuntimeError(
+                    "MatRIS checkpoint looks truncated or corrupted (EOFError in torch.load). "
+                    f"Remove bad file(s) under {cache_hint} and restore a valid "
+                    "MatRIS_10M_OAM.pth.tar (e.g. from the packaged desktop bundle)."
+                ) from e
             print(f"MatRIS initialized with model={model}, task={task}, device={device}")
 
         elif calc == 'dpa':

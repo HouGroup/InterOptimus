@@ -14,6 +14,7 @@ import sys
 from datetime import datetime
 from dataclasses import dataclass, field, replace
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List, Literal, Callable
 from pymatgen.core.structure import Structure
 from ..jobflow import IOMaker
@@ -82,20 +83,107 @@ def _local_run_workdir(name: str) -> str:
     """
     return _slug(name, maxlen=128)
 
+
+def _gather_local_flow_diagnostics(workdir: str, max_total_chars: int = 16000) -> str:
+    """
+    After a failed ``run_locally``, collect tails of plausible log/text files under *workdir*.
+    """
+    root = Path(workdir)
+    if not root.is_dir():
+        return ""
+    skip_names = frozenset({"io_flow.json"})
+    parts: List[str] = []
+    used = 0
+    candidates: List[Path] = []
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        if p.name in skip_names or p.suffix.lower() in {".pkl", ".pickle"}:
+            continue
+        try:
+            sz = p.stat().st_size
+        except OSError:
+            continue
+        if sz > 400_000:
+            continue
+        nl = p.name.lower()
+        if any(
+            x in nl
+            for x in (".log", "err", "out", "trace", "stderr", "stdout", "queue", "exception")
+        ) or nl.endswith(".txt"):
+            candidates.append(p)
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    for p in candidates[:30]:
+        if used >= max_total_chars:
+            break
+        try:
+            rel = p.relative_to(root)
+        except ValueError:
+            rel = Path(p.name)
+        try:
+            raw = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        lines = raw.splitlines()
+        tail = "\n".join(lines[-100:]) if len(lines) > 100 else raw
+        if len(tail) > 5000:
+            tail = tail[-5000:]
+        chunk = f"=== {rel} (tail) ===\n{tail}\n"
+        if used + len(chunk) > max_total_chars:
+            chunk = chunk[: max(0, max_total_chars - used)]
+        if not chunk.strip():
+            continue
+        parts.append(chunk)
+        used += len(chunk)
+    if not parts:
+        try:
+            names = sorted(os.listdir(root))[:50]
+            return "No matching .log/.txt diagnostics; top-level entries: " + ", ".join(names)
+        except OSError:
+            return "Could not list run directory."
+    return "\n".join(parts)
+
+
 def _run_flow_locally(flow, workdir: str) -> None:
     """
     Run jobflow locally inside a specific working directory.
+
+    On failure, raises ``RuntimeError`` with Python traceback and snippets from files under
+    *workdir* (logs / small .txt), so UIs are not limited to jobflow's short message.
     """
+    import traceback
+
     os.makedirs(workdir, exist_ok=True)
     old_cwd = os.getcwd()
     try:
         os.chdir(workdir)
         try:
-            from jobflow import run_locally
-            run_locally(flow, create_folders=True, ensure_success=True)
-        except Exception:
-            from jobflow.managers.local import run_locally
-            run_locally(flow, create_folders=True, ensure_success=True)
+            from jobflow import run_locally as _run_locally
+        except ImportError:
+            from jobflow.managers.local import run_locally as _run_locally
+        try:
+            # jobflow default ``raise_immediately=False`` swallows job exceptions and only raises a
+            # generic "Flow did not finish running successfully" — useless for debugging. Prefer the
+            # real exception (MatRIS, OOM, etc.).
+            try:
+                _run_locally(
+                    flow,
+                    create_folders=True,
+                    ensure_success=True,
+                    raise_immediately=True,
+                )
+            except TypeError:
+                _run_locally(flow, create_folders=True, ensure_success=True)
+        except BaseException as e:
+            tb = traceback.format_exc()
+            diag = _gather_local_flow_diagnostics(workdir)
+            msg = f"{type(e).__name__}: {e}"
+            if e.__cause__ is not None:
+                msg += f"\n\n__cause__: {type(e.__cause__).__name__}: {e.__cause__}"
+            msg += f"\n\n--- Python traceback ---\n{tb}"
+            if diag.strip():
+                msg += f"\n\n--- Files under run directory ({workdir}) ---\n{diag}"
+            raise RuntimeError(msg) from e
     finally:
         os.chdir(old_cwd)
 

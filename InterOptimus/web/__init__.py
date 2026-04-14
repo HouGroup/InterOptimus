@@ -1,1 +1,1 @@
-"""Browser UI for ``run_simple_iomaker`` (MatRIS MLIP). Import ``InterOptimus.web.app:app`` or run ``interoptimus-web``."""
+"""HTTP UI for ``run_simple_iomaker`` (MatRIS MLIP): ``interoptimus-web`` / ``InterOptimus.web.app:app``. For a native GUI use ``interoptimus-desktop``."""

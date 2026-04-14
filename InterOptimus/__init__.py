@@ -9,8 +9,10 @@ def _configure_matplotlib_defaults() -> None:
     """Turn on tight layout for most figures; stereographic helpers opt out per-figure."""
     if os.environ.get("INTEROPTIMUS_NO_AUTO_LAYOUT", "").lower() in ("1", "true", "yes"):
         return
-    import matplotlib as mpl
-
+    try:
+        import matplotlib as mpl
+    except ImportError:
+        return
     mpl.rcParams["figure.autolayout"] = True
 
 

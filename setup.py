@@ -55,12 +55,16 @@ setup(
             "uvicorn[standard]>=0.22",
             "python-multipart>=0.0.6",
         ],
+        "desktop": [
+            "pyinstaller>=6.0",
+        ],
     },
     entry_points={
         "console_scripts": [
             "interoptimus-env=InterOptimus.agents.server_env:main",
             "interoptimus-simple=InterOptimus.agents.simple_iomaker:main",
             "interoptimus-web=InterOptimus.web.app:main",
+            "interoptimus-desktop=InterOptimus.desktop_app.entry:main",
         ],
     },
 )
