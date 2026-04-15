@@ -553,7 +553,13 @@ def plot_bcmk(mlips, name):
         Reads data from 'benchmk.pkl' and 'dft_output.pkl' files.
         Generates POSCAR files and creates comparison plots.
     """
-    mlip_name_dict = {'orb-models':'ORB', 'sevenn':'SevenNet', 'matris':'MatRIS', 'dpa':'DPA'}
+    mlip_name_dict = {
+        'orb-models': 'ORB',
+        'sevenn': 'SevenNet',
+        'matris': 'MatRIS',
+        'dpa': 'DPA',
+        'eqnorm': 'Eqnorm',
+    }
     with open('benchmk.pkl','rb') as f:
         bcdata = pickle.load(f)
 

@@ -1,11 +1,15 @@
 Portable "home" for InterOptimus Desktop
 ==========================================
 
-MatRIS weights ship **inside** the PyInstaller app under:
+Eqnorm / MLIP checkpoints ship **inside** the PyInstaller app under:
 
-  .cache/matris/MatRIS_10M_OAM.pth.tar
+  .cache/InterOptimus/checkpoints/eqnorm*.pt
 
-Put that file here before running `pyinstaller desktop/interoptimus_desktop.spec`.
-The spec requires it and embeds the whole `bundled_home/` tree in `InterOptimus.app`.
+Put the Eqnorm weight file here **or** under `~/.cache/InterOptimus/checkpoints/` before
+running `pyinstaller desktop/interoptimus_desktop.spec`. The spec copies from the user
+cache into this folder when packaging, then embeds the whole `bundled_home/` tree in
+`InterOptimus.app`.
 
-You may commit `MatRIS_10M_OAM.pth.tar` to this path (see root `.gitignore` exception) for release builds.
+See https://github.com/yzchen08/eqnorm for the model and dependencies.
+
+You may commit the bundled Eqnorm model to this path for release builds if desired.

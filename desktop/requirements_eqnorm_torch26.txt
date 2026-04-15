@@ -1,0 +1,8 @@
+# PyTorch 2.6.x — PyG 在 data.pyg.org 上索引齐全，macOS 上比 2.11+ 更省事。
+# Eqnorm 本身只要求 torch_geometric / e3nn 等，未锁 torch 大版本。
+#
+# 用法（在已激活的 conda 环境里）:
+#   pip install -r desktop/requirements_eqnorm_torch26.txt --force-reinstall
+#   python desktop/prep_pyg_stack.py --install
+#   python desktop/verify_torch_stack.py
+torch>=2.6.0,<2.7.0

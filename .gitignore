@@ -13,6 +13,11 @@ build/
 *.ckpt
 *.pth
 *.pth.tar
-# InterOptimus Desktop: this file is embedded in the PyInstaller .app; allow tracking for release builds.
+# InterOptimus Desktop: bundled MLIP checkpoints may be tracked for release builds.
 !desktop/bundled_home/.cache/matris/MatRIS_10M_OAM.pth.tar
+!desktop/bundled_home/.cache/InterOptimus/checkpoints/dpa*.pth
+!desktop/bundled_home/.cache/InterOptimus/checkpoints/dpa*.pt
+!desktop/bundled_home/.cache/InterOptimus/checkpoints/dpa*.pb
+!desktop/bundled_home/.cache/InterOptimus/checkpoints/eqnorm*.pt
+!desktop/bundled_home/.cache/InterOptimus/checkpoints/eqnorm*.pth
 abstract.png

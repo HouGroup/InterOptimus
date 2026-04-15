@@ -376,7 +376,7 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_
     equivalent_matches = []
     unique_areas = []
     ins_equi_match_identifier = equi_match_identifier(substrate, film, substrate_conv, film_conv)
-    from tqdm.notebook import tqdm
+    from tqdm.auto import tqdm
     with tqdm(total = len(matches), desc = "checking matching identity") as rgst_pbar:
         for i in range(len(matches)):
             angle_here = get_cos(matches[i].substrate_sl_vectors[0],\
@@ -468,7 +468,7 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_
     unique_areas = []
     #match_identifier = MatchIdentifier(substrate_conv, film_conv)
     emi = equi_match_identifier(substrate, film, substrate_conv, film_conv)
-    from tqdm.notebook import tqdm
+    from tqdm.auto import tqdm
     with tqdm(total = len(matches), desc = "checking matching identity") as rgst_pbar:
         for i in range(len(matches)):
             #normal_here = cross(matches[i].substrate_sl_vectors[0], matches[i].substrate_sl_vectors[1])
@@ -799,8 +799,6 @@ def plot_matching_data(matching_data, titles, save_filename, show_millers, show_
         special (bool): Special plotting mode flag
     """
     fig, ax = plt.subplots(1, 2, figsize=(20*1.25, 12*1.25))
-    # Opt out of global figure.autolayout (see InterOptimus.__init__): manual tight_layout below.
-    fig.set_layout_engine("none")
     #plt.rc('font', family='arial')
     #plt.rc('text', usetex=True)
     plt.subplots_adjust(wspace=0.01)
@@ -1332,20 +1330,19 @@ def _group_projected_points(planes, binding_energies, theta, x_proj, y_proj, rec
     grouped = []
     for indices in position_groups.values():
         upper_indices = [idx for idx in indices if theta[idx] <= np.pi / 2]
-        candidate_indices = upper_indices if upper_indices else indices
-        cand_arr = np.asarray(candidate_indices, dtype=int)
-        energies_here = binding_energies[cand_arr]
+        candidate_indices = np.array(upper_indices if upper_indices else indices, dtype=int)
+        energies_here = binding_energies[candidate_indices]
         finite = np.isfinite(energies_here)
         if not np.any(finite):
-            chosen_idx = int(cand_arr[0])
+            chosen_idx = int(candidate_indices[0])
         else:
-            sub_idx = cand_arr[finite]
+            sub_idx = candidate_indices[finite]
             sub_e = binding_energies[sub_idx]
             chosen_idx = int(sub_idx[int(np.argmin(sub_e))])
         grouped.append(
             {
                 "index": chosen_idx,
-                "record_indices": candidate_indices,
+                "record_indices": candidate_indices.tolist(),
             }
         )
     return grouped
@@ -1356,12 +1353,7 @@ def _rollup_dft_group_status(record_indices, dft_status_arr):
     Roll up per-record DFT export status for one stereographic group.
 
     Priority: any failed -> failed; else any pending -> pending; else complete.
-    ``mlip`` means no DFT was scheduled for that termination (show MLIP energy); treated like complete for coloring.
     When *dft_status_arr* is None, returns ``\"complete\"`` (legacy MLIP-only plots).
-
-    Note: stereographic *symbols* (colored dot vs ``?`` vs ``×``) do not use this rollup;
-    they use the **chosen representative** row only (see :func:`_stereo_symbol_class`), so a
-    failed neighbor at the same projection does not force ``×`` on a completed pair.
     """
     if dft_status_arr is None:
         return "complete"
@@ -1371,24 +1363,6 @@ def _rollup_dft_group_status(record_indices, dft_status_arr):
     if any(s == "pending" for s in statuses):
         return "pending"
     return "complete"
-
-
-def _stereo_symbol_class(chosen_idx: int, d_arr, ev: float) -> str:
-    """
-    Classify the *displayed* stereographic point after :func:`_group_projected_points`.
-
-    Returns ``\"color\"`` (finite γ colormap), ``\"pending`` (open circle + ``?``), or
-    ``\"failed`` (open circle + ``×``).
-    """
-    if d_arr is None:
-        return "color" if np.isfinite(ev) else "failed"
-    raw = d_arr[int(chosen_idx)]
-    st = str(raw).strip().lower() if raw is not None else "complete"
-    if st in ("complete", "mlip") and np.isfinite(ev):
-        return "color"
-    if st == "pending":
-        return "pending"
-    return "failed"
 
 
 def _compute_stereographic_guides(projected, tolerance=0.01):
@@ -1739,8 +1713,7 @@ def create_stereographic_plot(
     if d_arr is None:
         valid_mask &= np.isfinite(be)
     else:
-        # ``mlip`` = DFT was not scheduled for this termination; show MLIP energy (same as legacy MLIP-only).
-        valid_mask &= np.isin(d_arr, ["complete", "pending", "failed", "mlip"])
+        valid_mask &= np.isin(d_arr, ["complete", "pending", "failed"])
 
     x_proj = x_proj[valid_mask]
     y_proj = y_proj[valid_mask]
@@ -1774,17 +1747,17 @@ def create_stereographic_plot(
         xc = float(x_proj[chosen])
         yc = float(y_proj[chosen])
         ev = binding_energies_clean[chosen]
-        sym = _stereo_symbol_class(chosen, d_arr, float(ev))
-        if sym == "color":
+        roll = _rollup_dft_group_status(item["record_indices"], d_arr)
+        if roll == "complete" and np.isfinite(ev):
             x_c.append(xc)
             y_c.append(yc)
             e_c.append(float(ev))
-        elif sym == "pending":
-            x_p.append(xc)
-            y_p.append(yc)
-        else:
+        elif roll == "failed" or (roll == "complete" and not np.isfinite(ev)):
             x_f.append(xc)
             y_f.append(yc)
+        else:
+            x_p.append(xc)
+            y_p.append(yc)
 
     if e_c:
         if vmin is None or vmax is None:
@@ -1903,7 +1876,7 @@ def create_interactive_stereographic_plot(
     if d_arr is None:
         valid_mask &= np.isfinite(be)
     else:
-        valid_mask &= np.isin(d_arr, ["complete", "pending", "failed", "mlip"])
+        valid_mask &= np.isin(d_arr, ["complete", "pending", "failed"])
 
     x_proj = x_proj[valid_mask]
     y_proj = y_proj[valid_mask]
@@ -1947,21 +1920,21 @@ def create_interactive_stereographic_plot(
         xc = float(x_proj[chosen])
         yc = float(y_proj[chosen])
         ev = binding_energies_clean[chosen]
-        sym = _stereo_symbol_class(chosen, d_arr, float(ev))
+        roll = _rollup_dft_group_status(item["record_indices"], d_arr)
         ht0 = _hover_for_group(item["record_indices"])
-        if sym == "color":
+        if roll == "complete" and np.isfinite(ev):
             x_c.append(xc)
             y_c.append(yc)
             e_c.append(float(ev))
             h_c.append(ht0)
-        elif sym == "pending":
-            x_p.append(xc)
-            y_p.append(yc)
-            h_p.append(ht0 + "<br>DFT: pending / not finished")
-        else:
+        elif roll == "failed" or (roll == "complete" and not np.isfinite(ev)):
             x_f.append(xc)
             y_f.append(yc)
             h_f.append(ht0 + "<br>DFT: failed (no energy)")
+        else:
+            x_p.append(xc)
+            y_p.append(yc)
+            h_p.append(ht0 + "<br>DFT: pending / not finished")
 
     idxs = np.array([item["index"] for item in grouped], dtype=int)
     projected = np.column_stack([x_proj[idxs], y_proj[idxs]])
@@ -2080,7 +2053,7 @@ def plot_binding_energy_analysis(
     fin = np.isfinite(be)
     if dft_status is not None and len(dft_status) == len(be):
         ds = np.array([str(s).strip().lower() for s in dft_status], dtype=object)
-        fin &= np.isin(ds, ["complete", "mlip"])
+        fin &= ds == "complete"
     fe = be[fin]
     if fe.size:
         vmin, vmax = _shared_energy_color_limits(fe)
@@ -2089,8 +2062,6 @@ def plot_binding_energy_analysis(
 
     # Create figure - each subplot is 3x3, so total is 6x3
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(6, 3))
-    # Opt out of global figure.autolayout: colorbar uses fixed axes + tight_layout(rect=...).
-    fig.set_layout_engine("none")
 
     # Plot stereographic projection for material 1
     im1, scatter1 = create_stereographic_plot(
@@ -2146,7 +2117,7 @@ def plot_binding_energy_analysis_interactive(
     fin = np.isfinite(be)
     if dft_status is not None and len(dft_status) == len(be):
         ds = np.array([str(s).strip().lower() for s in dft_status], dtype=object)
-        fin &= np.isin(ds, ["complete", "mlip"])
+        fin &= ds == "complete"
     fe = be[fin]
     if fe.size:
         vmin, vmax = _shared_energy_color_limits(fe)
@@ -2248,4 +2219,8 @@ def visualize_minimization_results(film_name, substrate_name, title = 'Cohesive 
             f.write(html)
     except Exception as e:
         print(f"Warning: failed to write stereographic_interactive.html: {e}")
-    plt.show()
+    # Do not plt.show(): breaks headless / subprocess workflows and pops an extra GUI window.
+    try:
+        plt.close(fig)
+    except Exception:
+        pass

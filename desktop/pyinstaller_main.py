@@ -56,6 +56,17 @@ def _alert_macos(message: str) -> None:
 
 
 def main() -> None:
+    # InterOptimus._env sets OMP/MKL/MPLBACKEND before NumPy (via package __init__).
+    import InterOptimus  # noqa: F401
+
+    # Required for PyInstaller + multiprocessing (torch/deepmd/jobflow may spawn workers).
+    # Without this, a child re-exec of this binary falls through to app_main() and opens a second GUI.
+    try:
+        import multiprocessing
+
+        multiprocessing.freeze_support()
+    except Exception:
+        pass
     try:
         from InterOptimus.desktop_app.entry import main as app_main
 

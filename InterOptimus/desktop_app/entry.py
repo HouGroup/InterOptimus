@@ -1,9 +1,9 @@
 """
-InterOptimus Desktop: native Tkinter GUI for the MatRIS ``simple_iomaker`` workflow.
+InterOptimus Desktop: native Tkinter GUI for the local ``simple_iomaker`` workflow.
 
-Sets a portable ``HOME`` so MatRIS reads checkpoints from ``~/.cache/matris/`` (see ``MatRIS.load``).
+Sets a portable ``HOME`` so MLIP checkpoints resolve from the bundled cache layout.
 
-**Frozen (PyInstaller):** weights under ``bundled_home`` in the bundle are read-only under Finder;
+**Frozen (PyInstaller):** checkpoint files under ``bundled_home`` in the bundle are read-only under Finder;
 they are copied into the writable user data directory at startup.
 
 Usage::
@@ -20,8 +20,6 @@ import shutil
 import sys
 import traceback
 from pathlib import Path
-
-MATRIS_CKPT_NAME = "MatRIS_10M_OAM.pth.tar"
 
 
 def _real_user_home() -> Path:
@@ -80,34 +78,50 @@ def _find_bundle_bundled_home() -> Path | None:
         contents = exe.parent.parent
         if contents.name == "Contents":
             for bh in contents.rglob("bundled_home"):
-                if bh.is_dir() and (bh / ".cache" / "matris" / MATRIS_CKPT_NAME).is_file():
+                if bh.is_dir():
                     return bh
     except OSError:
         pass
     for base in (exe.parent, exe.parent.parent):
         cand = base / "bundled_home"
-        if (cand / ".cache" / "matris" / MATRIS_CKPT_NAME).is_file():
+        if cand.is_dir():
             return cand
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         mp = Path(meipass)
         for cand in (mp / "bundled_home", mp.parent / "bundled_home"):
-            if (cand / ".cache" / "matris" / MATRIS_CKPT_NAME).is_file():
+            if cand.is_dir():
                 return cand
     return None
 
 
-def _sync_matris_checkpoint(bundle_bundled_home: Path, dst_home: Path) -> None:
-    """Copy checkpoint from read-only bundle into writable HOME if needed."""
-    src = bundle_bundled_home / ".cache" / "matris" / MATRIS_CKPT_NAME
-    if not src.is_file():
+def _sync_tree_if_present(src_root: Path, dst_root: Path) -> None:
+    """Copy files from *src_root* into *dst_root* when the source exists."""
+    if not src_root.exists():
         return
-    dst_dir = dst_home / ".cache" / "matris"
-    dst_dir.mkdir(parents=True, exist_ok=True)
-    dst = dst_dir / MATRIS_CKPT_NAME
-    if dst.is_file() and dst.stat().st_size == src.stat().st_size:
+    if src_root.is_file():
+        dst_root.parent.mkdir(parents=True, exist_ok=True)
+        if dst_root.is_file() and dst_root.stat().st_size == src_root.stat().st_size:
+            return
+        shutil.copy2(src_root, dst_root)
         return
-    shutil.copy2(src, dst)
+    for src in src_root.rglob("*"):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(src_root)
+        dst = dst_root / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if dst.is_file() and dst.stat().st_size == src.stat().st_size:
+                continue
+        except OSError:
+            pass
+        shutil.copy2(src, dst)
+
+
+def _sync_bundled_checkpoints(bundle_bundled_home: Path, dst_home: Path) -> None:
+    """Copy bundled MLIP checkpoints into writable HOME for frozen desktop runs."""
+    _sync_tree_if_present(bundle_bundled_home / ".cache" / "InterOptimus" / "checkpoints", dst_home / ".cache" / "InterOptimus" / "checkpoints")
 
 
 def bundled_home_path() -> Path:
@@ -134,17 +148,30 @@ def _apply_portable_home(home: Path) -> None:
     os.environ.setdefault("INTEROPTIMUS_WEB_SESSIONS", str(home / ".interoptimus" / "web_sessions"))
 
 
-def main() -> None:
+def _prepare_portable_home() -> None:
     if getattr(sys, "frozen", False):
         bundle_bh = _find_bundle_bundled_home()
         home = _writable_home_frozen()
         _apply_portable_home(home)
         if bundle_bh is not None:
-            _sync_matris_checkpoint(bundle_bh, home)
+            _sync_bundled_checkpoints(bundle_bh, home)
     else:
         home = bundled_home_path()
         _apply_portable_home(home)
 
+
+def main() -> None:
+    # PyInstaller bootloader is not a real CPython: ``sys.executable -m pkg.mod`` does not run
+    # ``pkg.mod``. The GUI subprocess must use ``--interoptimus-worker <config.json>`` instead.
+    if len(sys.argv) >= 3 and sys.argv[1] == "--interoptimus-worker":
+        _prepare_portable_home()
+        from InterOptimus.desktop_app.worker import main as worker_main
+
+        sys.argv = [sys.argv[0], sys.argv[2]]
+        worker_main()
+        return
+
+    _prepare_portable_home()
     from InterOptimus.desktop_app.gui import run_gui
 
     run_gui()

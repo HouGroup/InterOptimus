@@ -53,8 +53,6 @@ def _write_opt_results_summary_json(cwd: str, opt_results: Dict) -> None:
             "relaxed_min_bd_E",
             "film_atom_count",
             "substrate_atom_count",
-            "match_area",
-            "strain",
         ):
             if name not in d or d[name] is None:
                 continue
@@ -311,9 +309,9 @@ def _write_remote_io_summaries(
         lines_md.append("_No rows._")
     else:
         lines_md.append(
-            "| match | term | film Miller | sub Miller | energy type | energy | film atoms | sub atoms | match_area | strain |"
+            "| match | term | film Miller | sub Miller | energy type | energy | film atoms | sub atoms |"
         )
-        lines_md.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+        lines_md.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
         for item in pairs_summary:
             if "interface_energy" in item:
                 et, ev = "interface_energy", item.get("interface_energy")
@@ -328,8 +326,6 @@ def _write_remote_io_summaries(
                 ev,
                 item.get("film_atom_count"),
                 item.get("substrate_atom_count"),
-                item.get("match_area"),
-                item.get("strain"),
             ]
             esc = [str(x).replace("|", "\\|") for x in row]
             lines_md.append("| " + " | ".join(esc) + " |")
@@ -718,9 +714,6 @@ class IOMaker(Maker):
                         substrate_atoms = len(sample_it.substrate)
                 except Exception:
                     pass
-            _od = iw.opt_results.get((i, j), {}) or {}
-            _ma = _od.get("match_area")
-            _st = _od.get("strain")
             pairs_summary.append(
                 {
                     "match_id": i,
@@ -730,8 +723,6 @@ class IOMaker(Maker):
                     energy_label: energy,
                     "film_atom_count": film_atoms,
                     "substrate_atom_count": substrate_atoms,
-                    "match_area": _ma,
-                    "strain": _st,
                 }
             )
 
@@ -747,8 +738,6 @@ class IOMaker(Maker):
                     "energy_value",
                     "film_atom_count",
                     "substrate_atom_count",
-                    "match_area",
-                    "strain",
                 ]
                 f.write("\t".join(headers) + "\n")
                 for item in pairs_summary:
@@ -768,8 +757,6 @@ class IOMaker(Maker):
                         str(energy_value),
                         str(item.get("film_atom_count")),
                         str(item.get("substrate_atom_count")),
-                        str(item.get("match_area")),
-                        str(item.get("strain")),
                     ]
                     f.write("\t".join(row) + "\n")
         except Exception:
@@ -976,7 +963,7 @@ def check_it_phase_stability(film_conv, substrate_conv, device='cpu',
                                                         fmax=0.5,
                                                         steps=500,
                                                         n_calls=30,
-                                                        calc='sevenn'):
+                                                        calc='eqnorm'):
     """
     Evaluate interface phase stability using MLIP optimization.
 
@@ -991,7 +978,7 @@ def check_it_phase_stability(film_conv, substrate_conv, device='cpu',
         fmax (float): Maximum force threshold for relaxation
         steps (int): Maximum steps for geometry optimization
         n_calls (int): Number of optimization calls for interface registration
-        calc (str): MLIP calculator to use ('sevenn', 'orb-models', 'matris', 'dpa', etc.)
+        calc (str): MLIP calculator to use (``eqnorm`` in this build)
 
     Returns:
         dict: Results containing:

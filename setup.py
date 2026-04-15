@@ -16,7 +16,7 @@ setup(
     url="https://github.com/HouGroup/InterOptimus/",
     license="MIT",
     packages=find_packages(exclude=("tests", "test", "new_test")),
-    package_data={"InterOptimus.web": ["static/index.html"]},
+    package_data={},
     include_package_data=True,
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -41,13 +41,9 @@ setup(
         "jobflow-remote",
         "qtoolkit",
         "adjustText",
-        "ipywidgets",
         "tqdm",
-        "mp-api",
-        "orb-models",
-        "sevenn",
-        "deepmd-kit",
         "torch",
+        "eqnorm @ git+https://github.com/yzchen08/eqnorm.git",
     ],
     extras_require={
         "web": [
@@ -58,12 +54,16 @@ setup(
         "desktop": [
             "pyinstaller>=6.0",
         ],
+        # Eqnorm + PyG on macOS: PyTorch 2.11+ 常与 PyG 预编译轮子的索引/ABI 踩坑；2.6.x 更稳。
+        # 用法: pip install -e ".[eqnorm-torch26]" 或见 desktop/install_eqnorm_torch26.sh
+        "eqnorm-torch26": [
+            "torch>=2.6.0,<2.7.0",
+        ],
     },
     entry_points={
         "console_scripts": [
             "interoptimus-env=InterOptimus.agents.server_env:main",
             "interoptimus-simple=InterOptimus.agents.simple_iomaker:main",
-            "interoptimus-web=InterOptimus.web.app:main",
             "interoptimus-desktop=InterOptimus.desktop_app.entry:main",
         ],
     },

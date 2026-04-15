@@ -1,13 +1,20 @@
 """
-Subprocess entry for MatRIS workflow: allows the GUI to terminate the child process on cancel.
+Subprocess entry for the Eqnorm IOMaker workflow: allows the GUI to terminate the child process on cancel.
 
-Run as: python -m InterOptimus.desktop_app.worker <config.json>
+Run as: ``python -m InterOptimus.desktop_app.worker <config.json>`` (dev) or
+``<frozen exe> --interoptimus-worker <config.json>`` (PyInstaller).
 
 - Progress (print/tqdm from dependencies) goes to **stderr** so the GUI can stream it live.
-- Final result JSON is written to **real stdout** only (one line), so the parent can parse it.
+- Final result JSON is one line on stdout **and** (when set) ``INTEROPTIMUS_WORKER_RESULT`` for the GUI parent.
+
+**Critical:** BLAS/OpenMP and ``MPLBACKEND`` are applied in :mod:`InterOptimus._env` via
+``import InterOptimus`` (see package ``__init__``). This module imports that package first
+so odd launch paths still initialize safely before NumPy/PyTorch.
 """
 
 from __future__ import annotations
+
+import InterOptimus  # noqa: F401
 
 import json
 import os
@@ -15,13 +22,45 @@ import sys
 import traceback
 from pathlib import Path
 
-# Original process stdout (FD 1) — never redirect this away from _emit
-_REAL_STDOUT = getattr(sys, "__stdout__", sys.stdout)
+
+def _write_result_line_to_stdout_pipe(line: str) -> None:
+    """
+    Write the final JSON line to the OS stdout file descriptor (fd 1).
+
+    In frozen (PyInstaller) subprocesses, ``sys.__stdout__`` may not be the same stream as fd 1
+    that the parent ``Popen(..., stdout=PIPE)`` reads. Always use fd 1 so the GUI receives the line.
+    """
+    data = line.encode("utf-8", errors="replace")
+    try:
+        n = 0
+        while n < len(data):
+            k = os.write(1, data[n:])
+            if k <= 0:
+                break
+            n += k
+    except OSError:
+        # Last resort: best-effort on whatever Python thinks stdout is
+        try:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+
+def _finalize_result_line(line: str) -> None:
+    """Emit one JSON line to stdout (fd 1) and optionally to a file for the parent process."""
+    _write_result_line_to_stdout_pipe(line)
+    outp = (os.environ.get("INTEROPTIMUS_WORKER_RESULT") or "").strip()
+    if outp:
+        try:
+            Path(outp).write_text(line, encoding="utf-8")
+        except OSError:
+            pass
 
 
 def _emit(obj: dict, *, rc: int = 0) -> None:
-    _REAL_STDOUT.write(json.dumps(obj, default=str, ensure_ascii=False) + "\n")
-    _REAL_STDOUT.flush()
+    line = json.dumps(obj, default=str, ensure_ascii=False) + "\n"
+    _finalize_result_line(line)
     if rc:
         sys.exit(rc)
 
@@ -64,9 +103,9 @@ def main() -> None:
     _saved_stdout = sys.stdout
     sys.stdout = sys.stderr
     try:
-        from InterOptimus.web.local_workflow import run_matris_session
+        from InterOptimus.web.local_workflow import run_eqnorm_session
 
-        out = run_matris_session(film_cif_path=film, substrate_cif_path=sub, form=form)
+        out = run_eqnorm_session(film_cif_path=film, substrate_cif_path=sub, form=form)
     except Exception as e:
         sys.stdout = _saved_stdout
         _emit(
@@ -80,7 +119,16 @@ def main() -> None:
         )
     else:
         sys.stdout = _saved_stdout
-        _emit(out, rc=0)
+        if not isinstance(out, dict):
+            _emit(
+                {
+                    "ok": False,
+                    "error": f"run_eqnorm_session returned {type(out).__name__}, expected dict",
+                },
+                rc=1,
+            )
+        else:
+            _emit(out, rc=0)
 
 
 if __name__ == "__main__":
@@ -89,7 +137,7 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as e:
-        _REAL_STDOUT.write(
+        _finalize_result_line(
             json.dumps(
                 {
                     "ok": False,
@@ -102,5 +150,4 @@ if __name__ == "__main__":
             )
             + "\n"
         )
-        _REAL_STDOUT.flush()
         sys.exit(1)

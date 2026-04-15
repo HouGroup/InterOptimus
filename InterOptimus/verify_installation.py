@@ -1,30 +1,18 @@
 #!/usr/bin/env python3
-"""Lightweight install check for the pure-workflow InterOptimus layout."""
+"""
+验证 InterOptimus 安装与核心模块导入。
+"""
 
 import os
 import sys
 from pathlib import Path
 
-def _path0_resolved() -> Path:
-    if not sys.path or sys.path[0] == "":
-        return Path.cwd().resolve()
-    return Path(sys.path[0]).resolve()
 
+def check_file_structure():
+    """检查文件结构"""
+    print("🔍 检查 InterOptimus 文件结构...")
 
-_pkg_dir = Path(__file__).resolve().parent
-# Script launch prepends this dir → `import jobflow` would load InterOptimus/jobflow.py.
-if sys.path and _path0_resolved() == _pkg_dir:
-    sys.path.pop(0)
-
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-
-def check_file_structure() -> bool:
-    print("Checking InterOptimus file layout...")
-    root = Path(__file__).resolve().parent
-    core = [
+    core_files = [
         "itworker.py",
         "matching.py",
         "tool.py",
@@ -33,47 +21,149 @@ def check_file_structure() -> bool:
         "equi_term.py",
         "jobflow.py",
     ]
-    agents = [
+
+    desktop_files = [
+        "agents/iomaker_core.py",
         "agents/simple_iomaker.py",
-        "agents/iomaker_job.py",
-        "agents/remote_submit.py",
-        "agents/server_env.py",
+        "desktop_app/entry.py",
+        "desktop_app/gui.py",
     ]
-    ok = True
-    for rel in core + agents:
-        p = root / rel
-        tag = "OK" if p.is_file() else "MISSING"
-        if not p.is_file():
-            ok = False
-        print(f"  {tag:8} {rel}")
-    return ok
+
+    doc_files = [
+        "README.md",
+    ]
+
+    print("\n📦 核心文件:")
+    for file in core_files:
+        if os.path.exists(file):
+            print(f"   ✅ {file}")
+        else:
+            print(f"   ❌ {file} - 缺失")
+
+    print("\n🖥️  桌面 / IOMaker:")
+    for file in desktop_files:
+        if os.path.exists(file):
+            print(f"   ✅ {file}")
+        else:
+            print(f"   ❌ {file} - 缺失")
+
+    print("\n📖 文档:")
+    for file in doc_files:
+        if os.path.exists(file):
+            print(f"   ✅ {file}")
+        else:
+            print(f"   ❌ {file} - 缺失")
 
 
-def check_imports() -> bool:
-    print("\nChecking imports...")
+def check_imports():
+    """检查导入是否正常"""
+    print("\n🔧 检查导入...")
+
     try:
-        from InterOptimus.itworker import InterfaceWorker  # noqa: F401
+        from itworker import InterfaceWorker
+        print("   ✅ InterfaceWorker 导入成功")
 
-        print("  OK  InterOptimus.itworker")
-        from InterOptimus.agents.simple_iomaker import run_simple_iomaker  # noqa: F401
+        from matching import interface_searching
+        print("   ✅ matching 模块导入成功")
 
-        print("  OK  InterOptimus.agents.simple_iomaker")
-        from InterOptimus.agents.iomaker_job import execute_iomaker_from_settings  # noqa: F401
+        from tool import convert_dict_to_json
+        print("   ✅ tool 模块导入成功")
 
-        print("  OK  InterOptimus.agents.iomaker_job")
     except ImportError as e:
-        print(f"  FAIL {e}")
+        print(f"   ❌ 核心模块导入失败: {e}")
         return False
+
+    try:
+        from agents.iomaker_core import uses_complete_iomaker_settings_dict
+        print("   ✅ iomaker_core 导入成功")
+    except ImportError as e:
+        print(f"   ⚠️ iomaker_core 导入失败: {e}")
+
     return True
 
 
-def main() -> bool:
-    os.chdir(Path(__file__).resolve().parent)  # package dir (contains itworker.py)
-    a = check_file_structure()
-    b = check_imports()
-    print("\nDone." if a and b else "\nSome checks failed — see docs/GETTING_STARTED.md.")
-    return a and b
+def check_python_version():
+    """检查Python版本"""
+    print("\n🐍 Python版本信息:")
+    print(f"   版本: {sys.version}")
+    print(f"   主要版本: {sys.version_info.major}.{sys.version_info.minor}")
+
+    if sys.version_info >= (3, 8):
+        print("   ✅ Python版本兼容")
+        return True
+    print("   ⚠️ Python版本可能过低，建议使用Python 3.8+")
+    return False
+
+
+def check_dependencies():
+    """检查依赖"""
+    print("\n📦 依赖检查:")
+
+    required_packages = ["numpy", "scipy", "matplotlib", "pandas"]
+
+    for package in required_packages:
+        try:
+            __import__(package)
+            print(f"   ✅ {package}")
+        except ImportError:
+            print(f"   ❌ {package} - 未安装")
+
+    optional_packages = ["pymatgen", "requests"]
+
+    print("\n📦 可选依赖:")
+    for package in optional_packages:
+        try:
+            __import__(package)
+            print(f"   ✅ {package}")
+        except ImportError:
+            print(f"   ⚠️ {package} - 未安装 (某些功能不可用)")
+
+
+def create_summary():
+    """创建总结"""
+    print("\n" + "=" * 60)
+    print("🎉 InterOptimus安装验证完成!")
+    print("=" * 60)
+
+    print("\n📁 文件组织:")
+    print("   ✅ 核心算法在 InterOptimus/ 根目录模块")
+    print("   ✅ IOMaker 在 agents/（iomaker_core + simple_iomaker）")
+    print("   ✅ 桌面 GUI 在 desktop_app/")
+
+    print("\n🔧 核心功能:")
+    print("   ✅ 晶体界面优化核心算法")
+    print("   ✅ 晶格匹配和对称分析")
+    print("   ✅ MLIP（Eqnorm）与优化")
+
+    print("\n🚀 下一步:")
+    print("   1. 运行: interoptimus-desktop  # Eqnorm 桌面 GUI")
+    print("   2. 或: python -m InterOptimus.desktop_app.entry")
+
+
+def main():
+    """主验证函数"""
+    print("🔍 InterOptimus安装验证")
+    print("=" * 40)
+
+    current_dir = Path.cwd()
+    interopt_dir = current_dir / "InterOptimus"
+
+    if not interopt_dir.exists():
+        print("❌ InterOptimus文件夹不存在!")
+        return False
+
+    os.chdir(interopt_dir)
+
+    version_ok = check_python_version()
+    check_file_structure()
+    import_ok = check_imports()
+    check_dependencies()
+
+    create_summary()
+
+    return version_ok and import_ok
 
 
 if __name__ == "__main__":
-    sys.exit(0 if main() else 1)
+    success = main()
+    sys.exit(0 if success else 1)

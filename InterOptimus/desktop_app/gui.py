@@ -1,5 +1,5 @@
 """
-Native Tkinter GUI for the MatRIS ``simple_iomaker`` workflow (no browser / no FastAPI).
+Native Tkinter GUI for the Eqnorm ``simple_iomaker`` workflow (no browser).
 """
 
 from __future__ import annotations
@@ -74,8 +74,8 @@ def _silence_macos_tk_stderr_noise() -> None:
 
 STRINGS: Dict[str, Dict[str, str]] = {
     "zh": {
-        "app_title": "InterOptimus · MatRIS",
-        "header_subtitle": "MatRIS / IOMaker 工作流 · 本地计算",
+        "app_title": "InterOptimus · Eqnorm",
+        "header_subtitle": "Eqnorm / IOMaker 工作流 · 本地计算",
         "lang": "语言 Language",
         "cif_files": "CIF 文件",
         "film_cif": "薄膜 film.cif",
@@ -84,12 +84,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "tab_basic": "基本",
         "tab_lm": "点阵匹配",
         "tab_structure": "结构",
-        "tab_opt": "优化 (MatRIS)",
+        "tab_opt": "优化 (Eqnorm)",
         "tab_advanced": "高级选项",
         "adv_hint": "以下为可选 MLIP / 全局优化参数；留空则使用成本预设与默认值。",
-        "adv_ckpt_path": "ckpt_path（MatRIS 权重）",
-        "adv_matris_model": "MatRIS model",
-        "adv_matris_task": "MatRIS task",
+        "adv_ckpt_path": "ckpt_path（Eqnorm *.pt / MLIP 权重）",
+        "adv_eqnorm_variant": "Eqnorm model_variant（默认 eqnorm-mptrj）",
         "adv_fmax": "fmax（弛豫力收敛）",
         "adv_discut": "discut（近邻截断，Å）",
         "adv_gd_tol": "gd_tol（梯度下降收敛）",
@@ -102,6 +101,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "adv_bo_energy_bin": "BO_energy_bin_size",
         "adv_bo_rms_bin": "BO_rms_bin_size",
         "workflow_name": "工作流名称",
+        "mlip_calc": "MLIP（固定 Eqnorm）",
         "cost_preset": "成本预设",
         "double_interface": "双界面模型 (double_interface)",
         "lm_max_area": "max_area",
@@ -143,8 +143,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "viz_enable": "实时可视化（贝叶斯 + 结构优化，需 matplotlib）",
     },
     "en": {
-        "app_title": "InterOptimus · MatRIS",
-        "header_subtitle": "MatRIS / IOMaker workflow · local run",
+        "app_title": "InterOptimus · Eqnorm",
+        "header_subtitle": "Eqnorm / IOMaker workflow · local run",
         "lang": "Language 语言",
         "cif_files": "CIF files",
         "film_cif": "Film film.cif",
@@ -153,12 +153,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "tab_basic": "Basic",
         "tab_lm": "Lattice match",
         "tab_structure": "Structure",
-        "tab_opt": "Optimization (MatRIS)",
+        "tab_opt": "Optimization (Eqnorm)",
         "tab_advanced": "Advanced",
         "adv_hint": "Optional MLIP / global optimization parameters; leave blank to use cost preset defaults.",
-        "adv_ckpt_path": "ckpt_path (MatRIS weights)",
-        "adv_matris_model": "MatRIS model",
-        "adv_matris_task": "MatRIS task",
+        "adv_ckpt_path": "ckpt_path (Eqnorm *.pt / MLIP checkpoint)",
+        "adv_eqnorm_variant": "Eqnorm model_variant (default eqnorm-mptrj)",
         "adv_fmax": "fmax (relaxation)",
         "adv_discut": "discut (neighbor cutoff, Å)",
         "adv_gd_tol": "gd_tol (GD convergence)",
@@ -171,6 +170,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "adv_bo_energy_bin": "BO_energy_bin_size",
         "adv_bo_rms_bin": "BO_rms_bin_size",
         "workflow_name": "Workflow name",
+        "mlip_calc": "MLIP (Eqnorm only)",
         "cost_preset": "Cost preset",
         "double_interface": "Double-interface model",
         "lm_max_area": "max_area",
@@ -228,7 +228,7 @@ class InterOptimusGui:
 
         self._film = tk.StringVar()
         self._sub = tk.StringVar()
-        self._workflow = tk.StringVar(value="IO_web_matris")
+        self._workflow = tk.StringVar(value="IO_web_eqnorm")
         self._cost = tk.StringVar(value="medium")
         self._double_if = tk.BooleanVar(value=True)
 
@@ -254,8 +254,7 @@ class InterOptimusGui:
         self._opt_srs = tk.StringVar(value="0")
 
         self._adv_ckpt = tk.StringVar(value="")
-        self._adv_matris_model = tk.StringVar(value="")
-        self._adv_matris_task = tk.StringVar(value="")
+        self._adv_eqnorm_variant = tk.StringVar(value="")
         self._adv_fmax = tk.StringVar(value="")
         self._adv_discut = tk.StringVar(value="")
         self._adv_gd_tol = tk.StringVar(value="")
@@ -480,6 +479,12 @@ class InterOptimusGui:
         self._i18n_widgets.append((ch_di, "double_interface", lambda w, s: w.config(text=s)))
         row += 1
 
+        lb_mc = ttk.Label(t_basic, text=self.t("mlip_calc"))
+        lb_mc.grid(row=row, column=0, sticky="w", padx=10, pady=4)
+        self._i18n_widgets.append((lb_mc, "mlip_calc", lambda w, s: w.config(text=s)))
+        ttk.Label(t_basic, text="eqnorm", foreground=self._muted).grid(row=row, column=1, sticky="w", padx=10, pady=4)
+        row += 1
+
         t_lm = ttk.Frame(self._notebook, style="Main.TFrame")
         self._notebook.add(t_lm, text=self.t("tab_lm"))
         lm_fields = [
@@ -575,8 +580,7 @@ class InterOptimusGui:
 
         adv_rows: List[Tuple[str, tk.StringVar, int]] = [
             ("adv_ckpt_path", self._adv_ckpt, 52),
-            ("adv_matris_model", self._adv_matris_model, 28),
-            ("adv_matris_task", self._adv_matris_task, 28),
+            ("adv_eqnorm_variant", self._adv_eqnorm_variant, 28),
             ("adv_fmax", self._adv_fmax, 14),
             ("adv_discut", self._adv_discut, 14),
             ("adv_gd_tol", self._adv_gd_tol, 14),
@@ -731,6 +735,7 @@ class InterOptimusGui:
     def _collect_form(self) -> Dict[str, Any]:
         return {
             "workflow_name": self._workflow.get(),
+            "mlip_calc": "eqnorm",
             "cost_preset": self._cost.get(),
             "double_interface": _bool_to_str(self._double_if.get()),
             "execution": "local",
@@ -753,8 +758,7 @@ class InterOptimusGui:
             "set_relax_film_ang": self._opt_srf.get(),
             "set_relax_substrate_ang": self._opt_srs.get(),
             "adv_ckpt_path": self._adv_ckpt.get(),
-            "adv_matris_model": self._adv_matris_model.get(),
-            "adv_matris_task": self._adv_matris_task.get(),
+            "adv_eqnorm_variant": self._adv_eqnorm_variant.get(),
             "adv_fmax": self._adv_fmax.get(),
             "adv_discut": self._adv_discut.get(),
             "adv_gd_tol": self._adv_gd_tol.get(),
@@ -805,7 +809,9 @@ class InterOptimusGui:
             except Exception:
                 viz_path = None
 
-        fd, path = tempfile.mkstemp(suffix=".json", prefix="io_matris_")
+        fd, path = tempfile.mkstemp(suffix=".json", prefix="io_eqnorm_")
+        rfd, worker_result_path = tempfile.mkstemp(suffix=".json", prefix="io_worker_result_")
+        os.close(rfd)
         try:
             cfg_obj: Dict[str, Any] = {"film": fp, "sub": sp, "form": form}
             if viz_path:
@@ -814,6 +820,10 @@ class InterOptimusGui:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(cfg_obj, f, ensure_ascii=False)
         except OSError as e:
+            try:
+                os.unlink(worker_result_path)
+            except OSError:
+                pass
             messagebox.showerror(self.t("app_title"), str(e))
             return
 
@@ -839,13 +849,25 @@ class InterOptimusGui:
         if self._stop_btn:
             self._stop_btn.config(state="normal")
 
-        cmd = [sys.executable, "-u", "-m", "InterOptimus.desktop_app.worker", path]
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--interoptimus-worker", path]
+        else:
+            cmd = [sys.executable, "-u", "-m", "InterOptimus.desktop_app.worker", path]
 
         def work() -> None:
             proc: Optional[subprocess.Popen[str]] = None
             try:
                 env = os.environ.copy()
+                try:
+                    from InterOptimus.desktop_app.runtime_env import apply_worker_env
+
+                    apply_worker_env(env)
+                except Exception:
+                    pass
                 env.setdefault("PYTHONUNBUFFERED", "1")
+                env["INTEROPTIMUS_WORKER_RESULT"] = worker_result_path
+                # Avoid matplotlib opening extra native plot windows in the worker (plt.show / default backend).
+                env.setdefault("MPLBACKEND", "Agg")
                 if viz_path:
                     env["INTEROPTIMUS_VIZ_LOG"] = viz_path
                     env["INTEROPTIMUS_VIZ_ENABLE"] = "1"
@@ -862,6 +884,7 @@ class InterOptimusGui:
                     self._proc = proc
 
                 assert proc.stderr is not None
+                assert proc.stdout is not None
 
                 def pump_stderr() -> None:
                     for line in iter(proc.stderr.readline, ""):
@@ -869,13 +892,27 @@ class InterOptimusGui:
                             break
                         self.root.after(0, lambda l=line: self._log_insert(l))
 
+                stdout_parts: list[str] = []
+
+                def pump_stdout() -> None:
+                    # Drain stdout while the child runs so native code writing to fd 1 cannot fill
+                    # the pipe buffer and deadlock the worker before it emits the final JSON line.
+                    while True:
+                        chunk = proc.stdout.read(65536)
+                        if not chunk:
+                            break
+                        stdout_parts.append(chunk)
+
                 stderr_thread = threading.Thread(target=pump_stderr, daemon=True)
                 stderr_thread.start()
+                stdout_thread = threading.Thread(target=pump_stdout, daemon=True)
+                stdout_thread.start()
 
                 rc = proc.wait()
                 stderr_thread.join(timeout=60.0)
+                stdout_thread.join(timeout=60.0)
 
-                out = proc.stdout.read() if proc.stdout else ""
+                out = "".join(stdout_parts)
                 err = ""
                 with self._proc_lock:
                     self._proc = None
@@ -892,9 +929,20 @@ class InterOptimusGui:
                     self.root.after(0, self._on_cancelled)
                     return
 
+                # Worker writes JSON to INTEROPTIMUS_WORKER_RESULT (reliable in PyInstaller); stdout is fallback.
+                text = ""
+                try:
+                    if os.path.isfile(worker_result_path):
+                        text = (
+                            Path(worker_result_path).read_text(encoding="utf-8", errors="replace") or ""
+                        ).strip()
+                except OSError:
+                    text = ""
+                if not text:
+                    text = (out or "").strip()
+
                 # Worker prints one JSON object to stdout even when ok=False (non-zero exit code).
                 # Parse JSON before treating rc != 0 as a hard subprocess failure.
-                text = (out or "").strip()
                 payload: Optional[Dict[str, Any]] = None
                 try:
                     payload = json.loads(text)
@@ -924,6 +972,11 @@ class InterOptimusGui:
                     self._proc = None
                 self.root.after(0, lambda: self._on_error(e))
             finally:
+                try:
+                    if os.path.isfile(worker_result_path):
+                        os.unlink(worker_result_path)
+                except OSError:
+                    pass
                 self.root.after(0, lambda: setattr(self, "_viz_poll_active", False))
 
         threading.Thread(target=work, daemon=True).start()

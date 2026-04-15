@@ -1,3 +1,0 @@
-# Legacy filename kept for bookmarks. SSH-based remote submission was removed from the LLM pipeline.
-# Use `submit_target="server"` on the cluster login node with jobflow-remote (`jf`).
-# No extra packages are required here beyond the main InterOptimus install.

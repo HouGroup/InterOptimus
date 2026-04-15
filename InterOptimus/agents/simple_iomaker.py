@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-No-LLM IOMaker: build ``io_flow.json`` from JSON/YAML.
+JSON/YAML-driven IOMaker: build ``io_flow.json`` from a config file.
 
 Preferred input shape::
 
@@ -34,17 +34,16 @@ from typing import Any, Callable, Dict, Optional
 
 from qtoolkit.core.data_objects import QResources
 
-from .iomaker_job import (
+from .iomaker_core import (
     BaseBuildConfig,
     DEFAULT_FILM_CIF,
     DEFAULT_SUBSTRATE_CIF,
     LocalBuildConfig,
-    ServerBuildConfig,
     TUTORIAL_WITHOUT_VACUUM,
     TUTORIAL_WITH_VACUUM,
     execute_iomaker_from_settings,
     normalize_iomaker_settings_from_full_dict,
-    uses_full_llm_style_settings_dict,
+    uses_complete_iomaker_settings_dict,
 )
 
 
@@ -582,7 +581,7 @@ def _validate_simple_config(flat: Dict[str, Any]) -> None:
     if not isinstance(st, dict):
         raise TypeError("config must include a dict 'settings' with full IOMaker parameters.")
 
-    if not uses_full_llm_style_settings_dict(st):
+    if not uses_complete_iomaker_settings_dict(st):
         raise ValueError(
             "simple_iomaker requires a **complete** `settings` object "
             "(name, mode, inputs, lattice_matching_settings, structure_settings, "
@@ -651,7 +650,7 @@ def _make_mlip_resources(
 
 
 def build_config_from_simple_dict(d: Dict[str, Any], settings: Dict[str, Any]) -> BaseBuildConfig:
-    """Build LocalBuildConfig or ServerBuildConfig from infrastructure keys only."""
+    """Build :class:`LocalBuildConfig` from infrastructure keys (local execution only)."""
     run = str(d.get("run", "server")).strip().lower().replace("-", "_")
     if run in ("flow_only", "json_only", "generate_only"):
         raise ValueError(
@@ -665,13 +664,12 @@ def build_config_from_simple_dict(d: Dict[str, Any], settings: Dict[str, Any]) -
     print_settings = bool(d.get("print_settings", True))
 
     server_run_parent = d.get("server_run_parent")
-    # 默认用当前进程的解释器（如 Jupyter / CLI 所在 conda 环境），避免子进程 `python` 找不到 jobflow-remote
-    server_pre_cmd = str(
-        d.get("server_pre_cmd", os.getenv("INTEROPTIMUS_SERVER_PRE_CMD", ""))
-    )
-    server_python = str(
-        d.get("server_python", os.getenv("INTEROPTIMUS_SERVER_PYTHON", sys.executable))
-    )
+    server_pre_cmd = str(d.get("server_pre_cmd", os.getenv("INTEROPTIMUS_SERVER_PRE_CMD", "")))
+    _raw_py = d.get("server_python")
+    if _raw_py is not None and str(_raw_py).strip() != "":
+        server_python = str(_raw_py).strip()
+    else:
+        server_python = (os.getenv("INTEROPTIMUS_SERVER_PYTHON") or "").strip() or sys.executable
     server_jf_bin = str(d.get("server_jf_bin", "jf"))
 
     mlip_worker = str(d.get("mlip_worker", "std_worker"))
@@ -751,9 +749,12 @@ def build_config_from_simple_dict(d: Dict[str, Any], settings: Dict[str, Any]) -
         return LocalBuildConfig(**common)
 
     if run == "server":
-        return ServerBuildConfig(**common)
+        raise ValueError(
+            "This InterOptimus build supports only execution: local. "
+            "jobflow-remote / remote_submit were removed."
+        )
 
-    raise ValueError(f"Unknown run={d.get('run')!r}. Use: local | server")
+    raise ValueError(f"Unknown run={d.get('run')!r}. Use: local")
 
 
 def run_simple_iomaker(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -768,7 +769,7 @@ def run_simple_iomaker(config: Dict[str, Any]) -> Dict[str, Any]:
 
 def main() -> None:
     p = argparse.ArgumentParser(
-        description="Build IOMaker io_flow.json without LLM (JSON/YAML config)."
+        description="Build IOMaker io_flow.json from JSON/YAML config."
     )
     p.add_argument(
         "-c",

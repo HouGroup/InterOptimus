@@ -1,23 +1,21 @@
-# InterOptimus (package overview)
+# InterOptimus — Crystal interface optimization
 
-Python toolkit for **film/substrate interface** lattice matching, termination screening, MLIP relaxation / global search, and optional **VASP** workflows via **Jobflow** / **jobflow-remote**.
+Efficient Python workflows for interface simulation: lattice matching, structure building, and MLIP-based relaxation (Eqnorm in this fork).
 
-## Workflow entry (this branch)
+## Core features
 
-- **`agents/simple_iomaker.py`** — `interoptimus-simple` CLI and `run_simple_iomaker` / status / fetch helpers.
-- **`agents/iomaker_job.py`** — `BuildConfig`, `execute_iomaker_from_settings`, settings normalization.
-- **`agents/remote_submit.py`** — submit to the local host’s jobflow-remote, poll progress, pull artifacts.
+1. Lattice matching visualized by polar projection
+2. Symmetry analysis to screen duplicate matches and terminations
+3. Interface energy exploration with MLIP (Eqnorm) and optional reporting
 
-See the repository root **`README.md`** and **`docs/GETTING_STARTED.md`**.
+## Desktop IOMaker
 
-## Core modules
+- **`agents/iomaker_core.py`** — build `io_flow.json` and run locally via Jobflow `run_locally`
+- **`agents/simple_iomaker.py`** — JSON/YAML CLI (`interoptimus-simple`)
+- **`desktop_app/`** — Tkinter GUI (`interoptimus-desktop`)
 
-| Module | Role |
-|--------|------|
-| `itworker.py` | `InterfaceWorker` — physics, MLIP, optimization |
-| `matching.py` | Lattice matching & stereographic-style figures |
-| `jobflow.py` | `IOMaker` Jobflow makers |
-| `mlip.py` | MLIP calculators + checkpoint directory |
-| `equi_term.py`, `CNID.py`, `tool.py` | Symmetry / CNID / utilities |
+Install:
 
-Install from repo root: `pip install -e .`
+```bash
+pip install .
+```

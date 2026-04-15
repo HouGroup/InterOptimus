@@ -1,5 +1,5 @@
 """
-Shared MatRIS simple_iomaker workflow for the web API and the desktop GUI (no HTTP).
+Eqnorm ``simple_iomaker`` workflow for the desktop GUI (and any local caller; no HTTP server in this build).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from InterOptimus.agents.iomaker_core import _normalize_mlip_calc
 from InterOptimus.agents.simple_iomaker import run_simple_iomaker
 from InterOptimus.jobflow import load_opt_results_pickle_payload, materialize_pairs_best_it_dir
 
@@ -105,7 +106,7 @@ def _build_config(
     optimization_settings: Dict[str, Any],
 ) -> Dict[str, Any]:
     cfg: Dict[str, Any] = {
-        "workflow_name": workflow_name.strip() or "IO_web_matris",
+        "workflow_name": workflow_name.strip() or "IO_web_eqnorm",
         "IO_workflow_config": {
             "cost_preset": cost_preset,
             "bulk_cifs": {
@@ -221,12 +222,9 @@ def _merge_advanced_mlip_form(optimization_settings: Dict[str, Any], form: Dict[
         except ValueError:
             pass
 
-    mm = _form_get(form, "adv_matris_model", "").strip()
-    if mm:
-        optimization_settings["model"] = mm
-    mt = _form_get(form, "adv_matris_task", "").strip()
-    if mt:
-        optimization_settings["task"] = mt
+    ev = _form_get(form, "adv_eqnorm_variant", "").strip()
+    if ev:
+        optimization_settings["model_variant"] = ev
 
     ncd = _form_get(form, "adv_n_calls_density", "").strip()
     if ncd:
@@ -255,7 +253,7 @@ def _merge_advanced_mlip_form(optimization_settings: Dict[str, Any], form: Dict[
             pass
 
 
-def run_matris_session(
+def run_eqnorm_session(
     *,
     film_cif_path: Path | None = None,
     substrate_cif_path: Path | None = None,
@@ -265,12 +263,12 @@ def run_matris_session(
     session_id: str | None = None,
 ) -> Dict[str, Any]:
     """
-    Run the same pipeline as ``POST /api/run``: copy CIFs into a session workdir, build config,
-    call :func:`run_simple_iomaker`, optionally materialize POSCAR zip for local execution.
+    Copy CIFs into a session workdir, build config, call :func:`run_simple_iomaker`,
+    optionally materialize POSCAR zip for local execution.
 
     Pass either ``film_cif_path`` + ``substrate_cif_path``, or ``film_bytes`` + ``substrate_bytes``.
 
-    ``form`` uses the same keys as the FastAPI Form fields (string values).
+    ``form`` keys match the desktop GUI payload (string values).
     """
     sid = session_id or str(uuid.uuid4())
     workdir = sessions_root() / sid
@@ -300,7 +298,7 @@ def run_matris_session(
             "workdir": str(workdir.resolve()),
         }
 
-    workflow_name = _form_get(form, "workflow_name", "IO_web_matris")
+    workflow_name = _form_get(form, "workflow_name", "IO_web_eqnorm")
     cost_preset = _form_get(form, "cost_preset", "medium")
     double_interface = _form_get(form, "double_interface", "true")
     execution = _form_get(form, "execution", "local")
@@ -360,12 +358,14 @@ def run_matris_session(
     ril = _parse_bool(relax_in_layers)
 
     optimization_settings: Dict[str, Any] = {
-        "calc": "matris",
+        "calc": "eqnorm",
         "device": dev,
         "steps": max(1, opt_steps_i),
         "do_mlip_gd": gd,
         "relax_in_ratio": rir,
         "relax_in_layers": ril,
+        "model_name": "eqnorm",
+        "model_variant": "eqnorm-mptrj",
     }
 
     if rir:
@@ -379,6 +379,19 @@ def run_matris_session(
         )
 
     _merge_advanced_mlip_form(optimization_settings, form)
+
+    # Desktop / API: explicit MLIP backend (default Eqnorm). Keeps runs aligned with the GUI selection.
+    mc_raw = _form_get(form, "mlip_calc", "eqnorm").strip()
+    mc = _normalize_mlip_calc(mc_raw) or "eqnorm"
+    optimization_settings["calc"] = mc
+    if mc != "eqnorm":
+        optimization_settings.pop("model_name", None)
+        optimization_settings.pop("model_variant", None)
+    else:
+        optimization_settings.setdefault("model_name", "eqnorm")
+        optimization_settings.setdefault("model_variant", "eqnorm-mptrj")
+
+    print(f"[InterOptimus] MLIP backend: {mc}", flush=True)
 
     cluster = None
     if ex == "server":
@@ -405,8 +418,8 @@ def run_matris_session(
     except Exception as e:
         tb = traceback.format_exc()
         hint = (
-            "MatRIS 权重通常在 ~/.cache/matris/（桌面版为便携 HOME 下 .cache/matris）。"
-            "请确认 Python 环境与依赖正确。"
+            "Eqnorm / 其它 MLIP 权重通常放在 ~/.cache/InterOptimus/checkpoints/（eqnorm*.pt）。"
+            "请确认已安装 eqnorm（见 https://github.com/yzchen08/eqnorm ）、torch、torch_geometric 与权重可用。"
         )
         return {
             "ok": False,

@@ -1,0 +1,96 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXFileReference section */
+		96369D292C53745B00C94F92 /* optimize.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = optimize.py; sourceTree = "<group>"; xcLanguageSpecificationIdentifier = xcode.lang.python; };
+		963FBE832D6F6F9E004837D9 /* CSL */ = {isa = PBXFileReference; lastKnownFileType = text; name = CSL; path = ../../ITpaper/CSL; sourceTree = "<group>"; };
+		964D95732C94265B0097778E /* VaspWorkFlow.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = VaspWorkFlow.py; sourceTree = "<group>"; xcLanguageSpecificationIdentifier = xcode.lang.python; };
+		968289FE2D06F59000B3ABE1 /* __init__.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = __init__.py; sourceTree = "<group>"; };
+		969563622C633DB7005213D0 /* equi_term.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = equi_term.py; sourceTree = "<group>"; };
+		9699CA392CF8D8EC00EDF437 /* itworker.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = itworker.py; sourceTree = "<group>"; };
+		96B9348A2CCFE53900B5659A /* setup.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = setup.py; sourceTree = "<group>"; };
+		96BECD622CC90B470012712C /* core.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = core.py; sourceTree = "<group>"; xcLanguageSpecificationIdentifier = xcode.lang.python; };
+		96BECD632CC96EF80012712C /* tool.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = tool.py; sourceTree = "<group>"; xcLanguageSpecificationIdentifier = xcode.lang.python; };
+		96C07BBF2C48F23A0051F796 /* MPsoap.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = MPsoap.py; sourceTree = "<group>"; xcLanguageSpecificationIdentifier = xcode.lang.python; };
+		96C07BC02C49166B0051F796 /* CNID.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = CNID.py; sourceTree = "<group>"; };
+		96ED519A2C4A99BB00A4DC1F /* matching.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = matching.py; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		96C07BB82C48F21A0051F796 = {
+			isa = PBXGroup;
+			children = (
+				96BECD622CC90B470012712C /* core.py */,
+				964D95732C94265B0097778E /* VaspWorkFlow.py */,
+				96B9348A2CCFE53900B5659A /* setup.py */,
+				96BECD632CC96EF80012712C /* tool.py */,
+				963FBE832D6F6F9E004837D9 /* CSL */,
+				96C07BBF2C48F23A0051F796 /* MPsoap.py */,
+				96C07BC02C49166B0051F796 /* CNID.py */,
+				96ED519A2C4A99BB00A4DC1F /* matching.py */,
+				968289FE2D06F59000B3ABE1 /* __init__.py */,
+				96369D292C53745B00C94F92 /* optimize.py */,
+				9699CA392CF8D8EC00EDF437 /* itworker.py */,
+				969563622C633DB7005213D0 /* equi_term.py */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXProject section */
+		96C07BB92C48F21A0051F796 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1530;
+			};
+			buildConfigurationList = 96C07BBC2C48F21A0051F796 /* Build configuration list for PBXProject "InterOptimus" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 96C07BB82C48F21A0051F796;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+			);
+		};
+/* End PBXProject section */
+
+/* Begin XCBuildConfiguration section */
+		96C07BBD2C48F21A0051F796 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		96C07BBE2C48F21A0051F796 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		96C07BBC2C48F21A0051F796 /* Build configuration list for PBXProject "InterOptimus" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				96C07BBD2C48F21A0051F796 /* Debug */,
+				96C07BBE2C48F21A0051F796 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 96C07BB92C48F21A0051F796 /* Project object */;
+}

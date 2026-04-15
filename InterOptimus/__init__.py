@@ -1,17 +1,5 @@
-"""InterOptimus: interface optimization workflows."""
+"""InterOptimus: BLAS/thread + Matplotlib env before NumPy / PyTorch (see :mod:`InterOptimus._env`)."""
 
 from __future__ import annotations
 
-import os
-
-
-def _configure_matplotlib_defaults() -> None:
-    """Turn on tight layout for most figures; stereographic helpers opt out per-figure."""
-    if os.environ.get("INTEROPTIMUS_NO_AUTO_LAYOUT", "").lower() in ("1", "true", "yes"):
-        return
-    import matplotlib as mpl
-
-    mpl.rcParams["figure.autolayout"] = True
-
-
-_configure_matplotlib_defaults()
+from . import _env  # noqa: F401  # side effect: apply_interoptimus_process_env
