@@ -14,7 +14,59 @@ import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple
+
+from InterOptimus.web.local_workflow import sessions_root
+
+# ---------------------------------------------------------------------------
+# macOS: suppress harmless Tk/Cocoa stderr noise (TSM / Caps Lock LED, etc.)
+# ---------------------------------------------------------------------------
+
+_MACOS_STDERR_NOISE = (
+    "TSM AdjustCapsLockLEDForKeyTransitionHandling",
+    "_ISSetPhysicalKeyboardCapsLockLED",
+)
+
+
+class _FilteredStderr:
+    """Drop known noisy single-line logs from Apple frameworks; forward everything else."""
+
+    __slots__ = ("_real", "_buf")
+
+    def __init__(self, real: TextIO) -> None:
+        self._real = real
+        self._buf = ""
+
+    def write(self, s: str) -> int:
+        if not s:
+            return 0
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            line += "\n"
+            if any(n in line for n in _MACOS_STDERR_NOISE):
+                continue
+            self._real.write(line)
+        return len(s)
+
+    def flush(self) -> None:
+        if self._buf:
+            if not any(n in self._buf for n in _MACOS_STDERR_NOISE):
+                self._real.write(self._buf)
+            self._buf = ""
+        self._real.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+def _silence_macos_tk_stderr_noise() -> None:
+    if sys.platform != "darwin":
+        return
+    if isinstance(sys.stderr, _FilteredStderr):
+        return
+    sys.stderr = _FilteredStderr(sys.stderr)
+
 
 # ---------------------------------------------------------------------------
 # i18n
@@ -23,6 +75,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 STRINGS: Dict[str, Dict[str, str]] = {
     "zh": {
         "app_title": "InterOptimus · MatRIS",
+        "header_subtitle": "MatRIS / IOMaker 工作流 · 本地计算",
         "lang": "语言 Language",
         "cif_files": "CIF 文件",
         "film_cif": "薄膜 film.cif",
@@ -32,12 +85,25 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "tab_lm": "点阵匹配",
         "tab_structure": "结构",
         "tab_opt": "优化 (MatRIS)",
+        "tab_advanced": "高级选项",
+        "adv_hint": "以下为可选 MLIP / 全局优化参数；留空则使用成本预设与默认值。",
+        "adv_ckpt_path": "ckpt_path（MatRIS 权重）",
+        "adv_matris_model": "MatRIS model",
+        "adv_matris_task": "MatRIS task",
+        "adv_fmax": "fmax（弛豫力收敛）",
+        "adv_discut": "discut（近邻截断，Å）",
+        "adv_gd_tol": "gd_tol（梯度下降收敛）",
+        "adv_n_calls_density": "n_calls_density（全局采样密度）",
+        "adv_strain_E_correction": "strain_E_correction",
+        "adv_term_screen_tol": "term_screen_tol（终止筛选）",
+        "adv_z_range_lo": "z_range 下限",
+        "adv_z_range_hi": "z_range 上限",
+        "adv_bo_coord_bin": "BO_coord_bin_size",
+        "adv_bo_energy_bin": "BO_energy_bin_size",
+        "adv_bo_rms_bin": "BO_rms_bin_size",
         "workflow_name": "工作流名称",
         "cost_preset": "成本预设",
         "double_interface": "双界面模型 (double_interface)",
-        "execution": "执行方式",
-        "exec_local": "本机 local",
-        "exec_server": "集群 server",
         "lm_max_area": "max_area",
         "lm_max_length_tol": "max_length_tol",
         "lm_max_angle_tol": "max_angle_tol",
@@ -74,9 +140,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "cancelled": "\n--- 已终止 ---\n",
         "file_na": "文件不可用。",
         "folder_na": "文件夹不可用。",
+        "viz_enable": "实时可视化（贝叶斯 + 结构优化，需 matplotlib）",
     },
     "en": {
         "app_title": "InterOptimus · MatRIS",
+        "header_subtitle": "MatRIS / IOMaker workflow · local run",
         "lang": "Language 语言",
         "cif_files": "CIF files",
         "film_cif": "Film film.cif",
@@ -86,12 +154,25 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "tab_lm": "Lattice match",
         "tab_structure": "Structure",
         "tab_opt": "Optimization (MatRIS)",
+        "tab_advanced": "Advanced",
+        "adv_hint": "Optional MLIP / global optimization parameters; leave blank to use cost preset defaults.",
+        "adv_ckpt_path": "ckpt_path (MatRIS weights)",
+        "adv_matris_model": "MatRIS model",
+        "adv_matris_task": "MatRIS task",
+        "adv_fmax": "fmax (relaxation)",
+        "adv_discut": "discut (neighbor cutoff, Å)",
+        "adv_gd_tol": "gd_tol (GD convergence)",
+        "adv_n_calls_density": "n_calls_density (global sampling)",
+        "adv_strain_E_correction": "strain_E_correction",
+        "adv_term_screen_tol": "term_screen_tol",
+        "adv_z_range_lo": "z_range min",
+        "adv_z_range_hi": "z_range max",
+        "adv_bo_coord_bin": "BO_coord_bin_size",
+        "adv_bo_energy_bin": "BO_energy_bin_size",
+        "adv_bo_rms_bin": "BO_rms_bin_size",
         "workflow_name": "Workflow name",
         "cost_preset": "Cost preset",
         "double_interface": "Double-interface model",
-        "execution": "Execution",
-        "exec_local": "Local",
-        "exec_server": "Server / cluster",
         "lm_max_area": "max_area",
         "lm_max_length_tol": "max_length_tol",
         "lm_max_angle_tol": "max_angle_tol",
@@ -128,6 +209,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "cancelled": "\n--- Stopped ---\n",
         "file_na": "File not available.",
         "folder_na": "Folder not available.",
+        "viz_enable": "Live visualization (BO + relax; requires matplotlib)",
     },
 }
 
@@ -148,10 +230,9 @@ class InterOptimusGui:
         self._sub = tk.StringVar()
         self._workflow = tk.StringVar(value="IO_web_matris")
         self._cost = tk.StringVar(value="medium")
-        self._double_if = tk.BooleanVar(value=False)
-        self._exec = tk.StringVar(value="local")
+        self._double_if = tk.BooleanVar(value=True)
 
-        self._lm_area = tk.StringVar(value="60")
+        self._lm_area = tk.StringVar(value="20")
         self._lm_ltol = tk.StringVar(value="0.03")
         self._lm_atol = tk.StringVar(value="0.03")
         self._lm_fmill = tk.StringVar(value="3")
@@ -171,6 +252,26 @@ class InterOptimusGui:
         self._opt_fs = tk.StringVar(value="0.5")
         self._opt_srf = tk.StringVar(value="0")
         self._opt_srs = tk.StringVar(value="0")
+
+        self._adv_ckpt = tk.StringVar(value="")
+        self._adv_matris_model = tk.StringVar(value="")
+        self._adv_matris_task = tk.StringVar(value="")
+        self._adv_fmax = tk.StringVar(value="")
+        self._adv_discut = tk.StringVar(value="")
+        self._adv_gd_tol = tk.StringVar(value="")
+        self._adv_n_calls = tk.StringVar(value="")
+        self._adv_strain_E = tk.StringVar(value="default")
+        self._adv_term_screen = tk.StringVar(value="")
+        self._adv_z_lo = tk.StringVar(value="")
+        self._adv_z_hi = tk.StringVar(value="")
+        self._adv_bo_coord = tk.StringVar(value="")
+        self._adv_bo_energy = tk.StringVar(value="")
+        self._adv_bo_rms = tk.StringVar(value="")
+
+        self._viz_enable = tk.BooleanVar(value=True)
+        self._viz_poll_active = False
+        self._viz_win: Any = None
+        self._viz_chk: Optional[ttk.Checkbutton] = None
 
         self._log: tk.Text
         self._last_payload: Optional[Dict[str, Any]] = None
@@ -197,12 +298,23 @@ class InterOptimusGui:
     def _setup_style(self) -> None:
         self.root.title(self.t("app_title"))
         self.root.minsize(780, 600)
-        # Light theme palette
-        self._bg = "#f4f6fa"
+        # Light theme: cool slate + one accent (calm, readable)
+        self._bg = "#eef2f7"
         self._panel = "#ffffff"
         self._accent = "#2563eb"
+        self._accent_hover = "#1d4ed8"
         self._muted = "#64748b"
+        self._text = "#0f172a"
         self.root.configure(bg=self._bg)
+
+        if sys.platform == "darwin":
+            self._font_ui = (".AppleSystemUIFont", 13)
+            self._font_ui_sm = (".AppleSystemUIFont", 11)
+            self._font_mono = ("Menlo", 11)
+        else:
+            self._font_ui = ("Segoe UI", 10)
+            self._font_ui_sm = ("Segoe UI", 9)
+            self._font_mono = ("Consolas", 10)
 
         style = ttk.Style()
         try:
@@ -211,24 +323,63 @@ class InterOptimusGui:
             pass
 
         style.configure("Main.TFrame", background=self._bg)
-        style.configure("Card.TLabelframe", background=self._panel, relief="flat", borderwidth=1)
-        style.configure("Card.TLabelframe.Label", background=self._panel, foreground=self._muted, font=("Segoe UI", 10, "bold"))
-        style.configure("TLabel", background=self._bg, foreground="#1e293b")
-        style.configure("Card.TLabel", background=self._panel, foreground="#334155")
-        style.configure("TEntry", fieldbackground="#ffffff")
-        style.configure("Accent.TButton", foreground="#ffffff")
+        style.configure(
+            "Card.TLabelframe",
+            background=self._panel,
+            relief="flat",
+            borderwidth=1,
+        )
+        style.configure(
+            "Card.TLabelframe.Label",
+            background=self._panel,
+            foreground=self._muted,
+            font=self._font_ui_sm + ("bold",),
+        )
+        style.configure("TLabel", background=self._bg, foreground=self._text, font=self._font_ui)
+        style.configure("Card.TLabel", background=self._panel, foreground="#334155", font=self._font_ui)
+        style.configure("TEntry", fieldbackground="#ffffff", insertwidth=1)
+        style.configure("Accent.TButton", foreground="#ffffff", padding=(18, 8), font=self._font_ui)
         style.map(
             "Accent.TButton",
-            background=[("active", "#1d4ed8"), ("!disabled", self._accent)],
+            background=[("active", self._accent_hover), ("!disabled", self._accent)],
         )
-        style.configure("Stop.TButton", foreground="#ffffff")
+        style.configure("Stop.TButton", foreground="#ffffff", padding=(14, 8), font=self._font_ui)
         style.map("Stop.TButton", background=[("active", "#b91c1c"), ("!disabled", "#dc2626")])
+        style.configure(
+            "Muted.TButton",
+            foreground="#334155",
+            padding=(12, 6),
+            font=self._font_ui_sm,
+        )
+        style.map(
+            "Muted.TButton",
+            background=[("active", "#e2e8f0"), ("!disabled", "#f1f5f9")],
+        )
+        style.configure("TCheckbutton", background=self._bg, foreground=self._text, font=self._font_ui)
+        style.configure("TCombobox", font=self._font_ui)
 
-        # Title bar
+        style.configure("TNotebook", background=self._bg, borderwidth=0)
+        style.configure(
+            "TNotebook.Tab",
+            background="#e8edf4",
+            foreground="#475569",
+            padding=(14, 8),
+            font=self._font_ui_sm,
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", self._panel), ("!selected", "#e8edf4")],
+            foreground=[("selected", self._text), ("!selected", "#64748b")],
+        )
+
         try:
-            self._title_font = tkfont.Font(family="Segoe UI", size=16, weight="bold")
+            self._title_font = tkfont.Font(family=self._font_ui[0], size=20, weight="bold")
         except tk.TclError:
-            self._title_font = tkfont.Font(size=16, weight="bold")
+            self._title_font = tkfont.Font(size=20, weight="bold")
+        try:
+            self._subtitle_font = tkfont.Font(family=self._font_ui[0], size=11)
+        except tk.TclError:
+            self._subtitle_font = tkfont.Font(size=11)
 
     def _build(self) -> None:
         pad = {"padx": 12, "pady": 6}
@@ -237,16 +388,29 @@ class InterOptimusGui:
 
         # Header
         hdr = ttk.Frame(outer, style="Main.TFrame")
-        hdr.pack(fill="x", **pad)
+        hdr.pack(fill="x", padx=12, pady=(14, 8))
+        hdr_left = ttk.Frame(hdr, style="Main.TFrame")
+        hdr_left.pack(side="left", fill="x", expand=True)
         title = tk.Label(
-            hdr,
+            hdr_left,
             text=self.t("app_title"),
             font=self._title_font,
             bg=self._bg,
-            fg="#0f172a",
+            fg=self._text,
+            anchor="w",
         )
-        title.pack(side="left")
+        title.pack(anchor="w")
         self._i18n_widgets.append((title, "app_title", lambda w, s: w.config(text=s)))
+        sub = tk.Label(
+            hdr_left,
+            text=self.t("header_subtitle"),
+            font=self._subtitle_font,
+            bg=self._bg,
+            fg=self._muted,
+            anchor="w",
+        )
+        sub.pack(anchor="w", pady=(4, 0))
+        self._i18n_widgets.append((sub, "header_subtitle", lambda w, s: w.config(text=s)))
 
         lang_fr = ttk.Frame(hdr, style="Main.TFrame")
         lang_fr.pack(side="right")
@@ -263,9 +427,11 @@ class InterOptimusGui:
         self._lang_combo.pack(side="left")
         self._lang_combo.bind("<<ComboboxSelected>>", self._on_lang_change)
 
+        ttk.Separator(outer, orient="horizontal").pack(fill="x", padx=12, pady=(0, 2))
+
         # CIF card
         f_top = ttk.LabelFrame(outer, text=self.t("cif_files"), style="Card.TLabelframe")
-        f_top.pack(fill="x", **pad)
+        f_top.pack(fill="x", padx=12, pady=(8, 6))
         self._i18n_widgets.append((f_top, "cif_files", lambda w, s: w.config(text=s)))
 
         r1 = ttk.Frame(f_top)
@@ -274,7 +440,7 @@ class InterOptimusGui:
         lb1.pack(side="left")
         self._i18n_widgets.append((lb1, "film_cif", lambda w, s: w.config(text=s)))
         ttk.Entry(r1, textvariable=self._film, width=50).pack(side="left", fill="x", expand=True, padx=4)
-        b1 = ttk.Button(r1, text=self.t("browse"), command=self._browse_film)
+        b1 = ttk.Button(r1, text=self.t("browse"), style="Muted.TButton", command=self._browse_film)
         b1.pack(side="left")
         self._i18n_widgets.append((b1, "browse", lambda w, s: w.config(text=s)))
 
@@ -284,15 +450,15 @@ class InterOptimusGui:
         lb2.pack(side="left")
         self._i18n_widgets.append((lb2, "substrate_cif", lambda w, s: w.config(text=s)))
         ttk.Entry(r2, textvariable=self._sub, width=50).pack(side="left", fill="x", expand=True, padx=4)
-        b2 = ttk.Button(r2, text=self.t("browse"), command=self._browse_sub)
+        b2 = ttk.Button(r2, text=self.t("browse"), style="Muted.TButton", command=self._browse_sub)
         b2.pack(side="left")
         self._i18n_widgets.append((b2, "browse", lambda w, s: w.config(text=s)))
 
         # Notebook
         self._notebook = ttk.Notebook(outer)
-        self._notebook.pack(fill="both", expand=True, padx=12, pady=(0, 6))
+        self._notebook.pack(fill="both", expand=True, padx=12, pady=(4, 6))
 
-        t_basic = ttk.Frame(self._notebook)
+        t_basic = ttk.Frame(self._notebook, style="Main.TFrame")
         self._notebook.add(t_basic, text=self.t("tab_basic"))
         row = 0
         lb_wn = ttk.Label(t_basic, text=self.t("workflow_name"))
@@ -314,19 +480,7 @@ class InterOptimusGui:
         self._i18n_widgets.append((ch_di, "double_interface", lambda w, s: w.config(text=s)))
         row += 1
 
-        lb_ex = ttk.Label(t_basic, text=self.t("execution"))
-        lb_ex.grid(row=row, column=0, sticky="nw", padx=10, pady=4)
-        self._i18n_widgets.append((lb_ex, "execution", lambda w, s: w.config(text=s)))
-        rf = ttk.Frame(t_basic)
-        rf.grid(row=row, column=1, sticky="w", padx=10, pady=4)
-        rb_loc = ttk.Radiobutton(rf, text=self.t("exec_local"), variable=self._exec, value="local")
-        rb_loc.pack(anchor="w")
-        rb_srv = ttk.Radiobutton(rf, text=self.t("exec_server"), variable=self._exec, value="server")
-        rb_srv.pack(anchor="w")
-        self._i18n_widgets.append((rb_loc, "exec_local", lambda w, s: w.config(text=s)))
-        self._i18n_widgets.append((rb_srv, "exec_server", lambda w, s: w.config(text=s)))
-
-        t_lm = ttk.Frame(self._notebook)
+        t_lm = ttk.Frame(self._notebook, style="Main.TFrame")
         self._notebook.add(t_lm, text=self.t("tab_lm"))
         lm_fields = [
             ("lm_max_area", self._lm_area),
@@ -341,7 +495,7 @@ class InterOptimusGui:
             self._i18n_widgets.append((lb, key, lambda w, s: w.config(text=s)))
             ttk.Entry(t_lm, textvariable=var, width=22).grid(row=i, column=1, sticky="w", padx=10, pady=3)
 
-        t_st = ttk.Frame(self._notebook)
+        t_st = ttk.Frame(self._notebook, style="Main.TFrame")
         self._notebook.add(t_st, text=self.t("tab_structure"))
         st_fields = [
             ("st_film_thickness", self._st_ft),
@@ -355,7 +509,7 @@ class InterOptimusGui:
             self._i18n_widgets.append((lb, key, lambda w, s: w.config(text=s)))
             ttk.Entry(t_st, textvariable=var, width=22).grid(row=i, column=1, sticky="w", padx=10, pady=3)
 
-        t_op = ttk.Frame(self._notebook)
+        t_op = ttk.Frame(self._notebook, style="Main.TFrame")
         self._notebook.add(t_op, text=self.t("tab_opt"))
         self._hint_label_opt = ttk.Label(t_op, text=self.t("single_iface_hint"), foreground=self._muted, wraplength=520, justify="left")
         self._hint_label_opt.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(6, 2))
@@ -407,8 +561,65 @@ class InterOptimusGui:
             self._single_iface_widgets.append(ent)
             r += 1
 
+        t_adv = ttk.Frame(self._notebook, style="Main.TFrame")
+        self._notebook.add(t_adv, text=self.t("tab_advanced"))
+        adv_hint = ttk.Label(
+            t_adv,
+            text=self.t("adv_hint"),
+            foreground=self._muted,
+            wraplength=520,
+            justify="left",
+        )
+        adv_hint.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(6, 8))
+        self._i18n_widgets.append((adv_hint, "adv_hint", lambda w, s: w.config(text=s)))
+
+        adv_rows: List[Tuple[str, tk.StringVar, int]] = [
+            ("adv_ckpt_path", self._adv_ckpt, 52),
+            ("adv_matris_model", self._adv_matris_model, 28),
+            ("adv_matris_task", self._adv_matris_task, 28),
+            ("adv_fmax", self._adv_fmax, 14),
+            ("adv_discut", self._adv_discut, 14),
+            ("adv_gd_tol", self._adv_gd_tol, 14),
+            ("adv_n_calls_density", self._adv_n_calls, 14),
+            ("adv_term_screen_tol", self._adv_term_screen, 14),
+            ("adv_z_range_lo", self._adv_z_lo, 14),
+            ("adv_z_range_hi", self._adv_z_hi, 14),
+            ("adv_bo_coord_bin", self._adv_bo_coord, 14),
+            ("adv_bo_energy_bin", self._adv_bo_energy, 14),
+            ("adv_bo_rms_bin", self._adv_bo_rms, 14),
+        ]
+        ar = 1
+        for key, var, width in adv_rows:
+            lb = ttk.Label(t_adv, text=self.t(key))
+            lb.grid(row=ar, column=0, sticky="w", padx=10, pady=3)
+            self._i18n_widgets.append((lb, key, lambda w, s: w.config(text=s)))
+            ttk.Entry(t_adv, textvariable=var, width=width).grid(row=ar, column=1, sticky="ew", padx=10, pady=3)
+            ar += 1
+
+        lb_se = ttk.Label(t_adv, text=self.t("adv_strain_E_correction"))
+        lb_se.grid(row=ar, column=0, sticky="w", padx=10, pady=3)
+        self._i18n_widgets.append((lb_se, "adv_strain_E_correction", lambda w, s: w.config(text=s)))
+        ttk.Combobox(
+            t_adv,
+            textvariable=self._adv_strain_E,
+            values=("default", "true", "false"),
+            width=12,
+            state="readonly",
+        ).grid(row=ar, column=1, sticky="w", padx=10, pady=3)
+        ar += 1
+
+        t_adv.columnconfigure(1, weight=1)
+
         f_act = ttk.Frame(outer, style="Main.TFrame")
         f_act.pack(fill="x", padx=12, pady=8)
+        self._viz_chk = ttk.Checkbutton(
+            f_act,
+            text=self.t("viz_enable"),
+            variable=self._viz_enable,
+        )
+        self._viz_chk.pack(side="left", padx=(0, 12))
+        self._i18n_widgets.append((self._viz_chk, "viz_enable", lambda w, s: w.config(text=s)))
+
         self._run_btn = ttk.Button(f_act, text=self.t("run"), style="Accent.TButton", command=self._on_run)
         self._run_btn.pack(side="left", padx=(0, 8))
         self._i18n_widgets.append((self._run_btn, "run", lambda w, s: w.config(text=s)))
@@ -423,7 +634,7 @@ class InterOptimusGui:
             ("open_stereo_html", self._open_stereo_html),
             ("open_zip", self._open_zip),
         ]:
-            b = ttk.Button(f_act, text=self.t(key), command=cmd)
+            b = ttk.Button(f_act, text=self.t(key), style="Muted.TButton", command=cmd)
             b.pack(side="left", padx=4)
             self._i18n_widgets.append((b, key, lambda w, s: w.config(text=s)))
 
@@ -436,13 +647,14 @@ class InterOptimusGui:
             self._lf_log,
             height=14,
             wrap="word",
-            font=("Menlo", 10) if sys.platform == "darwin" else ("Consolas", 10),
+            font=self._font_mono,
             bg="#f8fafc",
             fg="#0f172a",
-            insertbackground="#0f172a",
+            insertbackground="#2563eb",
             relief="flat",
-            padx=8,
-            pady=8,
+            padx=10,
+            pady=10,
+            highlightthickness=0,
         )
         scroll.pack(side="right", fill="y")
         self._log.pack(side="left", fill="both", expand=True, padx=4, pady=4)
@@ -456,7 +668,7 @@ class InterOptimusGui:
     def _refresh_notebook_tabs(self) -> None:
         if not self._notebook:
             return
-        tabs = ["tab_basic", "tab_lm", "tab_structure", "tab_opt"]
+        tabs = ["tab_basic", "tab_lm", "tab_structure", "tab_opt", "tab_advanced"]
         for i, tab_id in enumerate(self._notebook.tabs()):
             if i < len(tabs):
                 self._notebook.tab(tab_id, text=self.t(tabs[i]))
@@ -521,7 +733,7 @@ class InterOptimusGui:
             "workflow_name": self._workflow.get(),
             "cost_preset": self._cost.get(),
             "double_interface": _bool_to_str(self._double_if.get()),
-            "execution": self._exec.get(),
+            "execution": "local",
             "lm_max_area": self._lm_area.get(),
             "lm_max_length_tol": self._lm_ltol.get(),
             "lm_max_angle_tol": self._lm_atol.get(),
@@ -540,6 +752,22 @@ class InterOptimusGui:
             "fix_substrate_fraction": self._opt_fs.get(),
             "set_relax_film_ang": self._opt_srf.get(),
             "set_relax_substrate_ang": self._opt_srs.get(),
+            "adv_ckpt_path": self._adv_ckpt.get(),
+            "adv_matris_model": self._adv_matris_model.get(),
+            "adv_matris_task": self._adv_matris_task.get(),
+            "adv_fmax": self._adv_fmax.get(),
+            "adv_discut": self._adv_discut.get(),
+            "adv_gd_tol": self._adv_gd_tol.get(),
+            "adv_n_calls_density": self._adv_n_calls.get(),
+            "adv_strain_E_correction": (
+                "" if self._adv_strain_E.get() == "default" else self._adv_strain_E.get()
+            ),
+            "adv_term_screen_tol": self._adv_term_screen.get(),
+            "adv_z_range_lo": self._adv_z_lo.get(),
+            "adv_z_range_hi": self._adv_z_hi.get(),
+            "adv_bo_coord_bin": self._adv_bo_coord.get(),
+            "adv_bo_energy_bin": self._adv_bo_energy.get(),
+            "adv_bo_rms_bin": self._adv_bo_rms.get(),
         }
 
     def _on_run(self) -> None:
@@ -556,28 +784,71 @@ class InterOptimusGui:
             if self._proc is not None and self._proc.poll() is None:
                 return
 
+        if self._viz_win is not None:
+            try:
+                self._viz_win.destroy()
+            except Exception:
+                pass
+            self._viz_win = None
+
         form = self._collect_form()
+        viz_path: Optional[str] = None
+        if self._viz_enable.get():
+            try:
+                from InterOptimus.desktop_app import viz_window as vzmod
+
+                if getattr(vzmod, "_HAS_MPL", False):
+                    vtf = tempfile.NamedTemporaryFile(prefix="io_viz_", suffix=".jsonl", delete=False)
+                    vtf.close()
+                    viz_path = vtf.name
+                    open(viz_path, "w", encoding="utf-8").close()
+            except Exception:
+                viz_path = None
+
         fd, path = tempfile.mkstemp(suffix=".json", prefix="io_matris_")
         try:
+            cfg_obj: Dict[str, Any] = {"film": fp, "sub": sp, "form": form}
+            if viz_path:
+                cfg_obj["viz_log"] = viz_path
+                cfg_obj["viz_enable"] = True
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"film": fp, "sub": sp, "form": form}, f, ensure_ascii=False)
+                json.dump(cfg_obj, f, ensure_ascii=False)
         except OSError as e:
             messagebox.showerror(self.t("app_title"), str(e))
             return
 
         self._config_temp = path
         self._user_cancelled = False
+        self._viz_poll_active = bool(viz_path)
+        if viz_path:
+            try:
+                from InterOptimus.desktop_app.viz_window import WorkflowVizWindow
+
+                self._viz_win = WorkflowVizWindow(
+                    self.root,
+                    Path(viz_path),
+                    is_active=lambda: self._viz_poll_active,
+                )
+            except Exception as e:
+                self._viz_poll_active = False
+                self._log_insert(f"\n(可视化不可用: {e})\n")
+
         self._log_insert(self.t("running"))
         if self._run_btn:
             self._run_btn.config(state="disabled")
         if self._stop_btn:
             self._stop_btn.config(state="normal")
 
-        cmd = [sys.executable, "-m", "InterOptimus.desktop_app.worker", path]
+        cmd = [sys.executable, "-u", "-m", "InterOptimus.desktop_app.worker", path]
 
         def work() -> None:
             proc: Optional[subprocess.Popen[str]] = None
             try:
+                env = os.environ.copy()
+                env.setdefault("PYTHONUNBUFFERED", "1")
+                if viz_path:
+                    env["INTEROPTIMUS_VIZ_LOG"] = viz_path
+                    env["INTEROPTIMUS_VIZ_ENABLE"] = "1"
                 proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -585,11 +856,27 @@ class InterOptimusGui:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
+                    env=env,
                 )
                 with self._proc_lock:
                     self._proc = proc
-                out, err = proc.communicate()
-                rc = proc.returncode
+
+                assert proc.stderr is not None
+
+                def pump_stderr() -> None:
+                    for line in iter(proc.stderr.readline, ""):
+                        if not line:
+                            break
+                        self.root.after(0, lambda l=line: self._log_insert(l))
+
+                stderr_thread = threading.Thread(target=pump_stderr, daemon=True)
+                stderr_thread.start()
+
+                rc = proc.wait()
+                stderr_thread.join(timeout=60.0)
+
+                out = proc.stdout.read() if proc.stdout else ""
+                err = ""
                 with self._proc_lock:
                     self._proc = None
 
@@ -604,22 +891,40 @@ class InterOptimusGui:
                 if self._user_cancelled:
                     self.root.after(0, self._on_cancelled)
                     return
+
+                # Worker prints one JSON object to stdout even when ok=False (non-zero exit code).
+                # Parse JSON before treating rc != 0 as a hard subprocess failure.
+                text = (out or "").strip()
+                payload: Optional[Dict[str, Any]] = None
+                try:
+                    payload = json.loads(text)
+                except json.JSONDecodeError:
+                    for line in reversed(text.splitlines()):
+                        line = line.strip()
+                        if line.startswith("{"):
+                            try:
+                                payload = json.loads(line)
+                                break
+                            except json.JSONDecodeError:
+                                continue
+
+                if isinstance(payload, dict):
+                    self.root.after(0, lambda p=payload: self._on_done(p))
+                    return
+
                 if rc != 0:
                     self.root.after(
                         0,
-                        lambda: self._on_worker_fail((err or "").strip() or (out or "").strip() or f"exit {rc}"),
+                        lambda: self._on_worker_fail((err or "").strip() or text or f"exit {rc}"),
                     )
                     return
-                try:
-                    payload = json.loads(out or "{}")
-                except json.JSONDecodeError as e:
-                    self.root.after(0, lambda: self._on_worker_fail(f"JSON: {e}\n{(out or '')[:2000]}"))
-                    return
-                self.root.after(0, lambda p=payload: self._on_done(p))
+                self.root.after(0, lambda: self._on_worker_fail(f"Invalid worker output:\n{text[:2000]}"))
             except Exception as e:
                 with self._proc_lock:
                     self._proc = None
                 self.root.after(0, lambda: self._on_error(e))
+            finally:
+                self.root.after(0, lambda: setattr(self, "_viz_poll_active", False))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -685,21 +990,113 @@ class InterOptimusGui:
         self._log_insert(f"\n异常: {e!r}\n")
         messagebox.showerror(self.t("app_title"), str(e))
 
+    @staticmethod
+    def _existing_file_path(p: Optional[str]) -> Optional[str]:
+        """Return an absolute path only if the file exists (never resolve relative to process cwd)."""
+        if not p or not isinstance(p, str):
+            return None
+        t = p.strip()
+        if not t:
+            return None
+        try:
+            expanded = os.path.expanduser(t)
+            if not os.path.isabs(expanded):
+                return None
+            cand = os.path.normpath(expanded)
+            if os.path.isfile(cand):
+                return cand
+            rp = os.path.realpath(cand)
+            return rp if os.path.isfile(rp) else None
+        except OSError:
+            return None
+
+    @staticmethod
+    def _infer_run_dir_from_session(session_id: str) -> Optional[str]:
+        """
+        When ``local_workdir`` from the payload does not match on-disk state, locate outputs under
+        ``sessions_root()/<session_id>/`` (same logic as ``local_workflow._run_dir_from_result``).
+        """
+        sid = (session_id or "").strip()
+        if not sid:
+            return None
+        try:
+            root = sessions_root() / sid
+            if not root.is_dir():
+                return None
+            if (
+                (root / "stereographic.jpg").is_file()
+                or (root / "opt_results.pkl").is_file()
+                or (root / "pairs_poscars.zip").is_file()
+            ):
+                return str(root.resolve())
+            for sub in sorted(root.iterdir()):
+                if sub.is_dir() and not sub.name.startswith("."):
+                    if (
+                        (sub / "stereographic.jpg").is_file()
+                        or (sub / "opt_results.pkl").is_file()
+                        or (sub / "pairs_poscars.zip").is_file()
+                    ):
+                        return str(sub.resolve())
+        except OSError:
+            return None
+        return None
+
+    def _resolve_artifact_workdir(self, art: Dict[str, Any], inner: Dict[str, Any]) -> Optional[str]:
+        wd_raw = (art.get("local_workdir") or inner.get("local_workdir") or "").strip()
+        if wd_raw:
+            try:
+                wdp = Path(wd_raw).expanduser().resolve(strict=False)
+                if wdp.is_dir():
+                    return str(wdp)
+            except OSError:
+                pass
+            try:
+                if os.path.isdir(wd_raw):
+                    return os.path.abspath(os.path.expanduser(wd_raw))
+            except OSError:
+                pass
+        sid = (self._last_payload.get("session_id") or "").strip()
+        if sid:
+            return self._infer_run_dir_from_session(sid)
+        return None
+
     def _artifact_paths(self) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
         if not self._last_payload or not self._last_payload.get("ok"):
             return None, None, None, None
         art = self._last_payload.get("artifacts") or {}
-        wd = art.get("local_workdir") or ""
-        z = art.get("poscars_zip_path")
-        stereo = os.path.join(wd, "stereographic.jpg") if wd else None
-        stereo_html = os.path.join(wd, "stereographic_interactive.html") if wd else None
-        if stereo and not os.path.isfile(stereo):
-            stereo = None
-        if stereo_html and not os.path.isfile(stereo_html):
-            stereo_html = None
-        if z and not os.path.isfile(z):
-            z = None
-        return wd, stereo, stereo_html, z
+        inner = self._last_payload.get("result")
+        if not isinstance(inner, dict):
+            inner = {}
+
+        wd_dir = self._resolve_artifact_workdir(art, inner)
+
+        def pick(key: str, basename: str) -> Optional[str]:
+            v = art.get(key)
+            x = self._existing_file_path(v) if isinstance(v, str) else None
+            if x:
+                return x
+            if wd_dir:
+                return self._existing_file_path(str(Path(wd_dir) / basename))
+            return None
+
+        stereo = pick("stereographic_jpg", "stereographic.jpg")
+        stereo_html = pick("stereographic_interactive_html", "stereographic_interactive.html")
+        zpath = self._existing_file_path(art.get("poscars_zip_path")) if art.get("poscars_zip_path") else None
+        if not zpath and wd_dir:
+            zpath = self._existing_file_path(str(Path(wd_dir) / "pairs_poscars.zip"))
+
+        if not wd_dir:
+            if stereo:
+                wd_dir = str(Path(stereo).parent)
+            elif stereo_html:
+                wd_dir = str(Path(stereo_html).parent)
+            elif zpath:
+                wd_dir = str(Path(zpath).parent)
+
+        if not zpath and wd_dir:
+            zpath = self._existing_file_path(str(Path(wd_dir) / "pairs_poscars.zip"))
+
+        return wd_dir, stereo, stereo_html, zpath
 
     def _open_workdir(self) -> None:
         wd, _, _, _ = self._artifact_paths()
@@ -751,6 +1148,7 @@ class InterOptimusGui:
 
 
 def run_gui() -> None:
+    _silence_macos_tk_stderr_noise()
     root = tk.Tk()
     InterOptimusGui(root)
     root.mainloop()

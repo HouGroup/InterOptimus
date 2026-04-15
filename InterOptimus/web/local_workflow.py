@@ -154,9 +154,105 @@ def _json_safe_result(result: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _run_dir_from_result(result: Dict[str, Any], session_workdir: Path) -> str:
+    """
+    Directory that actually contains flow outputs (nested slug dir under the session).
+
+    ``result['local_workdir']`` is usually correct; if it is missing or points at the session
+    root while artifacts live in a subdirectory, fall back to ``opt_results_pkl``'s parent or
+    a shallow search under the session folder.
+    """
+    lv = result.get("local_workdir")
+    if isinstance(lv, str) and lv.strip():
+        root = str(Path(lv).expanduser().resolve(strict=False))
+        if os.path.isfile(os.path.join(root, "stereographic.jpg")) or os.path.isfile(
+            os.path.join(root, "opt_results.pkl")
+        ):
+            return root
+    op = result.get("opt_results_pkl")
+    if isinstance(op, str) and op.strip():
+        p = Path(op).expanduser()
+        try:
+            if p.is_file():
+                return str(p.parent.resolve())
+        except OSError:
+            pass
+    try:
+        for sub in sorted(session_workdir.iterdir()):
+            if sub.is_dir() and not sub.name.startswith("."):
+                if (sub / "stereographic.jpg").is_file() or (sub / "opt_results.pkl").is_file():
+                    return str(sub.resolve())
+    except OSError:
+        pass
+    if isinstance(lv, str) and lv.strip():
+        return str(Path(lv).expanduser().resolve(strict=False))
+    return str(session_workdir.resolve())
+
+
 def _form_get(form: Dict[str, Any], key: str, default: str = "") -> str:
     v = form.get(key, default)
     return default if v is None else str(v)
+
+
+def _merge_advanced_mlip_form(optimization_settings: Dict[str, Any], form: Dict[str, Any]) -> None:
+    """
+    Optional MLIP / global-minimization overrides merged into ``optimization_settings``.
+    :func:`InterOptimus.agents.simple_iomaker._split_merged_optimization_settings` sends
+    ``n_calls_density``, ``z_range``, ``strain_E_correction``, ``term_screen_tol``, ``calc``
+    into ``global_minimization_settings``; other keys stay in ``optimization_settings``.
+    """
+    ck = _form_get(form, "adv_ckpt_path", "").strip()
+    if ck:
+        optimization_settings["ckpt_path"] = ck
+
+    for fk, ok in (
+        ("adv_fmax", "fmax"),
+        ("adv_discut", "discut"),
+        ("adv_gd_tol", "gd_tol"),
+        ("adv_bo_coord_bin", "BO_coord_bin_size"),
+        ("adv_bo_energy_bin", "BO_energy_bin_size"),
+        ("adv_bo_rms_bin", "BO_rms_bin_size"),
+    ):
+        s = _form_get(form, fk, "").strip()
+        if not s:
+            continue
+        try:
+            optimization_settings[ok] = float(s)
+        except ValueError:
+            pass
+
+    mm = _form_get(form, "adv_matris_model", "").strip()
+    if mm:
+        optimization_settings["model"] = mm
+    mt = _form_get(form, "adv_matris_task", "").strip()
+    if mt:
+        optimization_settings["task"] = mt
+
+    ncd = _form_get(form, "adv_n_calls_density", "").strip()
+    if ncd:
+        try:
+            optimization_settings["n_calls_density"] = float(ncd)
+        except ValueError:
+            pass
+
+    se = _form_get(form, "adv_strain_E_correction", "").strip().lower()
+    if se in ("true", "false"):
+        optimization_settings["strain_E_correction"] = se == "true"
+
+    tst = _form_get(form, "adv_term_screen_tol", "").strip()
+    if tst:
+        try:
+            optimization_settings["term_screen_tol"] = float(tst)
+        except ValueError:
+            pass
+
+    zlo = _form_get(form, "adv_z_range_lo", "").strip()
+    zhi = _form_get(form, "adv_z_range_hi", "").strip()
+    if zlo and zhi:
+        try:
+            optimization_settings["z_range"] = [float(zlo), float(zhi)]
+        except ValueError:
+            pass
 
 
 def run_matris_session(
@@ -206,9 +302,9 @@ def run_matris_session(
 
     workflow_name = _form_get(form, "workflow_name", "IO_web_matris")
     cost_preset = _form_get(form, "cost_preset", "medium")
-    double_interface = _form_get(form, "double_interface", "false")
+    double_interface = _form_get(form, "double_interface", "true")
     execution = _form_get(form, "execution", "local")
-    lm_max_area = _form_get(form, "lm_max_area", "60")
+    lm_max_area = _form_get(form, "lm_max_area", "20")
     lm_max_length_tol = _form_get(form, "lm_max_length_tol", "0.03")
     lm_max_angle_tol = _form_get(form, "lm_max_angle_tol", "0.03")
     lm_film_max_miller = _form_get(form, "lm_film_max_miller", "3")
@@ -235,7 +331,7 @@ def run_matris_session(
     di = _parse_bool(double_interface)
 
     lattice_matching_settings: Dict[str, Any] = {
-        "max_area": _parse_float(lm_max_area, 60.0),
+        "max_area": _parse_float(lm_max_area, 20.0),
         "max_length_tol": _parse_float(lm_max_length_tol, 0.03),
         "max_angle_tol": _parse_float(lm_max_angle_tol, 0.03),
         "film_max_miller": int(_parse_float(lm_film_max_miller, 3)),
@@ -282,6 +378,8 @@ def run_matris_session(
             max(0.0, _parse_float(set_relax_substrate_ang, 0.0)),
         )
 
+    _merge_advanced_mlip_form(optimization_settings, form)
+
     cluster = None
     if ex == "server":
         cluster = {
@@ -321,7 +419,7 @@ def run_matris_session(
             "workdir": str(workdir.resolve()),
         }
 
-    wd = result.get("local_workdir") or str(workdir)
+    wd = _run_dir_from_result(result, workdir)
     report_path = result.get("report_path")
     report_text = ""
     if report_path and os.path.isfile(report_path):

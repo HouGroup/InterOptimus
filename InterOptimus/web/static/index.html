@@ -165,7 +165,7 @@
         <div class="row">
           <div>
             <label for="lm_max_area">max_area</label>
-            <input type="text" id="lm_max_area" name="lm_max_area" value="60" />
+            <input type="text" id="lm_max_area" name="lm_max_area" value="20" />
           </div>
           <div>
             <label for="lm_max_length_tol">max_length_tol</label>
@@ -214,7 +214,7 @@
           </div>
         </div>
         <div class="check">
-          <input type="checkbox" id="di" name="double_interface" value="true" />
+          <input type="checkbox" id="di" name="double_interface" value="true" checked />
           <label for="di">双界面（无真空层，double_interface）</label>
         </div>
       </fieldset>
@@ -255,6 +255,83 @@
             <label for="srs">set_relax 基底侧（Å）</label>
             <input type="text" id="srs" name="set_relax_substrate_ang" value="0" />
           </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>高级 MLIP / 全局优化（可选）</legend>
+        <p class="hint">留空则使用成本预设与默认值；与桌面端「高级选项」一致。</p>
+        <div class="row">
+          <div>
+            <label for="adv_ckpt">ckpt_path</label>
+            <input type="text" id="adv_ckpt" name="adv_ckpt_path" placeholder="MatRIS 权重路径" />
+          </div>
+          <div>
+            <label for="adv_model">MatRIS model / task</label>
+            <input type="text" id="adv_model" name="adv_matris_model" placeholder="如 matris_10m_oam" />
+            <input type="text" id="adv_task" name="adv_matris_task" placeholder="如 efsm" style="margin-top:0.35rem" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_fmax">fmax</label>
+            <input type="text" id="adv_fmax" name="adv_fmax" />
+          </div>
+          <div>
+            <label for="adv_discut">discut</label>
+            <input type="text" id="adv_discut" name="adv_discut" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_gd_tol">gd_tol</label>
+            <input type="text" id="adv_gd_tol" name="adv_gd_tol" />
+          </div>
+          <div>
+            <label for="adv_ncd">n_calls_density</label>
+            <input type="text" id="adv_ncd" name="adv_n_calls_density" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_se">strain_E_correction</label>
+            <select id="adv_se" name="adv_strain_E_correction">
+              <option value="" selected>（预设）</option>
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </div>
+          <div>
+            <label for="adv_tst">term_screen_tol</label>
+            <input type="text" id="adv_tst" name="adv_term_screen_tol" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_zlo">z_range 下限</label>
+            <input type="text" id="adv_zlo" name="adv_z_range_lo" />
+          </div>
+          <div>
+            <label for="adv_zhi">z_range 上限</label>
+            <input type="text" id="adv_zhi" name="adv_z_range_hi" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_boc">BO_coord_bin_size</label>
+            <input type="text" id="adv_boc" name="adv_bo_coord_bin" />
+          </div>
+          <div>
+            <label for="adv_boe">BO_energy_bin_size</label>
+            <input type="text" id="adv_boe" name="adv_bo_energy_bin" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_bor">BO_rms_bin_size</label>
+            <input type="text" id="adv_bor" name="adv_bo_rms_bin" />
+          </div>
+          <div></div>
         </div>
       </fieldset>
 
@@ -360,6 +437,21 @@
       fd.append("fix_substrate_fraction", document.getElementById("ffs").value);
       fd.append("set_relax_film_ang", document.getElementById("sra").value);
       fd.append("set_relax_substrate_ang", document.getElementById("srs").value);
+
+      fd.append("adv_ckpt_path", document.getElementById("adv_ckpt").value);
+      fd.append("adv_matris_model", document.getElementById("adv_model").value);
+      fd.append("adv_matris_task", document.getElementById("adv_task").value);
+      fd.append("adv_fmax", document.getElementById("adv_fmax").value);
+      fd.append("adv_discut", document.getElementById("adv_discut").value);
+      fd.append("adv_gd_tol", document.getElementById("adv_gd_tol").value);
+      fd.append("adv_n_calls_density", document.getElementById("adv_ncd").value);
+      fd.append("adv_strain_E_correction", document.getElementById("adv_se").value);
+      fd.append("adv_term_screen_tol", document.getElementById("adv_tst").value);
+      fd.append("adv_z_range_lo", document.getElementById("adv_zlo").value);
+      fd.append("adv_z_range_hi", document.getElementById("adv_zhi").value);
+      fd.append("adv_bo_coord_bin", document.getElementById("adv_boc").value);
+      fd.append("adv_bo_energy_bin", document.getElementById("adv_boe").value);
+      fd.append("adv_bo_rms_bin", document.getElementById("adv_bor").value);
 
       try {
         const r = await fetch("/api/run", { method: "POST", body: fd });
