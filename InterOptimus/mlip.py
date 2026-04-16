@@ -259,10 +259,8 @@ class MlipCalc:
         """
         atoms = structure.to_ase_atoms()
         atoms.calc = self.calc
-        import torch
-
-        with torch.inference_mode():
-            return atoms.get_potential_energy()
+        # Eqnorm uses torch.autograd.grad internally for energy/forces; inference_mode breaks that.
+        return atoms.get_potential_energy()
 
     def optimize(self, structure, optimizer='BFGS', **kwargs):
         """
@@ -284,9 +282,7 @@ class MlipCalc:
         atoms = structure.to_ase_atoms()
         atoms.calc = self.calc
 
-        import torch
-
-        _infer_ctx = torch.inference_mode()
+        # Eqnorm needs autograd for forces during relaxation; do not use torch.inference_mode() here.
 
         kw = dict(kwargs)
         viz_meta = kw.pop("viz_meta", None)
@@ -314,56 +310,55 @@ class MlipCalc:
             except Exception:
                 return None
 
-        with _infer_ctx:
-            if is_enabled() and isinstance(viz_meta, dict):
-                pos0 = atoms.get_positions().copy()
-                nat = int(len(atoms))
-                for step in range(max_steps):
-                    relax.run(fmax=fmax, steps=1)
-                    E = float(atoms.get_potential_energy())
-                    pos = atoms.get_positions()
-                    rms = float(np.sqrt(np.mean((pos - pos0) ** 2)))
-                    payload = {
-                        **viz_meta,
-                        "event": "relax_step",
-                        "step": int(step),
-                        "energy": E,
-                        "rms_displacement": rms,
-                        "n_atoms": nat,
-                        "energy_per_atom": float(E) / float(max(nat, 1)),
-                    }
-                    ig = _interface_gamma_j_m2(E, viz_meta)
-                    if ig is not None:
-                        payload["interface_gamma_J_m2"] = ig
-                    emit_event(payload)
-                    conv = getattr(relax, "converged", None)
-                    if callable(conv):
-                        try:
-                            if conv():
-                                break
-                        except Exception:
-                            pass
-                flat = atoms.get_positions().flatten()
-                nmax = min(len(flat), 4000 * 3)
-                nfin = int(len(atoms))
-                efin = float(atoms.get_potential_energy())
-                fin = {
+        if is_enabled() and isinstance(viz_meta, dict):
+            pos0 = atoms.get_positions().copy()
+            nat = int(len(atoms))
+            for step in range(max_steps):
+                relax.run(fmax=fmax, steps=1)
+                E = float(atoms.get_potential_energy())
+                pos = atoms.get_positions()
+                rms = float(np.sqrt(np.mean((pos - pos0) ** 2)))
+                payload = {
                     **viz_meta,
-                    "event": "relax_final",
-                    "energy": efin,
-                    "energy_per_atom": float(efin) / float(max(nfin, 1)),
-                    "rms_displacement": float(np.sqrt(np.mean((atoms.get_positions() - pos0) ** 2))),
-                    "positions": flat[:nmax].tolist(),
-                    "n_atoms": nfin,
-                    "numbers": atoms.get_atomic_numbers().tolist(),
-                    "cell": atoms.get_cell().tolist(),
+                    "event": "relax_step",
+                    "step": int(step),
+                    "energy": E,
+                    "rms_displacement": rms,
+                    "n_atoms": nat,
+                    "energy_per_atom": float(E) / float(max(nat, 1)),
                 }
-                igf = _interface_gamma_j_m2(efin, viz_meta)
-                if igf is not None:
-                    fin["interface_gamma_J_m2"] = igf
-                emit_event(fin)
-            else:
-                relax.run(fmax=fmax, steps=max_steps)
+                ig = _interface_gamma_j_m2(E, viz_meta)
+                if ig is not None:
+                    payload["interface_gamma_J_m2"] = ig
+                emit_event(payload)
+                conv = getattr(relax, "converged", None)
+                if callable(conv):
+                    try:
+                        if conv():
+                            break
+                    except Exception:
+                        pass
+            flat = atoms.get_positions().flatten()
+            nmax = min(len(flat), 4000 * 3)
+            nfin = int(len(atoms))
+            efin = float(atoms.get_potential_energy())
+            fin = {
+                **viz_meta,
+                "event": "relax_final",
+                "energy": efin,
+                "energy_per_atom": float(efin) / float(max(nfin, 1)),
+                "rms_displacement": float(np.sqrt(np.mean((atoms.get_positions() - pos0) ** 2))),
+                "positions": flat[:nmax].tolist(),
+                "n_atoms": nfin,
+                "numbers": atoms.get_atomic_numbers().tolist(),
+                "cell": atoms.get_cell().tolist(),
+            }
+            igf = _interface_gamma_j_m2(efin, viz_meta)
+            if igf is not None:
+                fin["interface_gamma_J_m2"] = igf
+            emit_event(fin)
+        else:
+            relax.run(fmax=fmax, steps=max_steps)
 
         return Structure.from_ase_atoms(atoms), atoms.get_potential_energy()
 

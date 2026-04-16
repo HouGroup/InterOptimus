@@ -10,13 +10,17 @@ import shutil
 import sys
 import traceback
 import uuid
-import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from InterOptimus.agents.iomaker_core import _normalize_mlip_calc
 from InterOptimus.agents.simple_iomaker import run_simple_iomaker
-from InterOptimus.jobflow import load_opt_results_pickle_payload, materialize_pairs_best_it_dir
+from InterOptimus.desktop_app.result_bundle import finalize_desktop_result_bundle
+from InterOptimus.jobflow import (
+    load_opt_results_pickle_payload,
+    materialize_pairs_best_it_dir,
+    resolve_opt_results_pickle_path,
+)
 
 
 def sessions_root() -> Path:
@@ -43,6 +47,10 @@ def _clamp01(x: float) -> float:
 
 def _materialize_pair_poscars(workdir: Path) -> Tuple[Optional[Path], Optional[str]]:
     pkl = workdir / "opt_results.pkl"
+    if not pkl.is_file():
+        alt = resolve_opt_results_pickle_path(workdir)
+        if alt and os.path.isfile(alt):
+            pkl = Path(alt)
     if not pkl.is_file():
         return None, "opt_results.pkl not found"
     try:
@@ -79,19 +87,6 @@ def _materialize_pair_poscars(workdir: Path) -> Tuple[Optional[Path], Optional[s
     except Exception as e:
         return None, str(e)
     return pairs_dir, None
-
-
-def _zip_poscars(workdir: Path, pairs_dir: Path) -> Path:
-    dest = workdir / "pairs_poscars.zip"
-    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root, _, files in os.walk(pairs_dir):
-            for fname in files:
-                if "POSCAR" not in fname:
-                    continue
-                fp = Path(root) / fname
-                arc = fp.relative_to(workdir)
-                zf.write(fp, arcname=str(arc))
-    return dest
 
 
 def _build_config(
@@ -168,7 +163,7 @@ def _run_dir_from_result(result: Dict[str, Any], session_workdir: Path) -> str:
         root = str(Path(lv).expanduser().resolve(strict=False))
         if os.path.isfile(os.path.join(root, "stereographic.jpg")) or os.path.isfile(
             os.path.join(root, "opt_results.pkl")
-        ):
+        ) or os.path.isfile(os.path.join(root, "opt_results_.pkl")):
             return root
     op = result.get("opt_results_pkl")
     if isinstance(op, str) and op.strip():
@@ -181,7 +176,11 @@ def _run_dir_from_result(result: Dict[str, Any], session_workdir: Path) -> str:
     try:
         for sub in sorted(session_workdir.iterdir()):
             if sub.is_dir() and not sub.name.startswith("."):
-                if (sub / "stereographic.jpg").is_file() or (sub / "opt_results.pkl").is_file():
+                if (
+                    (sub / "stereographic.jpg").is_file()
+                    or (sub / "opt_results.pkl").is_file()
+                    or (sub / "opt_results_.pkl").is_file()
+                ):
                     return str(sub.resolve())
     except OSError:
         pass
@@ -441,25 +440,34 @@ def run_eqnorm_session(
         except OSError:
             report_text = ""
 
-    stereo = os.path.join(wd, "stereographic.jpg")
-    stereo_html = os.path.join(wd, "stereographic_interactive.html")
-    project_jpg = os.path.join(wd, "project.jpg")
-
     poscars_error: Optional[str] = None
     n_pairs: Optional[int] = None
-    poscars_zip_path: Optional[str] = None
+    wd_path = Path(wd)
     if ex == "local":
-        wd_path = Path(wd)
-        pairs_dir, err = _materialize_pair_poscars(wd_path)
+        _, err = _materialize_pair_poscars(wd_path)
         if err:
             poscars_error = err
-        elif pairs_dir is not None and pairs_dir.is_dir():
+        pb = wd_path / "pairs_best_it"
+        if pb.is_dir():
             try:
-                zpath = _zip_poscars(wd_path, pairs_dir)
-                poscars_zip_path = str(zpath.resolve())
-                n_pairs = len([p for p in pairs_dir.iterdir() if p.is_dir() and p.name.startswith("match_")])
-            except OSError as ze:
-                poscars_error = str(ze)
+                n_pairs = len([p for p in pb.iterdir() if p.is_dir() and p.name.startswith("match_")])
+            except OSError:
+                pass
+
+    wd_display = wd
+    if ex == "local":
+        try:
+            wd_display = str(finalize_desktop_result_bundle(wd_path))
+            merged_report = Path(wd_display) / "io_report.txt"
+            if merged_report.is_file():
+                report_text = merged_report.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            print(f"[InterOptimus] finalize_desktop_result_bundle failed: {e}", file=sys.stderr)
+            wd_display = wd
+
+    stereo = os.path.join(wd_display, "stereographic.jpg")
+    stereo_html = os.path.join(wd_display, "stereographic_interactive.html")
+    project_jpg = os.path.join(wd, "project.jpg")
 
     payload = {
         "ok": True,
@@ -480,8 +488,7 @@ def run_eqnorm_session(
             "stereographic_jpg": stereo if os.path.isfile(stereo) else None,
             "stereographic_interactive_html": stereo_html if os.path.isfile(stereo_html) else None,
             "project_jpg": project_jpg if os.path.isfile(project_jpg) else None,
-            "local_workdir": wd,
-            "poscars_zip_path": poscars_zip_path,
+            "local_workdir": wd_display,
             "pairs_count": n_pairs,
             "poscars_error": poscars_error,
         },

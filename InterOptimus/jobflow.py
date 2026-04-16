@@ -185,6 +185,36 @@ def load_opt_results_pickle_payload(path: str) -> Dict[str, Any]:
     return _normalize_opt_results_pickle_payload(raw)
 
 
+def resolve_opt_results_pickle_path(run_dir: os.PathLike[str]) -> Optional[str]:
+    """
+    Absolute path to the optimization pickle for this run.
+
+    Jobflow may write outputs under a nested ``job_*`` directory. The global-minimization
+    path may emit ``opt_results_.pkl`` (legacy itworker basename) instead of ``opt_results.pkl``.
+    If several ``opt_results*.pkl`` files exist (e.g. retries), the newest by mtime wins.
+    """
+    from pathlib import Path
+
+    rd = Path(run_dir).resolve()
+    if not rd.is_dir():
+        return None
+    found: Dict[str, Path] = {}
+    for p in rd.glob("opt_results*.pkl"):
+        if p.is_file():
+            found[str(p.resolve())] = p
+    for p in rd.glob("job_*/opt_results*.pkl"):
+        if p.is_file():
+            found[str(p.resolve())] = p
+    if not found:
+        for p in rd.rglob("opt_results*.pkl"):
+            if p.is_file():
+                found[str(p.resolve())] = p
+    if not found:
+        return None
+    best = max(found.values(), key=lambda p: p.stat().st_mtime)
+    return str(best.resolve())
+
+
 def _write_opt_results_pickle(
     cwd: str,
     iw: InterfaceWorker,
@@ -261,6 +291,7 @@ def _write_remote_io_summaries(
             "opt_results_summary": "opt_results_summary.json"
             if os.path.isfile(os.path.join(cwd, "opt_results_summary.json"))
             else None,
+            "results_csv": "results.csv" if os.path.isfile(os.path.join(cwd, "results.csv")) else None,
             "area_strain": "area_strain" if os.path.isfile(os.path.join(cwd, "area_strain")) else None,
             "project_image": "project.jpg" if os.path.isfile(os.path.join(cwd, "project.jpg")) else None,
             "stereographic_image": "stereographic.jpg"
@@ -344,8 +375,10 @@ def _write_remote_io_summaries(
         lines_md.append(f"- Best-interface structures (legacy on-disk): `{art['pairs_best_it_dir']}/`")
     if art.get("opt_results_summary"):
         lines_md.append(f"- Optimization summary (JSON): `{art['opt_results_summary']}`")
-    if art.get("area_strain"):
-        lines_md.append(f"- Stereographic data: `{art['area_strain']}`")
+    if art.get("results_csv"):
+        lines_md.append(f"- Stereographic data (CSV): `{art['results_csv']}`")
+    elif art.get("area_strain"):
+        lines_md.append(f"- Stereographic data (legacy): `{art['area_strain']}`")
     if art.get("stereographic_interactive"):
         lines_md.append(f"- Interactive stereographic plot: `{art['stereographic_interactive']}`")
     if art.get("stereographic_image"):

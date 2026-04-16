@@ -22,7 +22,10 @@ from tqdm.auto import tqdm
 from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat, cross, inf, round, arccos, pi, where, unique, linspace
 from numpy.linalg import norm
 from InterOptimus.CNID import calculate_cnid_in_supercell
+import csv
 import os
+import sys
+import time
 from pathlib import Path
 import pandas as pd
 import json
@@ -46,6 +49,15 @@ _DEFAULT_STATIC_INCAR_SETTINGS = {
 }
 
 _DOUBLE_INTERFACE_LATTICE_CONSTRAINTS = ".FALSE. .FALSE. .TRUE."
+
+
+def _emit_interoptimus_eta(obj: dict) -> None:
+    """One JSON object per line on stderr for desktop ETA (GUI parses ``[INTEROPTIMUS_ETA]`` prefix)."""
+    try:
+        sys.stderr.write("[INTEROPTIMUS_ETA]" + json.dumps(obj, ensure_ascii=False) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
 
 
 def _viz_runtime_enabled() -> bool:
@@ -874,7 +886,8 @@ class InterfaceWorker:
         #set match&term id
         self.match_id_now = match_id
         self.term_id_now = term_id
-        
+        t_bo0 = time.monotonic()
+
         #optimize
         result = registration_minimizer(self, n_calls, z_range)
         xs = array(result.x_iters)
@@ -931,7 +944,16 @@ class InterfaceWorker:
         selected_ids = selected_ids[get_non_matching_structures(selected_its, self.BO_rms_bin_size, smt)]
         self.opt_results[(match_id,term_id)]['BO_selected_ids'] = selected_ids
         print(f'num of selected low-energy its: {len(selected_ids)}')
-    
+        _emit_interoptimus_eta(
+            {
+                "kind": "bo_pair_done",
+                "match_id": int(match_id),
+                "term_id": int(term_id),
+                "n_calls": int(n_calls),
+                "elapsed_s": float(time.monotonic() - t_bo0),
+            }
+        )
+
     def get_displaced_relaxed_interface(self, displacement, interface, is_x = False):
         site_properties = interface.site_properties
         interface_properties = interface.interface_properties
@@ -1445,6 +1467,24 @@ class InterfaceWorker:
             z_range=list(z_range),
             n_calls_density=float(n_calls_density),
         )
+        n_matches_gm = len(self.unique_matches)
+        terms_per_match_gm = [len(self.all_unique_terminations[i]) for i in range(n_matches_gm)]
+        total_term_pairs_gm = int(sum(terms_per_match_gm))
+        total_bo_calls_gm = 0
+        for _mi in range(n_matches_gm):
+            _A = self.unique_matches[_mi].match_area
+            _nc = 10 if int(_A * n_calls_density) < 10 else int(_A * n_calls_density)
+            total_bo_calls_gm += terms_per_match_gm[_mi] * _nc
+        _emit_interoptimus_eta(
+            {
+                "kind": "plan",
+                "n_matches": int(n_matches_gm),
+                "total_term_pairs": total_term_pairs_gm,
+                "terms_per_match": [int(x) for x in terms_per_match_gm],
+                "total_bo_calls": int(total_bo_calls_gm),
+                "relax_steps_per_opt": int(self.opt_kwargs.get("steps", 200)),
+            }
+        )
         #scanning matches and terminations
         with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
             #for i in range(1):
@@ -1513,16 +1553,35 @@ class InterfaceWorker:
                                 prescreen_bd_E=float(bd_E),
                             )
                     print(e_labels)
+                    e_min = min(e_labels)
+                    n_relax_here = sum(1 for j in range(num_terms) if e_labels[j] < e_min + term_screen_tol)
+                    _emit_interoptimus_eta(
+                        {
+                            "kind": "match_prescreen",
+                            "match_id": int(i),
+                            "n_terms": int(num_terms),
+                            "n_relax_pairs": int(n_relax_here),
+                        }
+                    )
                     for j in range(num_terms):
-                        if e_labels[j] < min(e_labels) + term_screen_tol:
-                        
+                        if e_labels[j] < e_min + term_screen_tol:
+
                             ltc = self.opt_results[(i,j)]['sampled_interfaces'][0].lattice
                             A = ltc.a * ltc.b
-                            
+
+                            t_r0 = time.monotonic()
                             if self.double_interface:
                                 it_bd_E, strain_E = self.post_bayesian_process_double_interface(i,j,A)
                             else:
                                 it_bd_E, strain_E = self.post_bayesian_process(i,j,A)
+                            _emit_interoptimus_eta(
+                                {
+                                    "kind": "relax_pair_done",
+                                    "match_id": int(i),
+                                    "term_id": int(j),
+                                    "elapsed_s": float(time.monotonic() - t_r0),
+                                }
+                            )
                             
                             self.formated_data.append(
                                     [hkl_f[0], hkl_f[1], hkl_f[2],\
@@ -1677,8 +1736,25 @@ class InterfaceWorker:
                 continue
             data.append([i[0][0], i[0][1], i[0][2], i[1][0], i[1][1], i[1][2],
                          get_area_match(mt), mt.von_mises_strain, low_E, low_pair[0], low_pair[1]])
-        from numpy import savetxt
-        savetxt('area_strain',data,fmt = '(%i %i %i) (%i %i %i) %.4f %.4f %.4f %i %i')
+        with open("results.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(
+                [
+                    "film_h",
+                    "film_k",
+                    "film_l",
+                    "substrate_h",
+                    "substrate_k",
+                    "substrate_l",
+                    "area",
+                    "von_mises_strain",
+                    "energy_eV",
+                    "match_id",
+                    "term_id",
+                ]
+            )
+            for row in data:
+                w.writerow(row)
         
         from InterOptimus.matching import visualize_minimization_results
         if self.double_interface:

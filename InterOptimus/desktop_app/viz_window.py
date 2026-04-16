@@ -150,10 +150,8 @@ def _ylim_focus_low_band(e: Any) -> tuple[float, float]:
     return (y_min, y_max)
 
 
-def _iface_atom_colors(
-    numbers: np.ndarray, film_side: Optional[List[int]]
-) -> np.ndarray:
-    """Jmol-like colors with film/substrate tint (optional ASE)."""
+def _ase_default_atom_colors(numbers: np.ndarray) -> np.ndarray:
+    """Element colors matching ASE :func:`ase.visualize.plot.plot_atoms` default (``jmol_colors``)."""
     n = len(numbers)
     out = np.zeros((n, 3), dtype=float)
     try:
@@ -162,17 +160,9 @@ def _iface_atom_colors(
         for k in range(n):
             z = int(numbers[k])
             if 0 <= z < len(jmol_colors):
-                base = np.asarray(jmol_colors[z], dtype=float)
+                out[k] = np.asarray(jmol_colors[z], dtype=float)
             else:
-                base = np.array([0.55, 0.55, 0.55])
-            if film_side is not None and k < len(film_side):
-                if film_side[k] == 0:
-                    c = 0.55 * base + 0.45 * np.array([1.0, 0.55, 0.25])
-                else:
-                    c = 0.55 * base + 0.45 * np.array([0.35, 0.55, 0.95])
-            else:
-                c = base
-            out[k] = np.clip(c, 0.0, 1.0)
+                out[k] = np.array([0.55, 0.55, 0.55])
     except Exception:
         try:
             cmap = matplotlib.colormaps["tab20"]
@@ -216,7 +206,7 @@ def _plot_interface_ase_orthographic(
         if film_side is not None and len(film_side) == len(numbers):
             atoms.set_tags(np.asarray(film_side, dtype=int))
         z = np.asarray(numbers, dtype=int)
-        cols = _iface_atom_colors(z, film_side)
+        cols = _ase_default_atom_colors(z)
         color_list = [tuple(np.clip(c, 0.0, 1.0)) for c in cols]
         last_err: Optional[Exception] = None
         for kwargs in (
@@ -288,7 +278,7 @@ def _plot_interface_fallback_2d(
         )
         pos = _rotate_positions_like_plot_atoms(np.asarray(atoms.get_positions(), dtype=float), rotation)
         z = np.asarray(numbers, dtype=int)
-        cols = _iface_atom_colors(z, film_side)
+        cols = _ase_default_atom_colors(z)
         ax.scatter(
             pos[:, 0],
             pos[:, 1],

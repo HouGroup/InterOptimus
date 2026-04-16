@@ -53,6 +53,7 @@ setup(
         ],
         "desktop": [
             "pyinstaller>=6.0",
+            "tkinterweb>=4.0",
         ],
         # Eqnorm + PyG on macOS: PyTorch 2.11+ 常与 PyG 预编译轮子的索引/ABI 踩坑；2.6.x 更稳。
         # 用法: pip install -e ".[eqnorm-torch26]" 或见 desktop/install_eqnorm_torch26.sh

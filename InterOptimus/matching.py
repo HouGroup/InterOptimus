@@ -37,6 +37,8 @@ from pymatgen.core.surface import _is_in_miller_family
 
 from functools import reduce
 import math
+import csv
+import os
 import re
 import json
 import builtins
@@ -1074,14 +1076,48 @@ from matplotlib.ticker import FormatStrFormatter
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
+def _parse_results_csv(filename: str):
+    """Parse :class:`itworker` ``results.csv`` (header row)."""
+    records = []
+    with open(filename, newline="", encoding="utf-8", errors="replace") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            p1 = [float(row["film_h"]), float(row["film_k"]), float(row["film_l"])]
+            p2 = [float(row["substrate_h"]), float(row["substrate_k"]), float(row["substrate_l"])]
+            tid = row.get("term_id", "")
+            rec = {
+                "material1_plane": p1,
+                "material2_plane": p2,
+                "area": float(row["area"]),
+                "strain": float(row["von_mises_strain"]),
+                "binding_energy": float(row["energy_eV"]),
+                "match_id": int(row["match_id"]),
+                "term_id": int(tid) if str(tid).strip() != "" else None,
+            }
+            records.append(rec)
+    return records
+
+
 def parse_area_strain_records(filename):
     """
-    Parse ``area_strain`` rows into structured records.
+    Parse lattice-match / strain table into structured records.
 
     Supported formats:
-    - ``(h1 k1 l1) (h2 k2 l2) area strain energy match_id``
-    - ``(h1 k1 l1) (h2 k2 l2) area strain energy match_id term_id``
+    - ``results.csv`` (written by :class:`~InterOptimus.itworker.InterfaceWorker`)
+    - Legacy ``area_strain`` text: ``(h1 k1 l1) (h2 k2 l2) area strain energy match_id [term_id]``
     """
+    fn = str(filename)
+    if fn.endswith(".csv") and os.path.isfile(fn):
+        return _parse_results_csv(fn)
+    if os.path.isfile(fn):
+        try:
+            with open(fn, encoding="utf-8", errors="replace") as f:
+                first = f.readline()
+            if first.lstrip().startswith("film_h"):
+                return _parse_results_csv(fn)
+        except OSError:
+            pass
+
     records = []
 
     with open(filename, 'r') as f:
@@ -2167,7 +2203,8 @@ def plot_binding_energy_analysis_interactive(
     return fig
 
 def visualize_minimization_results(film_name, substrate_name, title = 'Cohesive Energy'):
-    records = parse_area_strain_records('area_strain')
+    _as_path = "results.csv" if os.path.isfile("results.csv") else "area_strain"
+    records = parse_area_strain_records(_as_path)
     records = enrich_area_strain_records_with_summary(records)
     material1_planes = np.array([r["material1_plane"] for r in records])
     material2_planes = np.array([r["material2_plane"] for r in records])

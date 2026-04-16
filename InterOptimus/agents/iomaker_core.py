@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, Literal, Optional, Tuple
 
 from pymatgen.core.structure import Structure
 
-from ..jobflow import IOMaker
+from ..jobflow import IOMaker, resolve_opt_results_pickle_path
 
 DEFAULT_FILM_CIF = "film.cif"
 DEFAULT_SUBSTRATE_CIF = "substrate.cif"
@@ -702,9 +702,21 @@ def execute_iomaker_pipeline(
 
     run_dir = local_workdir or _local_run_workdir(settings.get("name", "IO_llm"))
     _run_flow_locally(flow, run_dir)
-    result["local_workdir"] = os.path.abspath(run_dir)
-    result["pairs_summary_path"] = os.path.abspath(os.path.join(run_dir, "pairs_summary.txt"))
-    result["opt_results_pkl"] = os.path.abspath(os.path.join(run_dir, "opt_results.pkl"))
+    pkl_abs = resolve_opt_results_pickle_path(run_dir)
+    if pkl_abs and os.path.isfile(pkl_abs):
+        artifact_root = os.path.dirname(pkl_abs)
+        result["local_workdir"] = os.path.abspath(artifact_root)
+        result["opt_results_pkl"] = os.path.abspath(pkl_abs)
+        ps_art = os.path.join(artifact_root, "pairs_summary.txt")
+        ps_run = os.path.abspath(os.path.join(run_dir, "pairs_summary.txt"))
+        if os.path.isfile(ps_art):
+            result["pairs_summary_path"] = os.path.abspath(ps_art)
+        else:
+            result["pairs_summary_path"] = ps_run
+    else:
+        result["local_workdir"] = os.path.abspath(run_dir)
+        result["pairs_summary_path"] = os.path.abspath(os.path.join(run_dir, "pairs_summary.txt"))
+        result["opt_results_pkl"] = os.path.abspath(os.path.join(run_dir, "opt_results.pkl"))
 
     report_path = os.path.join(os.path.dirname(out_path), "io_report.txt")
     _write_run_report(report_path, settings=settings, structures_meta=meta, result=result)

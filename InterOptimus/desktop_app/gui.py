@@ -6,14 +6,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+import time
+import webbrowser
+from datetime import datetime, timedelta
 import tempfile
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from statistics import mean
 from typing import Any, Callable, Dict, List, Optional, TextIO, Tuple
 
 from InterOptimus.web.local_workflow import sessions_root
@@ -126,10 +131,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "run": "运行计算",
         "stop": "终止计算",
         "open_workdir": "打开工作目录",
-        "open_stereo": "打开极图 JPG",
-        "open_stereo_html": "打开交互极图 HTML",
-        "open_zip": "打开 POSCAR zip",
         "log_title": "日志 / io_report",
+        "result_panel_title": "交互极图",
+        "result_panel_idle": "计算完成后，此处嵌入 stereographic_interactive.html。",
+        "result_embed_hint": "未找到 stereographic_interactive.html。",
+        "result_embed_fallback": "无法内嵌 HTML（可安装 tkinterweb 后重试）。",
+        "result_open_in_browser": "在浏览器中打开",
         "log_hint": "选择 film / substrate CIF，配置参数后点击「运行计算」。\n",
         "running": "\n--- 运行中… ---\n",
         "warn_no_cif": "请选择 film.cif 与 substrate.cif。",
@@ -141,6 +148,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "file_na": "文件不可用。",
         "folder_na": "文件夹不可用。",
         "viz_enable": "实时可视化（贝叶斯 + 结构优化，需 matplotlib）",
+        "time_elapsed": "已用",
+        "time_eta_rem": "预计剩余",
+        "time_eta_done": "预计完成",
+        "time_eta_na": "—",
+        "run_total_time": "总用时",
+        "run_finished_at": "完成于",
     },
     "en": {
         "app_title": "InterOptimus · Eqnorm",
@@ -195,10 +208,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "run": "Run",
         "stop": "Stop",
         "open_workdir": "Open workdir",
-        "open_stereo": "Open stereographic JPG",
-        "open_stereo_html": "Open interactive stereo HTML",
-        "open_zip": "Open POSCAR zip",
         "log_title": "Log / io_report",
+        "result_panel_title": "Interactive stereographic",
+        "result_panel_idle": "When a run finishes, stereographic_interactive.html is embedded here.",
+        "result_embed_hint": "stereographic_interactive.html not found.",
+        "result_embed_fallback": "Could not embed HTML (install tkinterweb to enable embedding).",
+        "result_open_in_browser": "Open in browser",
         "log_hint": "Choose film / substrate CIF files, set parameters, then click Run.\n",
         "running": "\n--- Running… ---\n",
         "warn_no_cif": "Please select film.cif and substrate.cif.",
@@ -210,6 +225,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "file_na": "File not available.",
         "folder_na": "Folder not available.",
         "viz_enable": "Live visualization (BO + relax; requires matplotlib)",
+        "time_elapsed": "Elapsed",
+        "time_eta_rem": "ETA left",
+        "time_eta_done": "Est. finish",
+        "time_eta_na": "—",
+        "run_total_time": "Total time",
+        "run_finished_at": "Finished at",
     },
 }
 
@@ -283,6 +304,23 @@ class InterOptimusGui:
         self._single_iface_labels: List[tk.Widget] = []
         self._hint_label_opt: Optional[ttk.Label] = None
         self._lf_log: Optional[ttk.LabelFrame] = None
+        self._lf_result: Optional[ttk.LabelFrame] = None
+        self._result_inner: Optional[tk.Frame] = None
+        self._split_main: Optional[ttk.PanedWindow] = None
+        self._timer_label: Optional[ttk.Label] = None
+        self._timer_after_id: Optional[str] = None
+        self._run_start_time: Optional[float] = None
+        self._last_pct: Optional[float] = None
+        self._prev_pct_for_phase: Optional[float] = None
+        self._pct_samples: List[Tuple[float, float]] = []
+        self._last_tqdm_remaining_sec: Optional[float] = None
+        self._eta_plan: Optional[Dict[str, Any]] = None
+        self._eta_bo_calls_done: int = 0
+        self._eta_bo_wall_s: float = 0.0
+        self._eta_terms_per_match: List[int] = []
+        self._eta_match_relax: Dict[int, int] = {}
+        self._eta_relax_pairs_done: int = 0
+        self._eta_relax_wall_s: float = 0.0
         self._user_cancelled = False
         self._lang_lbl: Optional[ttk.Label] = None
 
@@ -296,7 +334,7 @@ class InterOptimusGui:
 
     def _setup_style(self) -> None:
         self.root.title(self.t("app_title"))
-        self.root.minsize(780, 600)
+        self.root.minsize(920, 640)
         # Light theme: cool slate + one accent (calm, readable)
         self._bg = "#eef2f7"
         self._panel = "#ffffff"
@@ -453,9 +491,12 @@ class InterOptimusGui:
         b2.pack(side="left")
         self._i18n_widgets.append((b2, "browse", lambda w, s: w.config(text=s)))
 
-        # Notebook
-        self._notebook = ttk.Notebook(outer)
-        self._notebook.pack(fill="both", expand=True, padx=12, pady=(4, 6))
+        # Notebook + actions (upper) | log + stereographic (lower)
+        self._split_main = ttk.PanedWindow(outer, orient=tk.VERTICAL)
+        self._split_main.pack(fill="both", expand=True, padx=12, pady=(4, 6))
+        _upper = ttk.Frame(self._split_main, style="Main.TFrame")
+        self._notebook = ttk.Notebook(_upper)
+        self._notebook.pack(fill="both", expand=True)
 
         t_basic = ttk.Frame(self._notebook, style="Main.TFrame")
         self._notebook.add(t_basic, text=self.t("tab_basic"))
@@ -614,8 +655,18 @@ class InterOptimusGui:
 
         t_adv.columnconfigure(1, weight=1)
 
-        f_act = ttk.Frame(outer, style="Main.TFrame")
-        f_act.pack(fill="x", padx=12, pady=8)
+        f_act = ttk.Frame(_upper, style="Main.TFrame")
+        f_act.pack(fill="x", pady=(6, 0))
+        timer_wrap = ttk.Frame(f_act, style="Main.TFrame")
+        timer_wrap.pack(side="right", padx=(12, 0))
+        self._timer_label = ttk.Label(
+            timer_wrap,
+            text="",
+            font=self._font_ui_sm,
+            foreground=self._muted,
+        )
+        self._timer_label.pack(side="right")
+
         self._viz_chk = ttk.Checkbutton(
             f_act,
             text=self.t("viz_enable"),
@@ -634,22 +685,21 @@ class InterOptimusGui:
 
         for key, cmd in [
             ("open_workdir", self._open_workdir),
-            ("open_stereo", self._open_stereo),
-            ("open_stereo_html", self._open_stereo_html),
-            ("open_zip", self._open_zip),
         ]:
             b = ttk.Button(f_act, text=self.t(key), style="Muted.TButton", command=cmd)
             b.pack(side="left", padx=4)
             self._i18n_widgets.append((b, key, lambda w, s: w.config(text=s)))
 
-        self._lf_log = ttk.LabelFrame(outer, text=self.t("log_title"), style="Card.TLabelframe")
-        self._lf_log.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self._split_main.add(_upper, weight=1)
+
+        _lower = ttk.PanedWindow(self._split_main, orient=tk.HORIZONTAL)
+        self._lf_log = ttk.LabelFrame(_lower, text=self.t("log_title"), style="Card.TLabelframe")
         self._i18n_widgets.append((self._lf_log, "log_title", lambda w, s: w.config(text=s)))
 
         scroll = ttk.Scrollbar(self._lf_log)
         self._log = tk.Text(
             self._lf_log,
-            height=14,
+            height=12,
             wrap="word",
             font=self._font_mono,
             bg="#f8fafc",
@@ -665,7 +715,23 @@ class InterOptimusGui:
         self._log.config(yscrollcommand=scroll.set)
         scroll.config(command=self._log.yview)
 
+        _lower.add(self._lf_log, weight=1)
+
+        self._lf_result = ttk.LabelFrame(_lower, text=self.t("result_panel_title"), style="Card.TLabelframe")
+        self._i18n_widgets.append((self._lf_result, "result_panel_title", lambda w, s: w.config(text=s)))
+        self._result_inner = tk.Frame(self._lf_result, bg=self._panel)
+        self._result_inner.pack(fill="both", expand=True, padx=4, pady=4)
+        _lower.add(self._lf_result, weight=3)
+        try:
+            _lower.paneconfigure(self._lf_result, minsize=420)
+            _lower.paneconfigure(self._lf_log, minsize=220)
+        except tk.TclError:
+            pass
+
+        self._split_main.add(_lower, weight=4)
+
         self._log_insert(self.t("log_hint"))
+        self._populate_result_panel(None)
         self._refresh_notebook_tabs()
         self._refresh_i18n_static_labels()
 
@@ -692,6 +758,13 @@ class InterOptimusGui:
         self._refresh_notebook_tabs()
         self._refresh_i18n_static_labels()
         self._sync_single_interface_state()
+        if self._run_start_time is not None:
+            self._refresh_timer_text()
+        if self._last_payload and self._last_payload.get("ok"):
+            _, _, h = self._artifact_paths()
+            self._populate_result_panel(h)
+        else:
+            self._populate_result_panel(None)
 
     def _sync_single_interface_state(self) -> None:
         di = self._double_if.get()
@@ -715,6 +788,282 @@ class InterOptimusGui:
     def _log_insert(self, s: str) -> None:
         self._log.insert("end", s)
         self._log.see("end")
+
+    def _fmt_elapsed(self, seconds: float) -> str:
+        s = max(0, int(round(seconds)))
+        h, r = divmod(s, 3600)
+        m, sec = divmod(r, 60)
+        if h:
+            return f"{h}:{m:02d}:{sec:02d}"
+        return f"{m}:{sec:02d}"
+
+    def _reset_eta_state(self) -> None:
+        self._last_pct = None
+        self._prev_pct_for_phase = None
+        self._pct_samples.clear()
+        self._last_tqdm_remaining_sec = None
+        self._eta_plan = None
+        self._eta_bo_calls_done = 0
+        self._eta_bo_wall_s = 0.0
+        self._eta_terms_per_match.clear()
+        self._eta_match_relax.clear()
+        self._eta_relax_pairs_done = 0
+        self._eta_relax_wall_s = 0.0
+
+    def _eta_relax_total_est(self) -> float:
+        """Estimated total relax (post-Bayesian) pairs from prescreen ratios + pending matches."""
+        if not self._eta_terms_per_match:
+            return 0.0
+        n_matches = len(self._eta_terms_per_match)
+        known = float(sum(self._eta_match_relax.values()))
+        ratios: List[float] = []
+        for mid, nr in self._eta_match_relax.items():
+            if 0 <= mid < n_matches:
+                nt = max(1, self._eta_terms_per_match[mid])
+                ratios.append(nr / float(nt))
+        r_avg = mean(ratios) if ratios else 0.45
+        pending = [i for i in range(n_matches) if i not in self._eta_match_relax]
+        est_rest = sum(self._eta_terms_per_match[i] for i in pending) * r_avg
+        return known + est_rest
+
+    def _eta_remaining_seconds(self) -> Optional[float]:
+        """Wall-clock ETA from BO + relax budgets (worker ``plan`` + timings)."""
+        if not self._eta_plan:
+            return None
+        total_bo = int(self._eta_plan.get("total_bo_calls", 0))
+        rem_bo = max(0, total_bo - self._eta_bo_calls_done)
+        t_bo = self._eta_bo_wall_s / self._eta_bo_calls_done if self._eta_bo_calls_done > 0 else None
+        if rem_bo > 0 and t_bo is None:
+            return None
+        eta_bo = rem_bo * t_bo if t_bo is not None else 0.0
+
+        r_tot = self._eta_relax_total_est()
+        rem_r = max(0.0, r_tot - float(self._eta_relax_pairs_done))
+        t_r = self._eta_relax_wall_s / self._eta_relax_pairs_done if self._eta_relax_pairs_done > 0 else None
+        t_bo_ref = self._eta_bo_wall_s / max(self._eta_bo_calls_done, 1)
+        if rem_r <= 0:
+            return max(0.0, eta_bo)
+        if t_r is not None:
+            eta_r = rem_r * t_r
+        else:
+            eta_r = rem_r * max(t_bo_ref * 5.0, 1.0)
+        return max(0.0, eta_bo + eta_r)
+
+    def _apply_eta_event(self, d: Dict[str, Any]) -> None:
+        kind = d.get("kind")
+        if kind == "plan":
+            self._eta_plan = d
+            self._eta_terms_per_match = [int(x) for x in (d.get("terms_per_match") or [])]
+            self._eta_bo_calls_done = 0
+            self._eta_bo_wall_s = 0.0
+            self._eta_match_relax.clear()
+            self._eta_relax_pairs_done = 0
+            self._eta_relax_wall_s = 0.0
+        elif kind == "bo_pair_done":
+            try:
+                self._eta_bo_calls_done += int(d.get("n_calls", 0))
+                self._eta_bo_wall_s += float(d.get("elapsed_s", 0.0))
+            except (TypeError, ValueError):
+                pass
+        elif kind == "match_prescreen":
+            try:
+                mid = int(d.get("match_id", -1))
+                nr = int(d.get("n_relax_pairs", 0))
+                if mid >= 0:
+                    self._eta_match_relax[mid] = nr
+            except (TypeError, ValueError):
+                pass
+        elif kind == "relax_pair_done":
+            try:
+                self._eta_relax_pairs_done += 1
+                self._eta_relax_wall_s += float(d.get("elapsed_s", 0.0))
+            except (TypeError, ValueError):
+                pass
+
+    @staticmethod
+    def _parse_hms_fragment(s: str) -> Optional[float]:
+        s = s.strip()
+        if not s or "?" in s:
+            return None
+        parts = s.split(":")
+        try:
+            if len(parts) == 1:
+                return float(parts[0])
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + float(parts[1])
+            if len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+            return None
+        except ValueError:
+            return None
+
+    def _parse_tqdm_bracket_remaining(self, line: str) -> Optional[float]:
+        """Return tqdm's *current-bar* remaining seconds from ``[elapsed<remaining, ...]`` if present."""
+        if "[" not in line or "<" not in line:
+            return None
+        last: Optional[float] = None
+        for m in re.finditer(r"\[([^\]]+)\]", line):
+            inner = m.group(1)
+            if "<" not in inner:
+                continue
+            if "?" in inner:
+                return None
+            _, right = inner.split("<", 1)
+            right = right.split(",", 1)[0].strip()
+            rem = self._parse_hms_fragment(right)
+            if rem is not None:
+                last = rem
+        return last
+
+    def _record_pct_sample(self, pct: float) -> None:
+        pct = max(0.0, min(100.0, pct))
+        t = time.monotonic()
+        prev = self._prev_pct_for_phase
+        if prev is not None and prev - pct > 7.5:
+            self._pct_samples.clear()
+        self._prev_pct_for_phase = pct
+        self._last_pct = pct
+        last = self._pct_samples[-1] if self._pct_samples else None
+        if last and abs(last[1] - pct) < 0.02 and t - last[0] < 0.25:
+            return
+        self._pct_samples.append((t, pct))
+        while len(self._pct_samples) > 48:
+            self._pct_samples.pop(0)
+        self._pct_samples = [(a, b) for a, b in self._pct_samples if t - a <= 180.0]
+
+    def _eta_from_samples(self, pct: float) -> Optional[float]:
+        """Remaining seconds from recent progress rate (median of last intervals); None if unknown."""
+        pts = self._pct_samples
+        if len(pts) < 2:
+            return None
+        rates: List[float] = []
+        for i in range(1, len(pts)):
+            dt = pts[i][0] - pts[i - 1][0]
+            dp = pts[i][1] - pts[i - 1][1]
+            if dt > 0.2 and dp > 0.01:
+                rates.append(dp / dt)
+        if not rates:
+            return None
+        tail = rates[-6:]
+        tail.sort()
+        rate = tail[len(tail) // 2]
+        if rate < 1e-9:
+            return None
+        rem = (100.0 - pct) / rate
+        return max(0.0, min(rem, 7 * 24 * 3600.0))
+
+    def _parse_stderr_progress(self, line: str) -> None:
+        if "it/s" in line or "s/it" in line or "%|" in line:
+            rem = self._parse_tqdm_bracket_remaining(line)
+            if rem is not None:
+                self._last_tqdm_remaining_sec = rem
+            elif "[" in line and "?" in line:
+                self._last_tqdm_remaining_sec = None
+
+        pct_val: Optional[float] = None
+        m = re.search(r"\b(\d+)%\|", line)
+        if m:
+            try:
+                p = int(m.group(1))
+                if 0 <= p <= 100:
+                    pct_val = float(p)
+            except ValueError:
+                pass
+        if pct_val is None:
+            m2 = re.search(r"(\d+)\s*/\s*(\d+)\s+\[", line)
+            if m2:
+                try:
+                    a, b = int(m2.group(1)), int(m2.group(2))
+                    if b > 0:
+                        pct_val = max(0.0, min(100.0, 100.0 * float(a) / float(b)))
+                except ValueError:
+                    pass
+        if pct_val is not None:
+            self._record_pct_sample(pct_val)
+
+    def _refresh_timer_text(self) -> None:
+        if not self._timer_label or self._run_start_time is None:
+            return
+        elapsed = time.monotonic() - self._run_start_time
+        el = self._fmt_elapsed(elapsed)
+
+        rem_sec: Optional[float] = None
+        if self._eta_plan:
+            rem_sec = self._eta_remaining_seconds()
+        if rem_sec is None:
+            pct = self._last_pct
+            tr = self._last_tqdm_remaining_sec
+            if tr is not None:
+                if tr > 0.5:
+                    rem_sec = tr
+                elif tr <= 0.5 and pct is not None and pct >= 99.0:
+                    rem_sec = 0.0
+                elif tr <= 0.5 and pct is not None and pct < 98.0:
+                    rem_sec = None
+            if rem_sec is None and pct is not None and 0.0 < pct < 100.0:
+                rem_sec = self._eta_from_samples(pct)
+
+        if rem_sec is None:
+            txt = (
+                f"{self.t('time_elapsed')}: {el}  ·  "
+                f"{self.t('time_eta_rem')}: {self.t('time_eta_na')}"
+            )
+        elif rem_sec <= 0.0:
+            txt = (
+                f"{self.t('time_elapsed')}: {el}  ·  "
+                f"{self.t('time_eta_rem')}: {self._fmt_elapsed(0)}"
+            )
+        else:
+            finish = datetime.now() + timedelta(seconds=rem_sec)
+            txt = (
+                f"{self.t('time_elapsed')}: {el}  ·  "
+                f"{self.t('time_eta_rem')}: ~{self._fmt_elapsed(rem_sec)}  ·  "
+                f"{self.t('time_eta_done')}: {finish.strftime('%H:%M:%S')}"
+            )
+        try:
+            self._timer_label.config(text=txt)
+        except tk.TclError:
+            pass
+
+    def _stderr_line(self, line: str) -> None:
+        if line.startswith("[INTEROPTIMUS_ETA]"):
+            try:
+                payload = json.loads(line[len("[INTEROPTIMUS_ETA]") :].strip())
+                if isinstance(payload, dict):
+                    self._apply_eta_event(payload)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+            if self._run_start_time is not None:
+                self._refresh_timer_text()
+            return
+        self._parse_stderr_progress(line)
+        self._log_insert(line)
+        if self._run_start_time is not None:
+            self._refresh_timer_text()
+
+    def _tick_run_timer(self) -> None:
+        self._timer_after_id = None
+        if self._run_start_time is None or self._timer_label is None:
+            return
+        with self._proc_lock:
+            proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return
+        self._refresh_timer_text()
+        self._timer_after_id = self.root.after(1000, self._tick_run_timer)
+
+    def _cancel_run_timer(self) -> None:
+        if self._timer_after_id is not None:
+            try:
+                self.root.after_cancel(self._timer_after_id)
+            except tk.TclError:
+                pass
+            self._timer_after_id = None
+        if self._timer_label:
+            try:
+                self._timer_label.config(text="")
+            except tk.TclError:
+                pass
 
     def _browse_film(self) -> None:
         p = filedialog.askopenfilename(
@@ -844,6 +1193,11 @@ class InterOptimusGui:
                 self._log_insert(f"\n(可视化不可用: {e})\n")
 
         self._log_insert(self.t("running"))
+        self._cancel_run_timer()
+        self._reset_eta_state()
+        self._run_start_time = time.monotonic()
+        self._refresh_timer_text()
+        self._timer_after_id = self.root.after(1000, self._tick_run_timer)
         if self._run_btn:
             self._run_btn.config(state="disabled")
         if self._stop_btn:
@@ -890,7 +1244,7 @@ class InterOptimusGui:
                     for line in iter(proc.stderr.readline, ""):
                         if not line:
                             break
-                        self.root.after(0, lambda l=line: self._log_insert(l))
+                        self.root.after(0, lambda l=line: self._stderr_line(l))
 
                 stdout_parts: list[str] = []
 
@@ -994,6 +1348,9 @@ class InterOptimusGui:
         self._log_insert(self.t("cancelled"))
 
     def _on_cancelled(self) -> None:
+        self._cancel_run_timer()
+        self._run_start_time = None
+        self._reset_eta_state()
         if self._run_btn:
             self._run_btn.config(state="normal")
         if self._stop_btn:
@@ -1006,6 +1363,9 @@ class InterOptimusGui:
             self._config_temp = None
 
     def _on_worker_fail(self, msg: str) -> None:
+        self._cancel_run_timer()
+        self._run_start_time = None
+        self._reset_eta_state()
         if self._run_btn:
             self._run_btn.config(state="normal")
         if self._stop_btn:
@@ -1019,7 +1379,15 @@ class InterOptimusGui:
         if self._stop_btn:
             self._stop_btn.config(state="disabled")
         self._last_payload = payload
+        t0 = self._run_start_time
+        self._cancel_run_timer()
+        elapsed_s: Optional[float] = (time.monotonic() - t0) if t0 is not None else None
+        self._run_start_time = None
+        self._reset_eta_state()
         if not payload.get("ok"):
+            self._populate_result_panel(None)
+            if elapsed_s is not None:
+                self._log_insert(f"\n{self.t('run_total_time')}: {self._fmt_elapsed(elapsed_s)}\n")
             self._log_insert(f"\n失败: {payload.get('error', payload)}\n")
             if payload.get("traceback"):
                 self._log_insert(payload["traceback"] + "\n")
@@ -1033,9 +1401,17 @@ class InterOptimusGui:
         art = payload.get("artifacts") or {}
         wd = art.get("local_workdir", "")
         self._log_insert(f"\nworkdir: {wd}\n")
+        if elapsed_s is not None:
+            self._log_insert(f"\n{self.t('run_total_time')}: {self._fmt_elapsed(elapsed_s)}\n")
+            self._log_insert(f"{self.t('run_finished_at')}: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
+        _, _, stereo_html = self._artifact_paths()
+        self._populate_result_panel(stereo_html)
         messagebox.showinfo(self.t("done_title"), self.t("done_msg"))
 
     def _on_error(self, e: BaseException) -> None:
+        self._cancel_run_timer()
+        self._run_start_time = None
+        self._reset_eta_state()
         if self._run_btn:
             self._run_btn.config(state="normal")
         if self._stop_btn:
@@ -1076,18 +1452,30 @@ class InterOptimusGui:
             root = sessions_root() / sid
             if not root.is_dir():
                 return None
+            res = root / "result"
+            if res.is_dir() and (
+                (res / "stereographic.jpg").is_file()
+                or (res / "io_report.txt").is_file()
+                or (res / "stereographic_interactive.html").is_file()
+            ):
+                return str(res.resolve())
             if (
                 (root / "stereographic.jpg").is_file()
                 or (root / "opt_results.pkl").is_file()
-                or (root / "pairs_poscars.zip").is_file()
             ):
                 return str(root.resolve())
             for sub in sorted(root.iterdir()):
                 if sub.is_dir() and not sub.name.startswith("."):
+                    sub_res = sub / "result"
+                    if sub_res.is_dir() and (
+                        (sub_res / "stereographic.jpg").is_file()
+                        or (sub_res / "io_report.txt").is_file()
+                        or (sub_res / "stereographic_interactive.html").is_file()
+                    ):
+                        return str(sub_res.resolve())
                     if (
                         (sub / "stereographic.jpg").is_file()
                         or (sub / "opt_results.pkl").is_file()
-                        or (sub / "pairs_poscars.zip").is_file()
                     ):
                         return str(sub.resolve())
         except OSError:
@@ -1113,9 +1501,9 @@ class InterOptimusGui:
             return self._infer_run_dir_from_session(sid)
         return None
 
-    def _artifact_paths(self) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    def _artifact_paths(self) -> tuple[Optional[str], Optional[str], Optional[str]]:
         if not self._last_payload or not self._last_payload.get("ok"):
-            return None, None, None, None
+            return None, None, None
         art = self._last_payload.get("artifacts") or {}
         inner = self._last_payload.get("result")
         if not isinstance(inner, dict):
@@ -1134,25 +1522,96 @@ class InterOptimusGui:
 
         stereo = pick("stereographic_jpg", "stereographic.jpg")
         stereo_html = pick("stereographic_interactive_html", "stereographic_interactive.html")
-        zpath = self._existing_file_path(art.get("poscars_zip_path")) if art.get("poscars_zip_path") else None
-        if not zpath and wd_dir:
-            zpath = self._existing_file_path(str(Path(wd_dir) / "pairs_poscars.zip"))
 
         if not wd_dir:
             if stereo:
                 wd_dir = str(Path(stereo).parent)
             elif stereo_html:
                 wd_dir = str(Path(stereo_html).parent)
-            elif zpath:
-                wd_dir = str(Path(zpath).parent)
 
-        if not zpath and wd_dir:
-            zpath = self._existing_file_path(str(Path(wd_dir) / "pairs_poscars.zip"))
+        return wd_dir, stereo, stereo_html
 
-        return wd_dir, stereo, stereo_html, zpath
+    def _populate_result_panel(self, html_path: Optional[str]) -> None:
+        if not self._result_inner:
+            return
+        for w in self._result_inner.winfo_children():
+            w.destroy()
+        if not html_path:
+            tk.Label(
+                self._result_inner,
+                text=self.t("result_panel_idle"),
+                bg=self._panel,
+                fg=self._muted,
+                wraplength=420,
+                justify="left",
+                font=self._font_ui_sm,
+            ).pack(anchor="nw", padx=10, pady=10)
+            return
+        abs_path = os.path.abspath(html_path)
+        if not os.path.isfile(abs_path):
+            tk.Label(
+                self._result_inner,
+                text=self.t("result_embed_hint"),
+                bg=self._panel,
+                fg=self._muted,
+                wraplength=420,
+                justify="left",
+                font=self._font_ui_sm,
+            ).pack(anchor="nw", padx=10, pady=10)
+            return
+
+        html_frame_cls: Any = None
+        try:
+            from tkinterweb import HtmlFrame as _HtmlFrame
+
+            html_frame_cls = _HtmlFrame
+        except ImportError:
+            pass
+
+        if html_frame_cls is not None:
+            try:
+                hf = html_frame_cls(self._result_inner, messages_enabled=False)
+                hf.pack(fill="both", expand=True)
+                uri = Path(abs_path).as_uri()
+                loaded = False
+                for method_name, arg in (("load_url", uri), ("load_file", abs_path)):
+                    fn = getattr(hf, method_name, None)
+                    if callable(fn):
+                        try:
+                            fn(arg)
+                            loaded = True
+                            break
+                        except Exception:
+                            continue
+                if loaded:
+                    try:
+                        self.root.update_idletasks()
+                    except tk.TclError:
+                        pass
+                    return
+            except Exception:
+                for w in self._result_inner.winfo_children():
+                    w.destroy()
+
+        tk.Label(
+            self._result_inner,
+            text=self.t("result_embed_fallback"),
+            bg=self._panel,
+            fg=self._muted,
+            wraplength=420,
+            justify="left",
+            font=self._font_ui_sm,
+        ).pack(anchor="nw", padx=10, pady=10)
+
+        def open_browser() -> None:
+            webbrowser.open(Path(abs_path).as_uri())
+
+        ttk.Button(self._result_inner, text=self.t("result_open_in_browser"), style="Muted.TButton", command=open_browser).pack(
+            anchor="w", padx=10, pady=(0, 10)
+        )
 
     def _open_workdir(self) -> None:
-        wd, _, _, _ = self._artifact_paths()
+        wd, _, _ = self._artifact_paths()
         if not wd or not os.path.isdir(wd):
             messagebox.showinfo(self.t("app_title"), self.t("folder_na"))
             return
@@ -1162,43 +1621,6 @@ class InterOptimusGui:
             subprocess.run(["explorer", wd], check=False)
         else:
             subprocess.run(["xdg-open", wd], check=False)
-
-    def _open_stereo(self) -> None:
-        _, s, _, _ = self._artifact_paths()
-        if not s or not os.path.isfile(s):
-            messagebox.showinfo(self.t("app_title"), self.t("file_na"))
-            return
-        if sys.platform == "darwin":
-            subprocess.run(["open", s], check=False)
-        elif sys.platform == "win32":
-            os.startfile(s)  # type: ignore[attr-defined]
-        else:
-            subprocess.run(["xdg-open", s], check=False)
-
-    def _open_stereo_html(self) -> None:
-        _, _, h, _ = self._artifact_paths()
-        if not h or not os.path.isfile(h):
-            messagebox.showinfo(self.t("app_title"), self.t("file_na"))
-            return
-        if sys.platform == "darwin":
-            subprocess.run(["open", h], check=False)
-        elif sys.platform == "win32":
-            os.startfile(h)  # type: ignore[attr-defined]
-        else:
-            subprocess.run(["xdg-open", h], check=False)
-
-    def _open_zip(self) -> None:
-        _, _, _, z = self._artifact_paths()
-        if not z or not os.path.isfile(z):
-            messagebox.showinfo(self.t("app_title"), self.t("file_na"))
-            return
-        if sys.platform == "darwin":
-            subprocess.run(["open", z], check=False)
-        elif sys.platform == "win32":
-            os.startfile(z)  # type: ignore[attr-defined]
-        else:
-            subprocess.run(["xdg-open", z], check=False)
-
 
 def run_gui() -> None:
     _silence_macos_tk_stderr_noise()
