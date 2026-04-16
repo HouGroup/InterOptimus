@@ -187,6 +187,36 @@ def load_opt_results_pickle_payload(path: str) -> Dict[str, Any]:
     return _normalize_opt_results_pickle_payload(raw)
 
 
+def resolve_opt_results_pickle_path(run_dir: os.PathLike[str]) -> Optional[str]:
+    """
+    Absolute path to the optimization pickle for this run.
+
+    Jobflow may write outputs under a nested ``job_*`` directory. The global-minimization
+    path may emit ``opt_results_.pkl`` (legacy itworker basename) instead of ``opt_results.pkl``.
+    If several ``opt_results*.pkl`` files exist (e.g. retries), the newest by mtime wins.
+    """
+    from pathlib import Path
+
+    rd = Path(run_dir).resolve()
+    if not rd.is_dir():
+        return None
+    found: Dict[str, Path] = {}
+    for p in rd.glob("opt_results*.pkl"):
+        if p.is_file():
+            found[str(p.resolve())] = p
+    for p in rd.glob("job_*/opt_results*.pkl"):
+        if p.is_file():
+            found[str(p.resolve())] = p
+    if not found:
+        for p in rd.rglob("opt_results*.pkl"):
+            if p.is_file():
+                found[str(p.resolve())] = p
+    if not found:
+        return None
+    best = max(found.values(), key=lambda p: p.stat().st_mtime)
+    return str(best.resolve())
+
+
 def _write_opt_results_pickle(
     cwd: str,
     iw: InterfaceWorker,

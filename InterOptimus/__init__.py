@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+# BLAS / Matplotlib defaults before NumPy-heavy imports (desktop worker + CLI).
+from . import _env  # noqa: F401
+
 import os
 
 

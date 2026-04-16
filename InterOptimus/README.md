@@ -7,6 +7,7 @@ Python toolkit for **film/substrate interface** lattice matching, termination sc
 - **`agents/simple_iomaker.py`** — `interoptimus-simple` CLI and `run_simple_iomaker` / status / fetch helpers.
 - **`agents/iomaker_job.py`** — `BuildConfig`, `execute_iomaker_from_settings`, settings normalization.
 - **`agents/remote_submit.py`** — submit to the local host’s jobflow-remote, poll progress, pull artifacts.
+- **`desktop_app/`** (optional) — `interoptimus-desktop` Tk GUI for local runs; session logic in `desktop_app/local_workflow.py`.
 
 See the repository root **`README.md`** and **`docs/GETTING_STARTED.md`**.
 

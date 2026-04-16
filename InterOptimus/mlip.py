@@ -7,6 +7,8 @@ ORB, SevenNet, MatRIS, and DPA models, along with ASE optimizer configurations.
 
 import os
 from pathlib import Path
+from typing import Optional
+
 import numpy as np
 from ase.filters import UnitCellFilter
 from ase.constraints import FixAtoms
@@ -388,6 +390,8 @@ class MlipCalc:
                 - fmax (float): Maximum force threshold
                 - steps (int): Maximum number of optimization steps
                 - fix_cell_booleans (list): Cell constraint flags
+                - viz_meta (dict, optional): If set and :func:`InterOptimus.viz_runtime.is_enabled`,
+                  emit per-step events (desktop GUI / JSONL debugging only).
 
         Returns:
             tuple: (optimized_structure, final_energy)
@@ -397,14 +401,83 @@ class MlipCalc:
         atoms.calc = self.calc
 
         kw = dict(kwargs)
-        kw.pop("viz_meta", None)  # legacy; ignored
+        viz_meta = kw.pop("viz_meta", None)
         fmax = float(kw.get("fmax", 0.05))
         max_steps = int(kw.get("steps", 200))
         fix_b = kw["fix_cell_booleans"]
 
         ft = UnitCellFilter(atoms, fix_b)
         relax = optimizer_class(ft, logfile=None)
-        relax.run(fmax=fmax, steps=max_steps)
+
+        from InterOptimus.viz_runtime import emit_event, is_enabled
+
+        def _interface_gamma_j_m2(E_sup: float, meta: dict) -> Optional[float]:
+            try:
+                A = float(meta.get("match_area_A2") or 0.0)
+                if A <= 0:
+                    return None
+                efr = float(meta.get("E_film_ref", 0.0))
+                esr = float(meta.get("E_sub_ref", 0.0))
+                di = bool(meta.get("double_interface", True))
+                c = 16.02176634
+                g = (float(E_sup) - efr - esr) / A * c
+                if di:
+                    g /= 2.0
+                return float(g)
+            except Exception:
+                return None
+
+        if is_enabled() and isinstance(viz_meta, dict):
+            pos0 = atoms.get_positions().copy()
+            nat = int(len(atoms))
+            for step in range(max_steps):
+                relax.run(fmax=fmax, steps=1)
+                E = float(atoms.get_potential_energy())
+                pos = atoms.get_positions()
+                rms = float(np.sqrt(np.mean((pos - pos0) ** 2)))
+                payload = {
+                    **viz_meta,
+                    "event": "relax_step",
+                    "step": int(step),
+                    "energy": E,
+                    "rms_displacement": rms,
+                    "n_atoms": nat,
+                    "energy_per_atom": float(E) / float(max(nat, 1)),
+                }
+                ig = _interface_gamma_j_m2(E, viz_meta)
+                if ig is not None:
+                    payload["interface_gamma_J_m2"] = ig
+                emit_event(payload)
+                conv = getattr(relax, "converged", None)
+                if callable(conv):
+                    try:
+                        if conv():
+                            break
+                    except Exception:
+                        pass
+            flat = atoms.get_positions().flatten()
+            nmax = min(len(flat), 4000 * 3)
+            nfin = int(len(atoms))
+            efin = float(atoms.get_potential_energy())
+            fin = {
+                **viz_meta,
+                "event": "relax_final",
+                "energy": efin,
+                "energy_per_atom": float(efin) / float(max(nfin, 1)),
+                "rms_displacement": float(
+                    np.sqrt(np.mean((atoms.get_positions() - pos0) ** 2))
+                ),
+                "positions": flat[:nmax].tolist(),
+                "n_atoms": nfin,
+                "numbers": atoms.get_atomic_numbers().tolist(),
+                "cell": atoms.get_cell().tolist(),
+            }
+            igf = _interface_gamma_j_m2(efin, viz_meta)
+            if igf is not None:
+                fin["interface_gamma_J_m2"] = igf
+            emit_event(fin)
+        else:
+            relax.run(fmax=fmax, steps=max_steps)
 
         return Structure.from_ase_atoms(atoms), atoms.get_potential_energy()
 

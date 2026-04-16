@@ -47,10 +47,17 @@ setup(
         "deepmd-kit",
         "torch",
     ],
+    extras_require={
+        # Optional: HTML embedding in the Tk desktop result pane (see InterOptimus.desktop_app.gui).
+        "gui": [
+            "tkinterweb>=4.0",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "interoptimus-env=InterOptimus.agents.server_env:main",
             "interoptimus-simple=InterOptimus.agents.simple_iomaker:main",
+            "interoptimus-desktop=InterOptimus.desktop_app.entry:main",
         ],
     },
 )

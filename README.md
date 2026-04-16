@@ -64,6 +64,19 @@ from InterOptimus.agents.iomaker_job import (
 
 Full parameter reference: **[docs/simple_iomaker_parameters.md](docs/simple_iomaker_parameters.md)**.
 
+### Optional: Tk desktop GUI (local runs)
+
+The [`server`](https://github.com/HouGroup/InterOptimus/tree/server) branch ships a **native Tk** workflow (no browser). It is included in this package but **not** required for `interoptimus-simple` or cluster submit/fetch.
+
+```bash
+# Optional: embed HTML reports in the result pane
+pip install -e '.[gui]'
+
+interoptimus-desktop
+```
+
+The GUI uses the same `run_simple_iomaker` pipeline as the CLI; session directories default to `~/.interoptimus/web_sessions/` (override with `INTEROPTIMUS_DESKTOP_SESSIONS`, or legacy `INTEROPTIMUS_WEB_SESSIONS`). Optional relaxation telemetry for the live plot uses `INTEROPTIMUS_VIZ_LOG` + `INTEROPTIMUS_VIZ_ENABLE` (see `InterOptimus.viz_runtime`).
+
 ## Requirements
 
 - Python ≥ 3.10
@@ -83,6 +96,7 @@ InterOptimus/
 │   ├── iomaker_job.py      # BuildConfig + execute_iomaker_from_settings
 │   ├── remote_submit.py    # submit_io_flow_locally, progress, fetch
 │   └── server_env.py       # interoptimus-env
+├── desktop_app/            # optional: interoptimus-desktop (local_workflow.py, gui, …)
 └── docs/
 ```
 
