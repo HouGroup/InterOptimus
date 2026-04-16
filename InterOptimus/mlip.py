@@ -115,38 +115,6 @@ def _apply_checkpoint_defaults(calc: str, user_settings: dict) -> None:
             user_settings["ckpt_path"] = ckpt
 
 
-def _init_orb_calculator(*, device: str, ckpt_path: str | None):
-    """
-    Build an ASE ORBCalculator for ORB v3 conservative OMAT checkpoints.
-
-    Supports both legacy orb_models (``forcefield.calculator``, model-only ctor)
-    and current orb_models (``forcefield.inference.calculator``, ``(model, adapter)`` loaders).
-    """
-    from orb_models.forcefield import pretrained
-
-    try:
-        from orb_models.forcefield.calculator import ORBCalculator
-    except ModuleNotFoundError:
-        from orb_models.forcefield.inference.calculator import ORBCalculator
-
-    # Legacy: loader(...) -> single forcefield; ORBCalculator(ff, device=...)
-    # New: loader(...) -> (model, atoms_adapter); ORBCalculator(model, adapter, device=...)
-    if ckpt_path:
-        loader = _orb_conservative_omat_loader_for_checkpoint_path(ckpt_path)
-        out = loader(
-            weights_path=ckpt_path,
-            device=device,
-            precision="float32-high",
-        )
-    else:
-        out = pretrained.orb_v3_conservative_inf_omat(device=device)
-
-    if isinstance(out, tuple) and len(out) == 2:
-        model, atoms_adapter = out
-        return ORBCalculator(model, atoms_adapter, device=device)
-    return ORBCalculator(out, device=device)
-
-
 def _orb_conservative_omat_loader_for_checkpoint_path(ckpt_path: str):
     """
     ORB v3 conservative OMAT has two public checkpoints (different graph sizes).
@@ -239,6 +207,9 @@ class MlipCalc:
         self.user_settings = user_settings
 
         if calc == 'orb-models':
+            from orb_models.forcefield import pretrained
+            from orb_models.forcefield.calculator import ORBCalculator
+
             device = user_settings['device']
             print(f"Initializing ORB calculator on device: {device}")
             ckpt = user_settings.get('ckpt_path')
@@ -247,7 +218,13 @@ class MlipCalc:
             # If ckpt is set, failure must not silently fall back to that URL (common on air-gapped nodes).
             if ckpt:
                 try:
-                    self.calc = _init_orb_calculator(device=device, ckpt_path=ckpt)
+                    orb_loader = _orb_conservative_omat_loader_for_checkpoint_path(ckpt)
+                    orbff = orb_loader(
+                        weights_path=ckpt,
+                        device=device,
+                        precision="float32-high",
+                    )
+                    self.calc = ORBCalculator(orbff, device=device)
                     print(
                         "ORB initialization success (checkpoint from "
                         "~/.cache/InterOptimus/checkpoints, INTEROPTIMUS_CHECKPOINT_DIR, or explicit path)"
@@ -261,7 +238,10 @@ class MlipCalc:
                     ) from e
             else:
                 try:
-                    self.calc = _init_orb_calculator(device=device, ckpt_path=None)
+                    self.calc = ORBCalculator(
+                        pretrained.orb_v3_conservative_inf_omat(device=device),
+                        device=device
+                    )
                     print(
                         "ORB initialization success (ORB v3 conservative inf OMAT default; requires network unless cached)"
                     )
@@ -370,8 +350,7 @@ class MlipCalc:
                 efr = float(meta.get("E_film_ref", 0.0))
                 esr = float(meta.get("E_sub_ref", 0.0))
                 di = bool(meta.get("double_interface", True))
-                c = 16.02176634
-                g = (float(E_sup) - efr - esr) / A * c
+                g = (float(E_sup) - efr - esr) / A * 16.02176634
                 if di:
                     g /= 2.0
                 return float(g)
@@ -379,7 +358,6 @@ class MlipCalc:
                 return None
 
         if is_enabled() and isinstance(viz_meta, dict):
-
             pos0 = atoms.get_positions().copy()
             nat = int(len(atoms))
             for step in range(max_steps):
@@ -416,9 +394,7 @@ class MlipCalc:
                 "event": "relax_final",
                 "energy": efin,
                 "energy_per_atom": float(efin) / float(max(nfin, 1)),
-                "rms_displacement": float(
-                    np.sqrt(np.mean((atoms.get_positions() - pos0) ** 2))
-                ),
+                "rms_displacement": float(np.sqrt(np.mean((atoms.get_positions() - pos0) ** 2))),
                 "positions": flat[:nmax].tolist(),
                 "n_atoms": nfin,
                 "numbers": atoms.get_atomic_numbers().tolist(),

@@ -37,10 +37,6 @@ from pymatgen.core.surface import _is_in_miller_family
 
 from functools import reduce
 import math
-import re
-import json
-import builtins
-from pathlib import Path
 
 def get_meshgrid(lim):
     x = np.arange(-lim, lim, 1)
@@ -867,7 +863,24 @@ def plot_matching_data(matching_data, titles, save_filename, show_millers, show_
         ax[i].set_xticks([])
         ax[i].set_yticks([])
 
-        add_stereographic_guides(ax[i], projected)
+        existing_radii = []
+        radii = np.linalg.norm(projected, axis=1)
+        for r in radii:
+            if all(abs(r - np.array(existing_radii))>0.01):
+                wulff_circle = plt.Circle((0, 0), r, color='gray', fill=False, linestyle='--', alpha=0.3)
+                ax[i].add_artist(wulff_circle)
+                existing_radii.append(r)
+        if all(abs(1 - np.array(existing_radii))>0.01):
+            ax[i].add_artist(plt.Circle((0, 0), 1, color='gray', fill=False, linestyle='--', alpha=0.3))
+
+        existing_angles = []
+        angles = np.arctan2(projected[:, 1], projected[:, 0])
+        for angle in angles:
+            if all(abs(angle - np.array(existing_angles))>0.01):
+                x = np.cos(angle)
+                y = np.sin(angle)
+                ax[i].plot([0, x], [0, y], color='gray', linestyle='--', alpha=0.3)
+                existing_angles.append(angle)
         #ax[i].set_frame_on(False)
         if show_title:
             ax[i].set_title(titles[i], fontsize = 40)
@@ -1069,73 +1082,8 @@ For analyzing interfacial matching and binding energy distribution between two m
 """
 
 import matplotlib.colors as colors
-from matplotlib.cm import ScalarMappable
-from matplotlib.ticker import FormatStrFormatter
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-
-
-def parse_area_strain_records(filename):
-    """
-    Parse ``area_strain`` rows into structured records.
-
-    Supported formats:
-    - ``(h1 k1 l1) (h2 k2 l2) area strain energy match_id``
-    - ``(h1 k1 l1) (h2 k2 l2) area strain energy match_id term_id``
-    """
-    records = []
-
-    with open(filename, 'r') as f:
-        for line_num, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
-                continue
-
-            try:
-                first_open = line.find('(')
-                first_close = line.find(')')
-                second_open = line.find('(', first_close + 1)
-                second_close = line.find(')', second_open + 1)
-
-                if first_open == -1 or second_open == -1:
-                    continue
-
-                plane1_str = line[first_open + 1:first_close]
-                plane1 = [float(x) for x in plane1_str.split()]
-
-                plane2_str = line[second_open + 1:second_close]
-                plane2 = [float(x) for x in plane2_str.split()]
-
-                values_part = line[second_close + 1:].strip()
-                values = values_part.split()
-                if len(values) < 4:
-                    continue
-
-                area = float(values[0])
-                strain = float(values[1])
-                binding_energy = float(values[2])
-                match_id = int(values[3])
-                term_id = int(values[4]) if len(values) >= 5 else None
-                dft_status = None
-                if len(values) >= 6:
-                    dft_status = str(values[5]).strip().lower() or None
-
-                rec = {
-                    "material1_plane": plane1,
-                    "material2_plane": plane2,
-                    "area": area,
-                    "strain": strain,
-                    "binding_energy": binding_energy,
-                    "match_id": match_id,
-                    "term_id": term_id,
-                }
-                if dft_status:
-                    rec["dft_status"] = dft_status
-                records.append(rec)
-            except (ValueError, IndexError) as e:
-                print(f"警告: 第{line_num}行解析失败: {e}")
-                continue
-
-    return records
+from scipy.spatial import Delaunay
 
 
 def parse_area_strain_data(filename):
@@ -1153,64 +1101,60 @@ def parse_area_strain_data(filename):
     material2_planes: crystal planes for material 2 (N, 3)
     binding_energies: binding energies array (N,)
     """
-    records = parse_area_strain_records(filename)
-    material1_planes = [r["material1_plane"] for r in records]
-    material2_planes = [r["material2_plane"] for r in records]
-    binding_energies = [r["binding_energy"] for r in records]
+    material1_planes = []
+    material2_planes = []
+    binding_energies = []
+
+    with open(filename, 'r') as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+
+            # 分割行数据
+            parts = line.split()
+
+            # 跳过序号，提取晶面信息
+            # 格式: (h1 k1 l1) (h2 k2 l2) ...
+            try:
+                # 找到两个晶面的括号位置
+                first_open = line.find('(')
+                first_close = line.find(')')
+                second_open = line.find('(', first_close + 1)
+                second_close = line.find(')', second_open + 1)
+
+                if first_open == -1 or second_open == -1:
+                    continue
+
+                # 提取第一个晶面
+                plane1_str = line[first_open+1:first_close]
+                plane1 = [float(x) for x in plane1_str.split()]
+
+                # 提取第二个晶面
+                plane2_str = line[second_open+1:second_close]
+                plane2 = [float(x) for x in plane2_str.split()]
+
+                # 提取数值部分（结合能是倒数第二列）
+                values_part = line[second_close+1:].strip()
+                values = values_part.split()
+
+                if len(values) >= 2:
+                    # 倒数第二列是结合能
+                    binding_energy = float(values[-2])
+                else:
+                    continue
+
+                material1_planes.append(plane1)
+                material2_planes.append(plane2)
+                binding_energies.append(binding_energy)
+
+            except (ValueError, IndexError) as e:
+                print(f"警告: 第{line_num}行解析失败: {e}")
+                continue
 
     return (np.array(material1_planes),
             np.array(material2_planes),
             np.array(binding_energies))
-
-
-def enrich_area_strain_records_with_summary(records, summary_path='opt_results_summary.json'):
-    """
-    Fill legacy ``area_strain`` records missing ``term_id`` by reading
-    ``opt_results_summary.json`` in the same directory.
-    """
-    if not records:
-        return records
-    if builtins.all(record.get("term_id") is not None for record in records):
-        return records
-    if not Path(summary_path).is_file():
-        return records
-
-    try:
-        with open(summary_path, 'r', encoding='utf-8') as f:
-            summary = json.load(f)
-    except Exception:
-        return records
-
-    best_term_by_match = {}
-    for item in summary.values():
-        if not isinstance(item, dict):
-            continue
-        match_id = item.get("match_id")
-        term_id = item.get("term_id")
-        if match_id is None or term_id is None:
-            continue
-        energy = item.get("relaxed_min_it_E")
-        if energy is None:
-            energy = item.get("relaxed_min_bd_E")
-        if energy is None:
-            continue
-
-        current = best_term_by_match.get(int(match_id))
-        if current is None or float(energy) < current["energy"]:
-            best_term_by_match[int(match_id)] = {
-                "term_id": int(term_id),
-                "energy": float(energy),
-            }
-
-    enriched = []
-    for record in records:
-        updated = dict(record)
-        if updated.get("term_id") is None:
-            best = best_term_by_match.get(int(updated["match_id"]))
-            if best is not None:
-                updated["term_id"] = best["term_id"]
-        enriched.append(updated)
-    return enriched
 
 
 def miller_to_spherical(miller_indices):
@@ -1281,215 +1225,75 @@ def spherical_to_stereographic(theta, phi):
     return x_proj, y_proj
 
 
-def _format_pair_label(match_id, term_id):
-    if term_id is None:
-        return f"({int(match_id)}, ?)"
-    return f"({int(match_id)}, {int(term_id)})"
-
-
-def _format_plane_hover_label(plane):
-    h, k, l = [int(v) for v in plane]
-    return f"({h},{k},{l})"
-
-
-def _formula_label_plain(label):
+def draw_plane_connections(ax, planes, x_proj, y_proj):
     """
-    Normalize a material label to a plain reduced-formula-like string.
+    Draw connections between adjacent crystal planes using Delaunay triangulation
+    Each point only connects to its nearest neighbors, avoiding line crossings
+    
+    Parameters:
+    ax: matplotlib axis object
+    planes: crystal plane Miller indices array (N, 3)
+    x_proj, y_proj: projected coordinates (N,)
     """
-    text = str(label or "").strip()
-    if not text:
-        return ""
-    text = re.sub(r"\$_(\d+)\$", r"\1", text)
-    text = text.replace("$", "")
-    return text
-
-
-def _formula_label_html(label):
-    """
-    Format a material label for Plotly subplot titles.
-    """
-    text = _formula_label_plain(label)
-    if not text:
-        return ""
-    return re.sub(r"(\d+)", r"<sub>\1</sub>", text)
-
-
-def _group_projected_points(planes, binding_energies, theta, x_proj, y_proj, records, rounding=2):
-    """
-    Group projected points by displayed position.
-
-    For overlapping upper/lower hemisphere points, keep the upper-hemisphere points.
-    For multiple records at one displayed position, keep the lowest energy for coloring
-    and retain all records in hover metadata.
-    """
-    position_groups = {}
-    for idx, (x, y) in enumerate(zip(x_proj, y_proj)):
-        pos_key = (round(float(x), rounding), round(float(y), rounding))
-        position_groups.setdefault(pos_key, []).append(idx)
-
-    grouped = []
-    for indices in position_groups.values():
-        upper_indices = [idx for idx in indices if theta[idx] <= np.pi / 2]
-        candidate_indices = upper_indices if upper_indices else indices
-        energies_here = binding_energies[candidate_indices]
-        finite = np.isfinite(energies_here)
-        if not np.any(finite):
-            chosen_idx = candidate_indices[0]
-        else:
-            sub_idx = candidate_indices[finite]
-            sub_e = binding_energies[sub_idx]
-            chosen_idx = sub_idx[int(np.argmin(sub_e))]
-        grouped.append(
-            {
-                "index": chosen_idx,
-                "record_indices": candidate_indices,
-            }
-        )
-    return grouped
-
-
-def _rollup_dft_group_status(record_indices, dft_status_arr):
-    """
-    Roll up per-record DFT export status for one stereographic group.
-
-    Priority: any failed -> failed; else any pending -> pending; else complete.
-    When *dft_status_arr* is None, returns ``\"complete\"`` (legacy MLIP-only plots).
-    """
-    if dft_status_arr is None:
-        return "complete"
-    statuses = [str(dft_status_arr[i]).strip().lower() for i in record_indices]
-    if any(s == "failed" for s in statuses):
-        return "failed"
-    if any(s == "pending" for s in statuses):
-        return "pending"
-    return "complete"
-
-
-def _compute_stereographic_guides(projected, tolerance=0.01):
-    """
-    Compute the unique guide radii and angles for a stereographic plot.
-    """
-    if len(projected) == 0:
-        return [1.0], []
-
-    radii = []
-    for r in np.linalg.norm(projected, axis=1):
-        if all(abs(r - np.array(radii)) > tolerance):
-            radii.append(float(r))
-    if all(abs(1 - np.array(radii)) > tolerance):
-        radii.append(1.0)
-
-    angles = []
-    for angle in np.arctan2(projected[:, 1], projected[:, 0]):
-        if all(abs(angle - np.array(angles)) > tolerance):
-            angles.append(float(angle))
-
-    return radii, angles
-
-
-def add_stereographic_guides(ax, projected):
-    """
-    Draw the same stereographic guide lines used by ``plot_matching_data``.
-
-    The guide set consists of:
-    - concentric dashed circles at the radii occupied by projected points
-    - dashed radial lines from the origin at the angles occupied by points
-    - the unit circle boundary
-    """
-    radii, angles = _compute_stereographic_guides(projected)
-    for r in radii:
-        wulff_circle = plt.Circle((0, 0), r, color='gray', fill=False, linestyle='--', alpha=0.3)
-        ax.add_artist(wulff_circle)
-    for angle in angles:
-        x = np.cos(angle)
-        y = np.sin(angle)
-        ax.plot([0, x], [0, y], color='gray', linestyle='--', alpha=0.3)
-
-
-def label_outer_ring_planes(ax, planes, x_proj, y_proj, theta):
-    """
-    Label only the outer-ring upper-hemisphere Miller indices with offsets.
-    """
+    # Draw equator circle (outermost circle) - this is the boundary
+    phi_eq = np.linspace(0, 2*np.pi, 200)
+    theta_eq = np.pi/2 * np.ones_like(phi_eq)
+    x_eq, y_eq = spherical_to_stereographic(theta_eq, phi_eq)
+    ax.plot(x_eq, y_eq, 'k-', linewidth=1.5, alpha=0.7, zorder=2)
+    
     n = len(x_proj)
-    if n == 0:
-        return
-
+    if n < 3:
+        return  # Need at least 3 points for triangulation
+    
+    # Prepare points for Delaunay triangulation
+    points = np.column_stack([x_proj, y_proj])
+    
+    # Filter points inside or near unit circle to avoid issues with far points
+    # Only use points within reasonable range
     distances = np.sqrt(x_proj**2 + y_proj**2)
-    upper_hemisphere = theta <= np.pi / 2
-    outer_ring = (distances >= 0.85) & (distances <= 1.0) & upper_hemisphere
-    outer_indices = np.where(outer_ring)[0]
-    if len(outer_indices) == 0:
+    valid_mask = distances <= 1.5  # Include points slightly outside unit circle
+    
+    if np.sum(valid_mask) < 3:
+        valid_mask = np.ones(n, dtype=bool)  # Use all points if too few valid
+    
+    valid_points = points[valid_mask]
+    valid_indices = np.where(valid_mask)[0]
+    
+    if len(valid_points) < 3:
         return
-
-    position_groups = {}
-    for idx in outer_indices:
-        pos_key = (round(float(x_proj[idx]), 4), round(float(y_proj[idx]), 4))
-        position_groups.setdefault(pos_key, []).append(idx)
-
-    unique_indices = []
-    for indices in position_groups.values():
-        upper_indices = [idx for idx in indices if theta[idx] <= np.pi / 2]
-        if upper_indices:
-            unique_indices.append(upper_indices[0])
-
-    if len(unique_indices) == 0:
-        return
-
-    angles = np.arctan2(y_proj[unique_indices], x_proj[unique_indices])
-    sort_order = np.argsort(angles)
-    sorted_indices = np.array(unique_indices)[sort_order]
-
-    def format_single(value):
-        val_int = int(value)
-        if val_int < 0:
-            return rf'\overline{{{abs(val_int)}}}'
-        return str(val_int)
-
-    total = len(sorted_indices)
-    for order_idx, idx in enumerate(sorted_indices):
-        x, y = x_proj[idx], y_proj[idx]
-        h, k, l = planes[idx]
-        label = f'$({format_single(h)},{format_single(k)},{format_single(l)})$'
-
-        angle = np.arctan2(y, x)
-        radius = np.hypot(x, y)
-        radial_offset = -13 if radius > 0.95 else -10
-        tangential_offset = 5 if order_idx % 2 == 0 else -5
-        if total <= 4:
-            tangential_offset = 3 if order_idx % 2 == 0 else -3
-
-        # Pull labels inward so they stay clear of the frame, then stagger tangentially.
-        offset_x = radial_offset * np.cos(angle) - tangential_offset * np.sin(angle)
-        offset_y = radial_offset * np.sin(angle) + tangential_offset * np.cos(angle)
-
-        if abs(x) > 0.9:
-            offset_x *= 0.8
-        if abs(y) > 0.9:
-            offset_y *= 0.8
-
-        ha = 'left' if offset_x > 3 else 'right' if offset_x < -3 else 'center'
-        va = 'bottom' if offset_y > 3 else 'top' if offset_y < -3 else 'center'
-
-        ax.annotate(
-            label,
-            (x, y),
-            xytext=(offset_x, offset_y),
-            textcoords='offset points',
-            fontsize=5,
-            alpha=0.9,
-            zorder=20,
-            color='black',
-            ha=ha,
-            va=va,
-            clip_on=False,
-            bbox=dict(
-                boxstyle='round,pad=0.2',
-                facecolor='white',
-                edgecolor='black',
-                alpha=0.8,
-                linewidth=0.5,
-            ),
-        )
+    
+    try:
+        # Perform Delaunay triangulation
+        tri = Delaunay(valid_points)
+        
+        # Draw edges of triangles (each edge connects two adjacent points)
+        # Use a set to avoid drawing the same edge twice
+        edges_drawn = set()
+        
+        for simplex in tri.simplices:
+            # Each simplex is a triangle with 3 vertices
+            for i in range(3):
+                v1_idx = simplex[i]
+                v2_idx = simplex[(i + 1) % 3]
+                
+                # Create a unique key for the edge (smaller index first)
+                edge_key = tuple(sorted([v1_idx, v2_idx]))
+                
+                if edge_key not in edges_drawn:
+                    edges_drawn.add(edge_key)
+                    
+                    # Get actual indices in original array
+                    actual_idx1 = valid_indices[v1_idx]
+                    actual_idx2 = valid_indices[v2_idx]
+                    
+                    # Draw the edge
+                    ax.plot([x_proj[actual_idx1], x_proj[actual_idx2]],
+                           [y_proj[actual_idx1], y_proj[actual_idx2]],
+                           'k-', linewidth=0.5, alpha=0.3, zorder=1)
+    except Exception as e:
+        # If Delaunay triangulation fails, skip drawing connections
+        print(f"Warning: Triangulation failed: {e}")
+        pass
 
 
 def label_planes_in_arc(ax, planes, x_proj, y_proj, theta):
@@ -1657,523 +1461,142 @@ def label_planes_in_arc(ax, planes, x_proj, y_proj, theta):
                             linewidth=0.5))
 
 
-def _shared_energy_color_limits(binding_energies):
-    """
-    Stable shared color limits for stereographic plots.
-
-    When all energies are identical, matplotlib/plotly color normalization becomes
-    singular. Expand the range slightly so both subplots use the same visible color.
-    """
-    arr = np.asarray(binding_energies, dtype=float)
-    arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        return 0.0, 1.0
-    vmin = float(np.min(arr))
-    vmax = float(np.max(arr))
-    if np.isclose(vmin, vmax):
-        pad = builtins.max(1e-9, abs(vmin) * 1e-9, 1e-6)
-        vmin -= pad
-        vmax += pad
-    return vmin, vmax
-
-
-def create_stereographic_plot(
-    planes,
-    binding_energies,
-    material_name,
-    ax,
-    *,
-    vmin=None,
-    vmax=None,
-    dft_status=None,
-):
+def create_stereographic_plot(planes, binding_energies, material_name, ax):
     """
     Create stereographic projection plot
 
     Parameters:
     planes: crystal plane Miller indices array (N, 3)
-    binding_energies: binding energies array (N,); may contain NaN when ``dft_status`` marks pending/failed DFT
+    binding_energies: binding energies array (N,)
     material_name: material name
     ax: matplotlib axis object
-    dft_status: optional length-N sequence with values ``complete`` / ``pending`` / ``failed`` (DFT export state)
 
     Returns:
-    im: mappable for colorbar (may be a ScalarMappable stub if no finite-energy points)
-    scatter: colored scatter for finite DFT energies, or None
+    im: interpolated image object
+    scatter: scatter plot object
     """
+    # Convert to spherical coordinates
     theta, phi = miller_to_spherical(planes)
+
+    # Convert to stereographic projection coordinates
     x_proj, y_proj = spherical_to_stereographic(theta, phi)
-    be = np.asarray(binding_energies, dtype=float)
-    n = len(x_proj)
-    d_arr = None
-    if dft_status is not None and len(dft_status) == n:
-        d_arr = np.array([str(s).strip().lower() if s is not None else "complete" for s in dft_status], dtype=object)
 
-    valid_mask = np.isfinite(x_proj) & np.isfinite(y_proj)
-    if d_arr is None:
-        valid_mask &= np.isfinite(be)
-    else:
-        valid_mask &= np.isin(d_arr, ["complete", "pending", "failed"])
-
+    # Data cleaning: remove invalid values
+    valid_mask = np.isfinite(x_proj) & np.isfinite(y_proj) & np.isfinite(binding_energies)
     x_proj = x_proj[valid_mask]
     y_proj = y_proj[valid_mask]
-    binding_energies_clean = be[valid_mask]
+    binding_energies_clean = binding_energies[valid_mask]
     planes_clean = planes[valid_mask]
     theta_clean = theta[valid_mask]
-    if d_arr is not None:
-        d_arr = d_arr[valid_mask]
 
     if len(x_proj) == 0:
         print(f"警告: {material_name} 没有有效的数据点")
         return None, None
 
-    grouped = _group_projected_points(
-        planes_clean,
-        binding_energies_clean,
-        theta_clean,
-        x_proj,
-        y_proj,
-        records=None,
-    )
-    idxs_label = np.array([item["index"] for item in grouped], dtype=int)
-    projected = np.column_stack([x_proj[idxs_label], y_proj[idxs_label]])
-    add_stereographic_guides(ax, projected)
-
-    x_c, y_c, e_c = [], [], []
-    x_p, y_p = [], []
-    x_f, y_f = [], []
-    for item in grouped:
-        chosen = int(item["index"])
-        xc = float(x_proj[chosen])
-        yc = float(y_proj[chosen])
-        ev = binding_energies_clean[chosen]
-        roll = _rollup_dft_group_status(item["record_indices"], d_arr)
-        if roll == "complete" and np.isfinite(ev):
-            x_c.append(xc)
-            y_c.append(yc)
-            e_c.append(float(ev))
-        elif roll == "failed" or (roll == "complete" and not np.isfinite(ev)):
-            x_f.append(xc)
-            y_f.append(yc)
+    # Remove overlapping points: keep only the point with lowest binding energy
+    # Points are considered overlapping if they are within a small distance threshold
+    distance_threshold = 0.01  # Threshold for considering points as overlapping
+    
+    # Group points by their rounded positions
+    position_groups = {}
+    for i in range(len(x_proj)):
+        # Round to 2 decimal places for grouping
+        pos_key = (round(x_proj[i], 2), round(y_proj[i], 2))
+        if pos_key not in position_groups:
+            position_groups[pos_key] = []
+        position_groups[pos_key].append(i)
+    
+    # For each group, keep only the point with lowest binding energy
+    unique_indices = []
+    for pos_key, indices in position_groups.items():
+        if len(indices) == 1:
+            unique_indices.append(indices[0])
         else:
-            x_p.append(xc)
-            y_p.append(yc)
+            # Multiple points at same position, keep the one with lowest energy
+            energies = binding_energies_clean[indices]
+            min_energy_idx = indices[np.argmin(energies)]
+            unique_indices.append(min_energy_idx)
+    
+    # Filter data to keep only unique points
+    unique_indices = np.array(unique_indices)
+    x_proj_unique = x_proj[unique_indices]
+    y_proj_unique = y_proj[unique_indices]
+    binding_energies_unique = binding_energies_clean[unique_indices]
+    planes_unique = planes_clean[unique_indices]
+    theta_unique = theta_clean[unique_indices]
 
-    if e_c:
-        if vmin is None or vmax is None:
-            vmin, vmax = _shared_energy_color_limits(np.array(e_c, dtype=float))
-        scatter = ax.scatter(
-            x_c,
-            y_c,
-            c=e_c,
-            cmap="viridis",
-            s=50,
-            edgecolors="black",
-            linewidth=0.5,
-            vmin=vmin,
-            vmax=vmax,
-            zorder=10,
-        )
-        im = scatter
-    else:
-        scatter = None
-        if vmin is None or vmax is None:
-            vmin, vmax = 0.0, 1.0
-        norm = colors.Normalize(vmin=vmin, vmax=vmax)
-        im = ScalarMappable(norm=norm, cmap="viridis")
+    # Draw connections between crystal planes first
+    draw_plane_connections(ax, planes_unique, x_proj_unique, y_proj_unique)
+    
+    # Create color mapping (lower binding energy = darker color = stronger binding)
+    vmin = np.min(binding_energies_unique)
+    vmax = np.max(binding_energies_unique)
 
-    ms = 55
-    for x, y in zip(x_p, y_p):
-        ax.scatter(
-            [x],
-            [y],
-            s=ms,
-            facecolors="none",
-            edgecolors="black",
-            linewidth=1.0,
-            zorder=11,
-        )
-        ax.text(x, y, "?", fontsize=8, ha="center", va="center", zorder=12, color="black")
-    for x, y in zip(x_f, y_f):
-        ax.scatter(
-            [x],
-            [y],
-            s=ms,
-            facecolors="none",
-            edgecolors="black",
-            linewidth=1.0,
-            zorder=11,
-        )
-        ax.text(x, y, "\u00d7", fontsize=10, ha="center", va="center", zorder=12, color="black")
+    # Plot data points only (no interpolation)
+    # Use Nature-recommended colormap: 'viridis' (colorblind-friendly, widely used in Nature)
+    scatter = ax.scatter(x_proj_unique, y_proj_unique, c=binding_energies_unique,
+                        cmap='viridis', s=50, edgecolors='black',
+                        linewidth=0.5, vmin=vmin, vmax=vmax, zorder=10)
+    
+    # Create a dummy image for colorbar (using scatter data)
+    im = scatter
 
-    label_outer_ring_planes(ax, planes_clean[idxs_label], x_proj[idxs_label], y_proj[idxs_label], theta_clean[idxs_label])
+    # Label planes in 360 degrees, only outer ring and center point
+    # Only label upper hemisphere if overlap
+    label_planes_in_arc(ax, planes_unique, x_proj_unique, y_proj_unique, theta_unique)
 
+    # Set plot properties with smaller margins
     ax.set_xlim(-1.25, 1.25)
     ax.set_ylim(-1.25, 1.25)
-    ax.set_aspect("equal")
-    ax.set_title(_formula_label_plain(material_name), fontsize=15, pad=10)
-    ax.set_xlabel("")
-    ax.set_ylabel("")
+    ax.set_aspect('equal')
+    ax.set_title(f'{material_name}', fontsize=15, pad=10)
+    
+    # Remove axis labels and ticks
+    ax.set_xlabel('')
+    ax.set_ylabel('')
     ax.set_xticks([])
     ax.set_yticks([])
 
     return im, scatter
 
 
-def _add_plotly_guides(fig, projected, row, col):
-    radii, angles = _compute_stereographic_guides(projected)
-    import plotly.graph_objects as go
-
-    for r in radii:
-        t = np.linspace(0, 2 * np.pi, 240)
-        fig.add_trace(
-            go.Scatter(
-                x=r * np.cos(t),
-                y=r * np.sin(t),
-                mode="lines",
-                line=dict(color="rgba(120,120,120,0.35)", dash="dash", width=1),
-                hoverinfo="skip",
-                showlegend=False,
-            ),
-            row=row,
-            col=col,
-        )
-    for angle in angles:
-        fig.add_trace(
-            go.Scatter(
-                x=[0, np.cos(angle)],
-                y=[0, np.sin(angle)],
-                mode="lines",
-                line=dict(color="rgba(120,120,120,0.35)", dash="dash", width=1),
-                hoverinfo="skip",
-                showlegend=False,
-            ),
-            row=row,
-            col=col,
-        )
-
-
-def create_interactive_stereographic_plot(
-    planes,
-    binding_energies,
-    pair_labels,
-    material_name,
-    fig,
-    row,
-    col,
-    coloraxis="coloraxis",
-    dft_status=None,
-):
-    theta, phi = miller_to_spherical(planes)
-    x_proj, y_proj = spherical_to_stereographic(theta, phi)
-    be = np.asarray(binding_energies, dtype=float)
-    n = len(x_proj)
-    d_arr = None
-    if dft_status is not None and len(dft_status) == n:
-        d_arr = np.array([str(s).strip().lower() if s is not None else "complete" for s in dft_status], dtype=object)
-
-    valid_mask = np.isfinite(x_proj) & np.isfinite(y_proj)
-    if d_arr is None:
-        valid_mask &= np.isfinite(be)
-    else:
-        valid_mask &= np.isin(d_arr, ["complete", "pending", "failed"])
-
-    x_proj = x_proj[valid_mask]
-    y_proj = y_proj[valid_mask]
-    binding_energies_clean = be[valid_mask]
-    planes_clean = planes[valid_mask]
-    theta_clean = theta[valid_mask]
-    pair_labels_clean = np.array(pair_labels, dtype=object)[valid_mask]
-    if d_arr is not None:
-        d_arr = d_arr[valid_mask]
-
-    grouped = _group_projected_points(
-        planes_clean,
-        binding_energies_clean,
-        theta_clean,
-        x_proj,
-        y_proj,
-        records=pair_labels_clean,
-    )
-    if len(grouped) == 0:
-        return
-
-    import plotly.graph_objects as go
-
-    def _hover_for_group(record_indices):
-        seen = set()
-        lines = []
-        for ridx in record_indices:
-            plane_label = _format_plane_hover_label(planes_clean[ridx])
-            pair_label = pair_labels_clean[ridx]
-            text = f"{plane_label}, {pair_label}"
-            if text not in seen:
-                seen.add(text)
-                lines.append(text)
-        return "<br>".join(lines)
-
-    x_c, y_c, e_c, h_c = [], [], [], []
-    x_p, y_p, h_p = [], [], []
-    x_f, y_f, h_f = [], [], []
-    for item in grouped:
-        chosen = int(item["index"])
-        xc = float(x_proj[chosen])
-        yc = float(y_proj[chosen])
-        ev = binding_energies_clean[chosen]
-        roll = _rollup_dft_group_status(item["record_indices"], d_arr)
-        ht0 = _hover_for_group(item["record_indices"])
-        if roll == "complete" and np.isfinite(ev):
-            x_c.append(xc)
-            y_c.append(yc)
-            e_c.append(float(ev))
-            h_c.append(ht0)
-        elif roll == "failed" or (roll == "complete" and not np.isfinite(ev)):
-            x_f.append(xc)
-            y_f.append(yc)
-            h_f.append(ht0 + "<br>DFT: failed (no energy)")
-        else:
-            x_p.append(xc)
-            y_p.append(yc)
-            h_p.append(ht0 + "<br>DFT: pending / not finished")
-
-    idxs = np.array([item["index"] for item in grouped], dtype=int)
-    projected = np.column_stack([x_proj[idxs], y_proj[idxs]])
-    _add_plotly_guides(fig, projected, row, col)
-
-    if x_c:
-        fig.add_trace(
-            go.Scatter(
-                x=x_c,
-                y=y_c,
-                mode="markers",
-                marker=dict(
-                    size=10,
-                    color=e_c,
-                    coloraxis=coloraxis,
-                    line=dict(color="black", width=1),
-                ),
-                text=h_c,
-                hovertemplate="%{text}<br>Energy=%{marker.color:.2f} J/m^2<extra></extra>",
-                showlegend=False,
-            ),
-            row=row,
-            col=col,
-        )
-    if x_p:
-        fig.add_trace(
-            go.Scatter(
-                x=x_p,
-                y=y_p,
-                mode="markers",
-                marker=dict(symbol="circle-open", size=14, line=dict(color="black", width=1)),
-                hovertext=h_p,
-                hovertemplate="%{hovertext}<extra></extra>",
-                showlegend=False,
-            ),
-            row=row,
-            col=col,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=x_p,
-                y=y_p,
-                mode="text",
-                text=["?"] * len(x_p),
-                textposition="middle center",
-                textfont=dict(size=10, color="black"),
-                hoverinfo="skip",
-                showlegend=False,
-            ),
-            row=row,
-            col=col,
-        )
-    if x_f:
-        fig.add_trace(
-            go.Scatter(
-                x=x_f,
-                y=y_f,
-                mode="markers",
-                marker=dict(symbol="circle-open", size=14, line=dict(color="black", width=1)),
-                hovertext=h_f,
-                hovertemplate="%{hovertext}<extra></extra>",
-                showlegend=False,
-            ),
-            row=row,
-            col=col,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=x_f,
-                y=y_f,
-                mode="text",
-                text=["\u00d7"] * len(x_f),
-                textposition="middle center",
-                textfont=dict(size=12, color="black"),
-                hoverinfo="skip",
-                showlegend=False,
-            ),
-            row=row,
-            col=col,
-        )
-    axis_suffix = "" if (row == 1 and col == 1) else "2"
-    fig.update_xaxes(range=[-1.25, 1.25], visible=False, row=row, col=col)
-    fig.update_yaxes(
-        range=[-1.25, 1.25],
-        visible=False,
-        scaleanchor=f"x{axis_suffix}",
-        scaleratio=1,
-        row=row,
-        col=col,
-    )
-
-
-def plot_binding_energy_analysis(
-    material1_planes,
-    material2_planes,
-    binding_energies,
-    film_name,
-    substrate_name,
-    title,
-    dft_status=None,
-):
+def plot_binding_energy_analysis(material1_planes, material2_planes, binding_energies,
+                                film_name, substrate_name, title):
     """
     Create stereographic projection plots for binding energy analysis
 
     Parameters:
     material1_planes: crystal planes for material 1 (N, 3)
     material2_planes: crystal planes for material 2 (N, 3)
-    binding_energies: binding energies array (N,); may contain NaN when ``dft_status`` is set
-    dft_status: optional length-N DFT state labels: ``complete`` / ``pending`` / ``failed``
+    binding_energies: binding energies array (N,)
     """
     # Set matplotlib parameters
     plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
     plt.rcParams['axes.unicode_minus'] = True
 
-    be = np.asarray(binding_energies, dtype=float)
-    fin = np.isfinite(be)
-    if dft_status is not None and len(dft_status) == len(be):
-        ds = np.array([str(s).strip().lower() for s in dft_status], dtype=object)
-        fin &= ds == "complete"
-    fe = be[fin]
-    if fe.size:
-        vmin, vmax = _shared_energy_color_limits(fe)
-    else:
-        vmin, vmax = 0.0, 1.0
-
     # Create figure - each subplot is 3x3, so total is 6x3
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(6, 3))
 
     # Plot stereographic projection for material 1
-    im1, scatter1 = create_stereographic_plot(
-        material1_planes,
-        binding_energies,
-        film_name,
-        ax1,
-        vmin=vmin,
-        vmax=vmax,
-        dft_status=dft_status,
-    )
+    im1, scatter1 = create_stereographic_plot(material1_planes, binding_energies,
+                                                                             film_name, ax1)
 
     # Plot stereographic projection for material 2
-    im2, scatter2 = create_stereographic_plot(
-        material2_planes,
-        binding_energies,
-        substrate_name,
-        ax2,
-        vmin=vmin,
-        vmax=vmax,
-        dft_status=dft_status,
-    )
+    im2, scatter2 = create_stereographic_plot(material2_planes, binding_energies,
+                                                                             substrate_name, ax2)
 
     # Add colorbar
     fig.subplots_adjust(right=0.85)
     cbar_ax = fig.add_axes([0.88, 0.15, 0.02, 0.7])
-    cbar_src = scatter2 if scatter2 is not None else scatter1
-    if cbar_src is None:
-        cbar_src = im2 if im2 is not None else im1
-    cbar = fig.colorbar(cbar_src, cax=cbar_ax)
+    cbar = fig.colorbar(scatter2, cax=cbar_ax)
     cbar.set_label(f'{title} J/m$^2$', rotation=270, labelpad=15, fontsize=15)
     cbar.ax.tick_params(labelsize=15)
-    cbar.ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
     plt.tight_layout(rect=[0, 0, 0.85, 1], pad=0.1)
     return fig
 
-
-def plot_binding_energy_analysis_interactive(
-    material1_planes,
-    material2_planes,
-    binding_energies,
-    film_pairs,
-    substrate_pairs,
-    film_name,
-    substrate_name,
-    title,
-    dft_status=None,
-):
-    from plotly.subplots import make_subplots
-
-    be = np.asarray(binding_energies, dtype=float)
-    fin = np.isfinite(be)
-    if dft_status is not None and len(dft_status) == len(be):
-        ds = np.array([str(s).strip().lower() for s in dft_status], dtype=object)
-        fin &= ds == "complete"
-    fe = be[fin]
-    if fe.size:
-        vmin, vmax = _shared_energy_color_limits(fe)
-    else:
-        vmin, vmax = 0.0, 1.0
-
-    fig = make_subplots(
-        rows=1,
-        cols=2,
-        subplot_titles=(_formula_label_html(film_name), _formula_label_html(substrate_name)),
-        horizontal_spacing=0.04,
-    )
-    create_interactive_stereographic_plot(
-        material1_planes,
-        binding_energies,
-        film_pairs,
-        film_name,
-        fig,
-        row=1,
-        col=1,
-        coloraxis="coloraxis",
-        dft_status=dft_status,
-    )
-    create_interactive_stereographic_plot(
-        material2_planes,
-        binding_energies,
-        substrate_pairs,
-        substrate_name,
-        fig,
-        row=1,
-        col=2,
-        coloraxis="coloraxis",
-        dft_status=dft_status,
-    )
-    fig.update_layout(
-        width=1200,
-        height=700,
-        template="plotly_white",
-        margin=dict(l=20, r=20, t=60, b=20),
-        coloraxis=dict(
-            colorscale="Viridis",
-            colorbar=dict(title=f"{title} J/m^2", tickformat=".2f"),
-            cmin=vmin,
-            cmax=vmax,
-        ),
-    )
-    return fig
-
 def visualize_minimization_results(film_name, substrate_name, title = 'Cohesive Energy'):
-    records = parse_area_strain_records('area_strain')
-    records = enrich_area_strain_records_with_summary(records)
-    material1_planes = np.array([r["material1_plane"] for r in records])
-    material2_planes = np.array([r["material2_plane"] for r in records])
-    binding_energies = np.array([r["binding_energy"] for r in records])
-    film_pairs = [_format_pair_label(r['match_id'], r['term_id']) for r in records]
-    substrate_pairs = [_format_pair_label(r['match_id'], r['term_id']) for r in records]
+    material1_planes, material2_planes, binding_energies = parse_area_strain_data('area_strain')
     fig = plot_binding_energy_analysis(material1_planes,
                                 material2_planes,
                                 binding_energies,
@@ -2181,42 +1604,4 @@ def visualize_minimization_results(film_name, substrate_name, title = 'Cohesive 
                                 substrate_name,
                                 title)
     fig.savefig('stereographic.jpg', dpi=600, bbox_inches='tight', format='jpg')
-    try:
-        import plotly.io as pio
-
-        interactive_fig = plot_binding_energy_analysis_interactive(
-            material1_planes,
-            material2_planes,
-            binding_energies,
-            film_pairs,
-            substrate_pairs,
-            film_name,
-            substrate_name,
-            title,
-        )
-        interactive_div = pio.to_html(
-            interactive_fig,
-            include_plotlyjs=True,
-            full_html=False,
-            default_width="100%",
-            default_height="700px",
-        )
-        html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Stereographic Results</title>
-  <style>
-    body {{ font-family: Arial, sans-serif; margin: 24px; background: #fff; color: #111; }}
-  </style>
-</head>
-<body>
-  {interactive_div}
-</body>
-</html>
-"""
-        with open('stereographic_interactive.html', 'w', encoding='utf-8') as f:
-            f.write(html)
-    except Exception as e:
-        print(f"Warning: failed to write stereographic_interactive.html: {e}")
     plt.show()
