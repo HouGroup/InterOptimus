@@ -1,8 +1,6 @@
 """IOMaker job pipeline (JSON settings → Jobflow Flow, local or jobflow-remote).
 
-This module is the **non-LLM** core used by :mod:`InterOptimus.agents.simple_iomaker`.
-Natural-language → settings via LLM was removed from the ``pure-workflow`` branch;
-use ``interoptimus-simple`` / :func:`run_simple_iomaker` with a full JSON/YAML config instead.
+Used by :mod:`InterOptimus.agents.simple_iomaker` and programmatic callers.
 """
 from __future__ import annotations
 from types import SimpleNamespace
@@ -243,7 +241,7 @@ def print_config_help() -> None:
 
 @dataclass
 class BaseBuildConfig:
-    """Base configuration for building an IOMaker Flow from JSON settings (no LLM)."""
+    """Base configuration for building an IOMaker Flow from JSON settings."""
     film_cif: str = DEFAULT_FILM_CIF
     substrate_cif: str = DEFAULT_SUBSTRATE_CIF
     output_flow_json: str = 'io_flow.json'
@@ -274,6 +272,7 @@ class BaseBuildConfig:
     do_mlip_gd: Optional[bool] = None
     do_vasp_gd: bool = False
     lowest_energy_pairs_settings: Optional[Dict[str, Any]] = None
+    vasp_pair_selection: Optional[str] = None
     ckpt_path: Optional[str] = None
     mlip_calc: Optional[str] = None
     use_regex_numeric_fallback: bool = False
@@ -325,7 +324,7 @@ def _sanitize_numeric_settings(settings: Dict[str, Any]) -> None:
         opt['fmax'] = 0.05
 _IOMAKER_FULL_SETTINGS_REQUIRED_KEYS = ('name', 'mode', 'inputs', 'lattice_matching_settings', 'structure_settings', 'optimization_settings', 'global_minimization_settings')
 
-def uses_full_llm_style_settings_dict(d: Optional[Dict[str, Any]]) -> bool:
+def uses_legacy_full_settings_dict(d: Optional[Dict[str, Any]]) -> bool:
     """
     True when *d* has every section of a complete IOMaker settings dict
     (same shape as ``normalize_iomaker_settings_from_full_dict`` expects), not a partial patch.
@@ -529,11 +528,11 @@ def execute_iomaker_pipeline(settings: Dict[str, Any], cfg: BaseBuildConfig, fil
         vasp_exec_config = {'pre_run': str(settings['vasp_pre_run'])}
     if do_vasp and vasp_exec_config is not None:
         settings['vasp_exec_config'] = vasp_exec_config
-    if not settings.get('name') or settings.get('name') == 'IO_llm':
+    if not settings.get('name') or settings.get('name') in ('IO_llm', 'IOMaker'):
         film_label = getattr(film_conv.composition, 'reduced_formula', None) or 'film'
         substrate_label = getattr(substrate_conv.composition, 'reduced_formula', None) or 'substrate'
         settings['name'] = _auto_iomaker_name(settings=settings, film_label=film_label, substrate_label=substrate_label)
-    _slug = _local_run_workdir(settings.get('name', 'IO_llm'))
+    _slug = _local_run_workdir(settings.get('name', 'IOMaker'))
     if cfg.submit_target == 'server' and cfg.server_run_parent:
         local_workdir = os.path.join(cfg.server_run_parent, _slug)
     else:
@@ -546,7 +545,7 @@ def execute_iomaker_pipeline(settings: Dict[str, Any], cfg: BaseBuildConfig, fil
         return res() if callable(res) else res
     mlip_resolved = _resources_or_callable(cfg.mlip_resources)
     vasp_resolved = _resources_or_callable(cfg.vasp_resources)
-    maker = IOMaker(name=settings.get('name', 'IO_llm'), lattice_matching_settings=settings['lattice_matching_settings'], structure_settings=settings['structure_settings'], optimization_settings=settings['optimization_settings'], global_minimization_settings=settings['global_minimization_settings'], do_vasp=do_vasp, do_vasp_gd=do_vasp_gd, relax_user_incar_settings=_cfg_or_settings('relax_user_incar_settings'), relax_user_potcar_settings=_cfg_or_settings('relax_user_potcar_settings'), relax_user_kpoints_settings=_cfg_or_settings('relax_user_kpoints_settings'), relax_user_potcar_functional=_cfg_or_settings('relax_user_potcar_functional'), static_user_incar_settings=_cfg_or_settings('static_user_incar_settings'), static_user_potcar_settings=_cfg_or_settings('static_user_potcar_settings'), static_user_kpoints_settings=_cfg_or_settings('static_user_kpoints_settings'), static_user_potcar_functional=_cfg_or_settings('static_user_potcar_functional'), vasp_gd_kwargs=vasp_gd_kwargs_merged, vasp_dipole_correction=vasp_dipole_merged, vasp_relax_settings=vasp_relax_settings, vasp_static_settings=vasp_static_settings, lowest_energy_pairs_settings=cfg.lowest_energy_pairs_settings, pairs_output_dir=None, mlip_resources=mlip_resolved, vasp_resources=vasp_resolved, mlip_worker=cfg.mlip_worker, vasp_worker=cfg.vasp_worker, vasp_exec_config=vasp_exec_config)
+    maker = IOMaker(name=settings.get('name', 'IOMaker'), lattice_matching_settings=settings['lattice_matching_settings'], structure_settings=settings['structure_settings'], optimization_settings=settings['optimization_settings'], global_minimization_settings=settings['global_minimization_settings'], do_vasp=do_vasp, do_vasp_gd=do_vasp_gd, relax_user_incar_settings=_cfg_or_settings('relax_user_incar_settings'), relax_user_potcar_settings=_cfg_or_settings('relax_user_potcar_settings'), relax_user_kpoints_settings=_cfg_or_settings('relax_user_kpoints_settings'), relax_user_potcar_functional=_cfg_or_settings('relax_user_potcar_functional'), static_user_incar_settings=_cfg_or_settings('static_user_incar_settings'), static_user_potcar_settings=_cfg_or_settings('static_user_potcar_settings'), static_user_kpoints_settings=_cfg_or_settings('static_user_kpoints_settings'), static_user_potcar_functional=_cfg_or_settings('static_user_potcar_functional'), vasp_gd_kwargs=vasp_gd_kwargs_merged, vasp_dipole_correction=vasp_dipole_merged, vasp_relax_settings=vasp_relax_settings, vasp_static_settings=vasp_static_settings, lowest_energy_pairs_settings=_cfg_or_settings('lowest_energy_pairs_settings'), vasp_pair_selection=_cfg_or_settings('vasp_pair_selection') or 'each_match_lowest', pairs_output_dir=None, mlip_resources=mlip_resolved, vasp_resources=vasp_resolved, mlip_worker=cfg.mlip_worker, vasp_worker=cfg.vasp_worker, vasp_exec_config=vasp_exec_config)
     flow = maker.make(film_conv, substrate_conv)
     os.makedirs(local_workdir, exist_ok=True)
     out_path = os.path.abspath(os.path.join(local_workdir, cfg.output_flow_json))
@@ -575,7 +574,7 @@ def execute_iomaker_pipeline(settings: Dict[str, Any], cfg: BaseBuildConfig, fil
     submit_dir = os.path.abspath(os.path.dirname(out_path))
     result = {'flow_json_path': out_path, 'flow_dict': flow_dict, 'settings': settings, 'structures_meta': meta, 'structures_info': structures_info, 'submit_workdir': submit_dir, 'interoptimus_task_json_path': os.path.join(submit_dir, 'io_interoptimus_task.json')}
     if cfg.submit_target == 'local':
-        run_dir = local_workdir or _local_run_workdir(settings.get('name', 'IO_llm'))
+        run_dir = local_workdir or _local_run_workdir(settings.get('name', 'IOMaker'))
         _run_flow_locally(flow, run_dir)
         result['local_workdir'] = os.path.abspath(run_dir)
         result['pairs_summary_path'] = os.path.abspath(os.path.join(run_dir, 'pairs_summary.txt'))
@@ -609,7 +608,7 @@ def execute_iomaker_pipeline(settings: Dict[str, Any], cfg: BaseBuildConfig, fil
                 if reg_jf_id:
                     try:
                         wd_reg = submit_result.get('submit_workdir') or local_workdir_abs or ''
-                        rec = register_interoptimus_server_task(task_name=str(settings.get('name', 'IO_llm')), jf_job_id=reg_jf_id, submit_workdir=str(wd_reg), do_vasp=bool(settings.get('do_vasp')), mlip_job_uuid=submit_result.get('mlip_job_uuid'), vasp_job_uuids=submit_result.get('vasp_job_uuids'), flow_uuid=submit_result.get('flow_uuid'))
+                        rec = register_interoptimus_server_task(task_name=str(settings.get('name', 'IOMaker')), jf_job_id=reg_jf_id, submit_workdir=str(wd_reg), do_vasp=bool(settings.get('do_vasp')), mlip_job_uuid=submit_result.get('mlip_job_uuid'), vasp_job_uuids=submit_result.get('vasp_job_uuids'), flow_uuid=submit_result.get('flow_uuid'))
                         result['interoptimus_task_serial'] = rec['serial_id']
                         result['interoptimus_task_record'] = rec
                         _mlip = (rec.get('mlip_job_uuid') or '').strip() or str(submit_result.get('mlip_job_uuid') or '').strip()
@@ -623,7 +622,7 @@ def execute_iomaker_pipeline(settings: Dict[str, Any], cfg: BaseBuildConfig, fil
                     except Exception as _reg_err:
                         result['interoptimus_task_register_error'] = str(_reg_err)
                         try:
-                            persist_iomaker_task_index_fallback(task_name=str(settings.get('name', 'IO_llm')), jf_job_id=reg_jf_id, submit_workdir=str(submit_result.get('submit_workdir') or local_workdir_abs or ''), do_vasp=bool(settings.get('do_vasp')), mlip_job_uuid=submit_result.get('mlip_job_uuid'), vasp_job_uuids=submit_result.get('vasp_job_uuids'), flow_uuid=submit_result.get('flow_uuid'))
+                            persist_iomaker_task_index_fallback(task_name=str(settings.get('name', 'IOMaker')), jf_job_id=reg_jf_id, submit_workdir=str(submit_result.get('submit_workdir') or local_workdir_abs or ''), do_vasp=bool(settings.get('do_vasp')), mlip_job_uuid=submit_result.get('mlip_job_uuid'), vasp_job_uuids=submit_result.get('vasp_job_uuids'), flow_uuid=submit_result.get('flow_uuid'))
                         except Exception:
                             pass
             else:

@@ -9,7 +9,7 @@ symmetry analysis to identify equivalent matches and terminations.
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
 from pymatgen.analysis.interfaces import CoherentInterfaceBuilder
 from InterOptimus.equi_term import get_non_identical_slab_pairs, co_point_group_operations
-from pymatgen.core.structure import Structure, IStructure
+from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces.zsl import ZSLGenerator, ZSLMatch, reduce_vectors
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from interfacemaster.cellcalc import get_primitive_hkl
@@ -19,7 +19,6 @@ from numpy import *
 import numpy as np
 from numpy.linalg import *
 from pymatgen.analysis.structure_matcher import StructureMatcher
-#from pymatgen.core.surface import get_symmetrically_equivalent_miller_indices
 # from ase.utils.structure_comparator import SymmetryEquivalenceCheck
 from InterOptimus.equi_term import pair_fit
 from InterOptimus.tool import sort_list
@@ -35,75 +34,20 @@ from collections.abc import Sequence
 import itertools
 from pymatgen.core.surface import _is_in_miller_family
 
-from functools import reduce
-import math
 import re
 import json
 import builtins
 from pathlib import Path
 
-def get_meshgrid(lim):
-    x = np.arange(-lim, lim, 1)
-    y = x
-    z = x
-    indice = (np.stack(np.meshgrid(x, y, z)).T).reshape(len(x) ** 3, 3)
-    indice_0 = indice[np.where(np.sum(abs(indice), axis=1) != 0)[0]]
-    indice_0 = indice_0[np.argsort(np.linalg.norm(indice_0, axis = 1))]
-    return indice_0[np.where(np.gcd.reduce(indice_0, axis=1) == 1)[0]]
-
-def get_symmetrically_distinct_miller_indices(
-    structure: Structure | IStructure,
-    max_index: int,
-) -> list:
-    """Find all symmetrically distinct indices below a certain max-index
-    for a given structure. Analysis is based on the symmetry of the
-    reciprocal lattice of the structure.
-
-    Args:
-        structure (Structure): The input structure.
-        max_index (int): The maximum index. For example, 1 means that
-            (100), (110), and (111) are returned for the cubic structure.
-            All other indices are equivalent to one of these.
-    """
-    # Get a list of all hkls for conventional (including equivalent)
-    rng = list(range(-max_index, max_index + 1))[::-1]
-    conv_hkl_list = get_meshgrid(max_index)
-
-    # Sort by the maximum absolute values of Miller indices so that
-    # low-index planes come first. This is important for trigonal systems.
-    conv_hkl_list = sorted(conv_hkl_list, key=lambda x: max(np.abs(x)))
-
-    # Get distinct hkl planes from the rhombohedral setting if trigonal
-    spg_analyzer = SpacegroupAnalyzer(structure)
-    miller_list = conv_hkl_list
-    symm_ops = structure.lattice.get_recp_symmetry_operation()
-
-    unique_millers: list = []
-    unique_millers_conv: list = []
-
-    for idx, miller in enumerate(miller_list):
-        denom = abs(reduce(math.gcd, miller))  # type: ignore[arg-type]
-        if not _is_in_miller_family(miller, unique_millers, symm_ops):
-            unique_millers.append(miller)
-            unique_millers_conv.append(miller)
-
-    return unique_millers_conv
 
 def get_symmetrically_equivalent_miller_indices(
     structure: Structure,
     miller_index: tuple[int, ...],
-    return_hkil: bool = True
 ) -> list:
-    """Get indices for all equivalent sites within a given structure.
-    Analysis is based on the symmetry of its reciprocal lattice.
+    """Symmetrically equivalent Miller indices as 3-tuple (h, k, l).
 
-    Args:
-        structure (Structure): Structure to analyze.
-        miller_index (tuple): Designates the family of Miller indices
-            to find. Can be hkl or hkil for hexagonal systems.
-        return_hkil (bool): Whether to return hkil (True) form of Miller
-            index for hexagonal systems, or hkl (False).
-        system: The crystal system of the structure.
+    Uses ``structure.lattice.get_recp_symmetry_operation()`` only (no trigonal
+    primitive-cell branch). Output is always hkl; there is no hkil conversion.
     """
     # Convert to hkl if hkil, because in_coord_list only handles tuples of 3
     if len(miller_index) >= 3:
@@ -127,7 +71,7 @@ def get_symmetrically_equivalent_miller_indices(
         if miller == _miller_index:
             continue
 
-        if any(idx != 0 for idx in miller):
+        if builtins.any(idx != 0 for idx in miller):
             if _is_in_miller_family(miller, equivalent_millers, symm_ops):
                 equivalent_millers += [miller]
 
@@ -156,8 +100,8 @@ def get_identical_pairs(match, film, substrate):
     Returns:
         list: List of tuples containing equivalent (film_miller, substrate_miller) pairs
     """
-    film_idtc_millers = get_symmetrically_equivalent_miller_indices(film, match[0], return_hkil=False)
-    substrate_idtc_millers = get_symmetrically_equivalent_miller_indices(substrate, match[1], return_hkil=False)
+    film_idtc_millers = get_symmetrically_equivalent_miller_indices(film, match[0])
+    substrate_idtc_millers = get_symmetrically_equivalent_miller_indices(substrate, match[1])
 
     combs = []
     for i in film_idtc_millers:
@@ -1358,37 +1302,15 @@ def _rollup_dft_group_status(record_indices, dft_status_arr):
     Priority: any failed -> failed; else any pending -> pending; else complete.
     ``mlip`` means no DFT was scheduled for that termination (show MLIP energy); treated like complete for coloring.
     When *dft_status_arr* is None, returns ``\"complete\"`` (legacy MLIP-only plots).
-
-    Note: stereographic *symbols* (colored dot vs ``?`` vs ``×``) do not use this rollup;
-    they use the **chosen representative** row only (see :func:`_stereo_symbol_class`), so a
-    failed neighbor at the same projection does not force ``×`` on a completed pair.
     """
     if dft_status_arr is None:
         return "complete"
     statuses = [str(dft_status_arr[i]).strip().lower() for i in record_indices]
-    if any(s == "failed" for s in statuses):
+    if builtins.any(s == "failed" for s in statuses):
         return "failed"
-    if any(s == "pending" for s in statuses):
+    if builtins.any(s == "pending" for s in statuses):
         return "pending"
     return "complete"
-
-
-def _stereo_symbol_class(chosen_idx: int, d_arr, ev: float) -> str:
-    """
-    Classify the *displayed* stereographic point after :func:`_group_projected_points`.
-
-    Returns ``\"color\"`` (finite γ colormap), ``\"pending`` (open circle + ``?``), or
-    ``\"failed`` (open circle + ``×``).
-    """
-    if d_arr is None:
-        return "color" if np.isfinite(ev) else "failed"
-    raw = d_arr[int(chosen_idx)]
-    st = str(raw).strip().lower() if raw is not None else "complete"
-    if st in ("complete", "mlip") and np.isfinite(ev):
-        return "color"
-    if st == "pending":
-        return "pending"
-    return "failed"
 
 
 def _compute_stereographic_guides(projected, tolerance=0.01):
@@ -1774,17 +1696,17 @@ def create_stereographic_plot(
         xc = float(x_proj[chosen])
         yc = float(y_proj[chosen])
         ev = binding_energies_clean[chosen]
-        sym = _stereo_symbol_class(chosen, d_arr, float(ev))
-        if sym == "color":
+        roll = _rollup_dft_group_status(item["record_indices"], d_arr)
+        if roll == "complete" and np.isfinite(ev):
             x_c.append(xc)
             y_c.append(yc)
             e_c.append(float(ev))
-        elif sym == "pending":
-            x_p.append(xc)
-            y_p.append(yc)
-        else:
+        elif roll == "failed" or (roll == "complete" and not np.isfinite(ev)):
             x_f.append(xc)
             y_f.append(yc)
+        else:
+            x_p.append(xc)
+            y_p.append(yc)
 
     if e_c:
         if vmin is None or vmax is None:
@@ -1947,21 +1869,21 @@ def create_interactive_stereographic_plot(
         xc = float(x_proj[chosen])
         yc = float(y_proj[chosen])
         ev = binding_energies_clean[chosen]
-        sym = _stereo_symbol_class(chosen, d_arr, float(ev))
+        roll = _rollup_dft_group_status(item["record_indices"], d_arr)
         ht0 = _hover_for_group(item["record_indices"])
-        if sym == "color":
+        if roll == "complete" and np.isfinite(ev):
             x_c.append(xc)
             y_c.append(yc)
             e_c.append(float(ev))
             h_c.append(ht0)
-        elif sym == "pending":
-            x_p.append(xc)
-            y_p.append(yc)
-            h_p.append(ht0 + "<br>DFT: pending / not finished")
-        else:
+        elif roll == "failed" or (roll == "complete" and not np.isfinite(ev)):
             x_f.append(xc)
             y_f.append(yc)
             h_f.append(ht0 + "<br>DFT: failed (no energy)")
+        else:
+            x_p.append(xc)
+            y_p.append(yc)
+            h_p.append(ht0 + "<br>DFT: pending / not finished")
 
     idxs = np.array([item["index"] for item in grouped], dtype=int)
     projected = np.column_stack([x_proj[idxs], y_proj[idxs]])

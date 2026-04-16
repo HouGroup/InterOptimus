@@ -2420,12 +2420,11 @@ def _scheduled_interface_pairs_from_vasp_tags(
     Pairs ``(match_id, term_id)`` that have a VASP interface job tag ``"{m}_{t}_it"`` in the
     expanded jobflow-remote rows.
 
-    **Stereographic ``area_strain``** (see ``InterfaceWorker.visualize_minimization_results``) writes
-    one row per stereographic bin; for each bin it picks the **lowest MLIP** energy among competing
-    matches and records that winner's ``(match_id, term_id)``. Those winners are drawn from the **same**
-    per-plane selection as ``patch_jobflow_jobs(..., only_lowest_energy_each_plane=True)``, i.e. the
-    DFT interface set. So each ``area_strain`` row should reference a pair that **ought** to have an
-    ``*_it`` job—if our tag parsing matches jobflow-remote.
+    **Stereographic ``area_strain``** (see ``InterfaceWorker.visualize_minimization_results``) still uses
+    one winner per Miller bin (``only_lowest_energy_each_plane``), while **default VASP** uses
+    ``vasp_pair_selection='each_match_lowest'`` (one interface relax per match). So ``area_strain`` rows
+    need not line up 1:1 with submitted ``*_it`` tags unless you set ``vasp_pair_selection='each_plane'``.
+    Pairs with an ``*_it`` tag in the expanded job rows are treated as DFT-scheduled; others are ``mlip_only``.
 
     Separately, ``opt_results.pkl`` still lists **every** MLIP-optimized termination; pairs with no
     ``*_it`` tag in the fetch expansion are labeled ``mlip_only`` when merging so they are not
@@ -2608,6 +2607,10 @@ def _iomaker_collect_vasp_energy_rows(
                 vasp_pair_status = "pending"
             elif vasp_energy is not None:
                 vasp_pair_status = "complete"
+            elif rollup == "ready":
+                # Interface VASP finished but γ could not be assembled (missing film/sub bulk E, area, …).
+                # Do not mark as hard failed for stereographic: merge uses MLIP binding like mlip_only.
+                vasp_pair_status = "mlip_gamma_fallback"
             else:
                 vasp_pair_status = "failed"
 
@@ -2762,7 +2765,7 @@ def iomaker_build_vasp_mlip_style_results(
         if prow and prow.get("vasp_pair_status") == "complete" and prow.get("vasp_energy") is not None:
             updated["binding_energy"] = float(prow["vasp_energy"])
             updated["dft_status"] = "complete"
-        elif prow and prow.get("vasp_pair_status") == "mlip_only":
+        elif prow and prow.get("vasp_pair_status") in ("mlip_only", "mlip_gamma_fallback"):
             updated["binding_energy"] = float(record["binding_energy"])
             updated["dft_status"] = "mlip"
         elif prow:
@@ -3015,11 +3018,32 @@ def iomaker_build_vasp_mlip_style_results(
             "vasp_partial_export": bool(partial_note),
         }
     )
+    # Copy merged stereographic outputs to the export root (same filenames as ``iomaker_fetch_results``).
+    # The first artifact pull leaves MLIP-only ``stereographic.jpg`` at *dest_root*; without this step,
+    # opening *dest_root*/stereographic.jpg still shows the old plot even after a successful VASP rebuild
+    # under *dest_root*/vasp_results/.
+    try:
+        for src_name, dst_name in (
+            ("stereographic.jpg", "stereographic.jpg"),
+            ("stereographic_interactive.html", "stereographic_interactive.html"),
+            ("area_strain", "area_strain"),
+        ):
+            src = os.path.join(vasp_root, src_name)
+            dst = os.path.join(dest_root, dst_name)
+            if os.path.isfile(src):
+                shutil.copy2(src, dst)
+        out["merged_stereographic_to_export_root"] = True
+    except Exception as e:
+        out["merged_stereographic_to_export_root_error"] = str(e)
     if verbose:
         print("VASP rebuilt results:", vasp_root)
         print(" VASP io_report:", io_report_path)
         if out.get("vasp_stereographic_path"):
             print(" VASP stereographic:", out["vasp_stereographic_path"])
+        if out.get("merged_stereographic_to_export_root"):
+            print(
+                " (also copied stereographic.jpg / stereographic_interactive.html / area_strain to export root)"
+            )
     return out
 
 
@@ -3109,8 +3133,7 @@ def iomaker_build_vasp_interface_report(
         if en is not None and tag:
             energies_by_tag[tag] = float(en)
 
-    # Same subset as ``patch_jobflow_jobs(..., only_lowest_energy_each_plane=True)`` — do not
-    # tabulate every MLIP-optimized termination as if it had a VASP row.
+    # Which (match, term) had interface VASP jobs is inferred from tags (matches whatever IOMaker submitted).
     scheduled_pairs = _scheduled_interface_pairs_from_vasp_tags({}, energies_by_tag)
 
     payload = load_opt_results_pickle_payload(str(pkl_path))
@@ -3331,6 +3354,23 @@ def iomaker_fetch_results(
                     "vasp_stereographic_interactive_path",
                 ):
                     fr[key] = vr2.get(key)
+                # Overwrite MLIP-only artifacts at export root so opening stereographic.jpg / area_strain
+                # shows DFT-merged plots (fetch copied run_dir files before this step).
+                try:
+                    vasp_dir = vr2.get("vasp_results_dir")
+                    if vasp_dir and os.path.isdir(vasp_dir):
+                        for src_name, dst_name in (
+                            ("stereographic.jpg", "stereographic.jpg"),
+                            ("stereographic_interactive.html", "stereographic_interactive.html"),
+                            ("area_strain", "area_strain"),
+                        ):
+                            src = os.path.join(vasp_dir, src_name)
+                            dst = os.path.join(dest_root, dst_name)
+                            if os.path.isfile(src):
+                                shutil.copy2(src, dst)
+                        fr["merged_stereographic_to_export_root"] = True
+                except Exception as e:
+                    fr["merged_stereographic_to_export_root_error"] = str(e)
             elif vr2.get("error"):
                 fr["vasp_results_error"] = vr2.get("error")
                 if vr2.get("hint"):
@@ -3370,18 +3410,17 @@ def iomaker_fetch_results(
             print(" summary:", prog.get("stage_summary"))
         if fr.get("vasp_results_dir"):
             print(" vasp_results:", fr.get("vasp_results_dir"))
+        if fr.get("vasp_stereographic_path"):
+            print(" vasp stereographic:", fr.get("vasp_stereographic_path"))
+        if fr.get("merged_stereographic_to_export_root"):
+            print(
+                " note: stereographic.jpg / stereographic_interactive.html / area_strain at export root "
+                "were overwritten with VASP-merged versions (see vasp_results/ for copies)."
+            )
         if fr.get("vasp_interface_energy_report_path"):
             print(" vasp_report:", fr.get("vasp_interface_energy_report_path"))
         if fr.get("vasp_interface_energy_plot_path"):
             print(" vasp_plot:", fr.get("vasp_interface_energy_plot_path"))
-        # Root ``stereographic.jpg`` is the MLIP worker plot; VASP-merged γ uses DFT tags + area_strain.
-        if os.path.isfile(os.path.join(dest_root, "stereographic.jpg")):
-            print(
-                " note: stereographic.jpg in export root = MLIP-only; "
-                "VASP-merged stereographic: vasp_results/stereographic.jpg (if build succeeded)."
-            )
-        if fr.get("vasp_stereographic_path"):
-            print(" vasp stereographic:", fr.get("vasp_stereographic_path"))
     return fr
 
 

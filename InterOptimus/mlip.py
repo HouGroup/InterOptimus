@@ -7,8 +7,6 @@ ORB, SevenNet, MatRIS, and DPA models, along with ASE optimizer configurations.
 
 import os
 from pathlib import Path
-from typing import Optional
-
 import numpy as np
 from ase.filters import UnitCellFilter
 from ase.constraints import FixAtoms
@@ -132,7 +130,7 @@ def _init_orb_calculator(*, device: str, ckpt_path: str | None):
     # Legacy: loader(...) -> single forcefield; ORBCalculator(ff, device=...)
     # New: loader(...) -> (model, atoms_adapter); ORBCalculator(model, adapter, device=...)
     if ckpt_path:
-        loader = _orb_conservative_omat_loader_for_checkpoint_path(ckpt_path)
+        loader = _orb_conservative_pretrained_loader_for_checkpoint_path(ckpt_path)
         out = loader(
             weights_path=ckpt_path,
             device=device,
@@ -147,18 +145,23 @@ def _init_orb_calculator(*, device: str, ckpt_path: str | None):
     return ORBCalculator(out, device=device)
 
 
-def _orb_conservative_omat_loader_for_checkpoint_path(ckpt_path: str):
+def _orb_conservative_pretrained_loader_for_checkpoint_path(ckpt_path: str):
     """
-    ORB v3 conservative OMAT has two public checkpoints (different graph sizes).
+    Pick ``pretrained.orb_v3_conservative_*`` so architecture matches the checkpoint file.
 
-    Pick the ``pretrained.orb_v3_conservative_*_omat`` loader that matches the filename
-    so ``load_state_dict(strict=True)`` succeeds. Default / inf naming uses the
-    ``conservative-inf-omat`` architecture.
+    Filenames from Orbital Materials use ``-omat`` (OMat) vs ``-mpa`` (MPtraj + Alexandria) and
+    ``-20-`` vs ``-inf-`` neighbor caps. Loading with the wrong loader fails or mis-loads weights.
     """
     from orb_models.forcefield import pretrained
 
     base = os.path.basename(ckpt_path).lower()
-    if "conservative-20-omat" in base:
+    # MPA family (user may place orb-v3-conservative-*-mpa-*.ckpt in INTEROPTIMUS_CHECKPOINT_DIR)
+    if "mpa" in base:
+        if "20-mpa" in base or "conservative-20-mpa" in base:
+            return pretrained.orb_v3_conservative_20_mpa
+        return pretrained.orb_v3_conservative_inf_mpa
+    # OMAT family (default)
+    if "20-omat" in base or "conservative-20-omat" in base:
         return pretrained.orb_v3_conservative_20_omat
     return pretrained.orb_v3_conservative_inf_omat
 
@@ -218,7 +221,8 @@ class MlipCalc:
     Args:
         calc (str): Calculator type ('orb-models', 'sevenn', 'matris', 'dpa')
         user_settings (dict): Calculator-specific settings
-            - device (str): Device for computation ('cpu' or 'cuda')
+            - device (str): Device for computation ('cpu' or 'cuda'). Env ``INTEROPTIMUS_FORCE_MLIP_CPU=1``
+              forces CPU (avoids CUDA on old drivers).
             - ckpt_path (str): Path to model checkpoint (optional)
             - model (str): Model identifier for calculators that expose named models
             - task (str): Property bundle for calculators that support task selection
@@ -234,6 +238,9 @@ class MlipCalc:
         """
         user_settings = dict(user_settings or {})
         user_settings.setdefault('device', 'cpu')
+        # Skip CUDA entirely on nodes with an old driver / no GPU (avoids try-fail-retry noise in logs).
+        if (os.environ.get("INTEROPTIMUS_FORCE_MLIP_CPU") or "").strip().lower() in ("1", "true", "yes"):
+            user_settings["device"] = "cpu"
         _apply_checkpoint_defaults(calc, user_settings)
         self.calc_type = calc
         self.user_settings = user_settings
@@ -253,12 +260,39 @@ class MlipCalc:
                         "~/.cache/InterOptimus/checkpoints, INTEROPTIMUS_CHECKPOINT_DIR, or explicit path)"
                     )
                 except Exception as e:
-                    raise RuntimeError(
-                        f"Failed to load ORB weights from ckpt_path={ckpt!r}. "
-                        "Use a path to a .ckpt file that exists on this machine (including compute nodes), "
-                        "or set INTEROPTIMUS_CHECKPOINT_DIR and place orb-v3-*.ckpt there. "
-                        "Default ORB weights are downloaded from the network and were not used after this error."
-                    ) from e
+                    err_l = str(e).lower()
+                    if (
+                        device != "cpu"
+                        and ckpt
+                        and any(
+                            s in err_l
+                            for s in (
+                                "cuda",
+                                "nvidia",
+                                "driver",
+                                "cudnn",
+                                "no cuda",
+                            )
+                        )
+                    ):
+                        print(
+                            f"ORB on device={device!r} failed ({type(e).__name__}: {e}); "
+                            "retrying on CPU (old GPU driver or no CUDA)."
+                        )
+                        user_settings["device"] = "cpu"
+                        self.calc = _init_orb_calculator(device="cpu", ckpt_path=ckpt)
+                        print(
+                            "ORB initialization success on CPU after CUDA fallback "
+                            "(checkpoint from cache or explicit ckpt_path)"
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"Failed to load ORB weights from ckpt_path={ckpt!r}. "
+                            "Use a path to a .ckpt file that exists on this machine (including compute nodes), "
+                            "or set INTEROPTIMUS_CHECKPOINT_DIR and place orb-v3-*.ckpt there. "
+                            "MPA checkpoints need filenames containing 'mpa'; OMAT need 'omat'. "
+                            "Default ORB weights are downloaded from the network and were not used after this error."
+                        ) from e
             else:
                 try:
                     self.calc = _init_orb_calculator(device=device, ckpt_path=None)
@@ -266,11 +300,23 @@ class MlipCalc:
                         "ORB initialization success (ORB v3 conservative inf OMAT default; requires network unless cached)"
                     )
                 except Exception as e:
-                    raise RuntimeError(
-                        "ORB default weights load failed (no ckpt_path). orb_models uses a remote URL by default; "
-                        "place a matching orb-v3 checkpoint under INTEROPTIMUS_CHECKPOINT_DIR / "
-                        "~/.cache/InterOptimus/checkpoints or pass optimization_settings.ckpt_path."
-                    ) from e
+                    err_l = str(e).lower()
+                    if device != "cpu" and any(
+                        s in err_l for s in ("cuda", "nvidia", "driver", "cudnn", "no cuda")
+                    ):
+                        print(
+                            f"ORB default weights on device={device!r} failed ({type(e).__name__}: {e}); "
+                            "retrying on CPU."
+                        )
+                        user_settings["device"] = "cpu"
+                        self.calc = _init_orb_calculator(device="cpu", ckpt_path=None)
+                        print("ORB initialization success on CPU (default weights).")
+                    else:
+                        raise RuntimeError(
+                            "ORB default weights load failed (no ckpt_path). orb_models uses a remote URL by default; "
+                            "place a matching orb-v3 checkpoint under INTEROPTIMUS_CHECKPOINT_DIR / "
+                            "~/.cache/InterOptimus/checkpoints or pass optimization_settings.ckpt_path."
+                        ) from e
 
         elif calc == 'sevenn':
             from sevenn.calculator import SevenNetCalculator
@@ -342,7 +388,6 @@ class MlipCalc:
                 - fmax (float): Maximum force threshold
                 - steps (int): Maximum number of optimization steps
                 - fix_cell_booleans (list): Cell constraint flags
-                - viz_meta (dict, optional): If set and :func:`InterOptimus.viz_runtime.is_enabled`, emit per-step events.
 
         Returns:
             tuple: (optimized_structure, final_energy)
@@ -352,84 +397,14 @@ class MlipCalc:
         atoms.calc = self.calc
 
         kw = dict(kwargs)
-        viz_meta = kw.pop("viz_meta", None)
+        kw.pop("viz_meta", None)  # legacy; ignored
         fmax = float(kw.get("fmax", 0.05))
         max_steps = int(kw.get("steps", 200))
         fix_b = kw["fix_cell_booleans"]
 
         ft = UnitCellFilter(atoms, fix_b)
         relax = optimizer_class(ft, logfile=None)
-
-        from InterOptimus.viz_runtime import emit_event, is_enabled
-
-        def _interface_gamma_j_m2(E_sup: float, meta: dict) -> Optional[float]:
-            try:
-                A = float(meta.get("match_area_A2") or 0.0)
-                if A <= 0:
-                    return None
-                efr = float(meta.get("E_film_ref", 0.0))
-                esr = float(meta.get("E_sub_ref", 0.0))
-                di = bool(meta.get("double_interface", True))
-                c = 16.02176634
-                g = (float(E_sup) - efr - esr) / A * c
-                if di:
-                    g /= 2.0
-                return float(g)
-            except Exception:
-                return None
-
-        if is_enabled() and isinstance(viz_meta, dict):
-
-            pos0 = atoms.get_positions().copy()
-            nat = int(len(atoms))
-            for step in range(max_steps):
-                relax.run(fmax=fmax, steps=1)
-                E = float(atoms.get_potential_energy())
-                pos = atoms.get_positions()
-                rms = float(np.sqrt(np.mean((pos - pos0) ** 2)))
-                payload = {
-                    **viz_meta,
-                    "event": "relax_step",
-                    "step": int(step),
-                    "energy": E,
-                    "rms_displacement": rms,
-                    "n_atoms": nat,
-                    "energy_per_atom": float(E) / float(max(nat, 1)),
-                }
-                ig = _interface_gamma_j_m2(E, viz_meta)
-                if ig is not None:
-                    payload["interface_gamma_J_m2"] = ig
-                emit_event(payload)
-                conv = getattr(relax, "converged", None)
-                if callable(conv):
-                    try:
-                        if conv():
-                            break
-                    except Exception:
-                        pass
-            flat = atoms.get_positions().flatten()
-            nmax = min(len(flat), 4000 * 3)
-            nfin = int(len(atoms))
-            efin = float(atoms.get_potential_energy())
-            fin = {
-                **viz_meta,
-                "event": "relax_final",
-                "energy": efin,
-                "energy_per_atom": float(efin) / float(max(nfin, 1)),
-                "rms_displacement": float(
-                    np.sqrt(np.mean((atoms.get_positions() - pos0) ** 2))
-                ),
-                "positions": flat[:nmax].tolist(),
-                "n_atoms": nfin,
-                "numbers": atoms.get_atomic_numbers().tolist(),
-                "cell": atoms.get_cell().tolist(),
-            }
-            igf = _interface_gamma_j_m2(efin, viz_meta)
-            if igf is not None:
-                fin["interface_gamma_J_m2"] = igf
-            emit_event(fin)
-        else:
-            relax.run(fmax=fmax, steps=max_steps)
+        relax.run(fmax=fmax, steps=max_steps)
 
         return Structure.from_ase_atoms(atoms), atoms.get_potential_energy()
 

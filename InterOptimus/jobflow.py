@@ -621,6 +621,13 @@ class IOMaker(Maker):
     vasp_relax_settings: Optional[Dict[str, Any]] = None
     vasp_static_settings: Optional[Dict[str, Any]] = None
     lowest_energy_pairs_settings: Dict[str, Any] = None
+    #: How many ``(match_id, term_id)`` interface relax jobs ``patch_jobflow_jobs`` creates (and the default
+    #: ``pairs_summary`` when ``lowest_energy_pairs_settings`` is unset). **Default ``each_match_lowest``:** after
+    #: MLIP, run VASP for the **lowest-energy termination per lattice match** (one pair per ``match_id``).
+    #: ``each_plane`` keeps one winner per film/substrate Miller bin (aligned with stereographic / ``area_strain``
+    #: binning, often fewer interface relax jobs than ``each_match_lowest``). ``all_optimized`` runs VASP for
+    #: **every** row in ``global_optimized_data``. Explicit ``lowest_energy_pairs_settings`` overrides these flags.
+    vasp_pair_selection: Optional[str] = "each_match_lowest"
     pairs_output_dir: Optional[str] = None  # unused; POSCAR trees are produced locally from opt_results.pkl
     mlip_resources: Callable = None
     vasp_resources: Callable = None
@@ -629,6 +636,37 @@ class IOMaker(Maker):
     #: Passed to jobflow-remote ``set_run_config(..., exec_config=...)`` for the VASP sub-flow only.
     #: Use ``{"pre_run": "module load VASP/6.x"}`` (or set env ``INTEROPTIMUS_VASP_PRE_RUN`` when this is ``None``).
     vasp_exec_config: Optional[Dict[str, Any]] = None
+
+    def _resolved_pair_selection_kwargs(self) -> Dict[str, Any]:
+        """Kwargs for :meth:`InterfaceWorker.get_lowest_energy_pairs_each_match` / ``patch_jobflow_jobs``."""
+        sel = (self.vasp_pair_selection or "each_match_lowest").strip().lower()
+        if sel in ("all_optimized", "all", "all_pairs"):
+            base: Dict[str, Any] = {
+                "all_optimized_pairs": True,
+                "only_lowest_energy": False,
+                "only_lowest_energy_each_plane": False,
+            }
+        elif sel in ("each_match_lowest", "per_match_lowest"):
+            base = {
+                "all_optimized_pairs": False,
+                "only_lowest_energy": False,
+                "only_lowest_energy_each_plane": False,
+            }
+        elif sel in ("each_plane", "per_plane"):
+            base = {
+                "all_optimized_pairs": False,
+                "only_lowest_energy": False,
+                "only_lowest_energy_each_plane": True,
+            }
+        else:
+            raise ValueError(
+                f"Unknown vasp_pair_selection={self.vasp_pair_selection!r}; "
+                "use 'each_match_lowest' (default), 'each_plane', or 'all_optimized'."
+            )
+        merged = dict(base)
+        if self.lowest_energy_pairs_settings:
+            merged.update(self.lowest_energy_pairs_settings)
+        return merged
 
     @job(data="IO_results")
     def IO_HT_job(self, film_conv, substrate_conv):
@@ -653,8 +691,13 @@ class IOMaker(Maker):
 
         # Selected pairs table + opt_results.pkl (no pairs_best_it/ on compute filesystem;
         # POSCAR trees are materialized locally by fetch_interoptimus_task_results).
-        pairs_kwargs = self.lowest_energy_pairs_settings or {}
-        pairs = iw.get_lowest_energy_pairs_each_match(**pairs_kwargs)
+        pair_kw = self._resolved_pair_selection_kwargs()
+        pairs = iw.get_lowest_energy_pairs_each_match(
+            only_lowest_energy=pair_kw.get("only_lowest_energy", False),
+            only_lowest_energy_each_plane=pair_kw.get("only_lowest_energy_each_plane", False),
+            only_substrate=pair_kw.get("only_substrate", False),
+            all_optimized_pairs=pair_kw.get("all_optimized_pairs", False),
+        )
         pairs_summary = []
 
         cwd_here = os.getcwd()
@@ -844,6 +887,9 @@ class IOMaker(Maker):
                 vk = iomaker_resolve_patch_jobflow_vasp_kwargs(self)
                 lines.append("VASP (InterfaceWorker.patch_jobflow_jobs, resolved):")
                 lines.append(json.dumps(vk, indent=2, ensure_ascii=False))
+                lines.append(f"vasp_pair_selection: {self.vasp_pair_selection!r}")
+                lines.append("resolved_pair_selection_kwargs:")
+                lines.append(json.dumps(self._resolved_pair_selection_kwargs(), indent=2, ensure_ascii=False))
                 if self.vasp_relax_settings is not None:
                     lines.append("vasp_relax_settings (deprecated bucket, if any):")
                     lines.append(json.dumps(self.vasp_relax_settings, indent=2, ensure_ascii=False))
@@ -905,7 +951,10 @@ class IOMaker(Maker):
             vk = iomaker_resolve_patch_jobflow_vasp_kwargs(self)
             flow = iw.patch_jobflow_jobs(
                 filter_name=self.name,
-                only_lowest_energy_each_plane=True,
+                only_lowest_energy=pair_kw.get("only_lowest_energy", False),
+                only_lowest_energy_each_plane=pair_kw.get("only_lowest_energy_each_plane", False),
+                only_substrate=pair_kw.get("only_substrate", False),
+                all_optimized_pairs=pair_kw.get("all_optimized_pairs", False),
                 relax_user_incar_settings=vk["relax_user_incar_settings"],
                 relax_user_potcar_settings=vk["relax_user_potcar_settings"],
                 relax_user_kpoints_settings=vk["relax_user_kpoints_settings"],

@@ -5,14 +5,14 @@
 
 Crystal **interface** search and optimization with MLIP acceleration, optional VASP, and **Jobflow** / **jobflow-remote** execution.
 
-This **`pure-workflow`** branch keeps the **JSON-driven IOMaker pipeline** (submit → lattice match → MLIP → optional DFT → reports / stereographic-style analysis via existing fetch tooling) and **drops natural-language LLM** helpers to reduce dependencies and onboarding noise.
+This distribution focuses on the **JSON-driven IOMaker pipeline** (submit → lattice match → MLIP → optional DFT → reports and fetch tooling).
 
 ## Highlights
 
 - Lattice matching, termination screening, single / double interface builds
 - MLIP global minimization; optional VASP (cluster workers)
 - **One-shot config**: `interoptimus-simple -c your.yaml` or `run_simple_iomaker(...)`
-- Same outputs as before: `io_flow.json`, `io_report.txt`, `pairs_summary.txt`, `opt_results.pkl` (use `iomaker_fetch_results` / `remote_submit` helpers after server submit)
+- Outputs include `io_flow.json`, `io_report.txt`, `pairs_summary.txt`, `opt_results.pkl` (use `iomaker_fetch_results` / `remote_submit` helpers after server submit)
 
 ## Installation
 
@@ -63,16 +63,6 @@ from InterOptimus.agents.iomaker_job import (
 ```
 
 Full parameter reference: **[docs/simple_iomaker_parameters.md](docs/simple_iomaker_parameters.md)**.
-
-### Web UI (upload CIFs, MatRIS, stereographic)
-
-```bash
-pip install -e '.[web]'
-interoptimus-web
-# Browser: http://127.0.0.1:8765 — upload film + substrate CIF, run local jobflow, view io_report + stereographic figures.
-```
-
-Session files are stored under `~/.interoptimus/web_sessions/` unless `INTEROPTIMUS_WEB_SESSIONS` is set.
 
 ## Requirements
 

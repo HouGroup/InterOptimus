@@ -1,7 +1,5 @@
 """
-InterOptimus agent utilities for **workflow execution** (no natural-language LLM in this branch).
-
-Primary entry points:
+InterOptimus workflow execution (server submit, local run, fetch results).
 
 - :mod:`InterOptimus.agents.simple_iomaker` — JSON/YAML config → submit / run IOMaker
 - :mod:`InterOptimus.agents.iomaker_job` — programmatic BuildConfig + ``execute_iomaker_from_settings``

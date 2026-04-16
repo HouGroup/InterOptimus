@@ -19,7 +19,7 @@ from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBu
 from skopt import gp_minimize
 from skopt.space import Real
 from tqdm.notebook import tqdm
-from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat, cross, inf, round, arccos, pi, where, unique, linspace
+from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat, cross, inf, round, arccos, pi, where, unique
 from numpy.linalg import norm
 from InterOptimus.CNID import calculate_cnid_in_supercell
 import os
@@ -52,16 +52,6 @@ _DEFAULT_STATIC_INCAR_SETTINGS = {
 }
 
 _DOUBLE_INTERFACE_LATTICE_CONSTRAINTS = ".FALSE. .FALSE. .TRUE."
-
-
-def _viz_runtime_enabled() -> bool:
-    """True only when desktop viz explicitly enabled (see InterOptimus.viz_runtime)."""
-    try:
-        from InterOptimus.viz_runtime import is_enabled
-
-        return is_enabled()
-    except Exception:
-        return False
 
 
 def _merged_vasp_incar_settings(defaults, user_settings=None, *, extra_settings=None, num_atoms=None):
@@ -751,59 +741,18 @@ class InterfaceWorker:
                 return 0
         #if self.num_relax_bayesian == 0:
         self.opt_results[(self.match_id_now, self.term_id_now)]['sampled_interfaces'].append(interface_here)
-        e = self.mc.calculate(interface_here)
-        try:
-            from InterOptimus.viz_runtime import emit_event
-
-            if _viz_runtime_enabled():
-                interface_ref = self.get_specified_interface(self.match_id_now, self.term_id_now)
-                p = array([x, y, z])
-                CNID = calculate_cnid_in_supercell(interface_ref)[0]
-                CNID_cart = column_stack((dot(interface_ref.lattice.matrix.T, CNID), [0, 0, 0]))
-                row = dot(CNID_cart, p).reshape(1, 3) + column_stack((zeros(1), zeros(1), array([p[2]])))
-                xyz_cart = row[0].tolist()
-                idxs = self.get_interface_atom_indices(interface_here)
-                fc = interface_here.frac_coords
-                nmax = min(256, len(idxs))
-                iface_frac = [fc[int(ii)].tolist() for ii in idxs[:nmax]]
-                nat_total = len(interface_here)
-                film_set = set(interface_here.film_indices)
-                side_full = [0 if i in film_set else 1 for i in range(nat_total)]
-                z_all = array([int(interface_here[i].specie.Z) for i in range(nat_total)], dtype=int)
-                _MAX_VIZ_ATOMS = 4000
-                if nat_total > _MAX_VIZ_ATOMS:
-                    sel = linspace(0, nat_total - 1, _MAX_VIZ_ATOMS, dtype=int)
-                    pos_viz = interface_here.cart_coords[sel]
-                    nums_viz = z_all[sel]
-                    side_viz = [side_full[int(i)] for i in sel]
-                else:
-                    pos_viz = interface_here.cart_coords
-                    nums_viz = z_all
-                    side_viz = side_full
-                emit_event(
-                    {
-                        "phase": "bo",
-                        "event": "sample",
-                        "match_id": int(self.match_id_now),
-                        "term_id": int(self.term_id_now),
-                        "sample_index": len(self.opt_results[(self.match_id_now, self.term_id_now)]["sampled_interfaces"])
-                        - 1,
-                        "energy": float(e),
-                        "n_atoms": int(nat_total),
-                        "energy_per_atom": float(e) / float(nat_total),
-                        "xyz_frac": [float(x), float(y), float(z)],
-                        "xyz_cart": xyz_cart,
-                        "lattice": interface_here.lattice.matrix.tolist(),
-                        "interface_frac": iface_frac,
-                        "positions_cart": pos_viz.tolist(),
-                        "numbers": nums_viz.tolist(),
-                        "film_substrate": side_viz,
-                    }
-                )
-        except Exception:
-            pass
-        return e
-
+        return self.mc.calculate(interface_here)
+        """
+        else:
+            fix_thickness_film, fix_thickness_substrate = self.absolute_fix_thicknesses[self.match_id_now]
+            interface_here, mobility_mtx = add_sele_dyn_it(interface_here, fix_thickness_film, fix_thickness_substrate)
+            interface_here_relaxed, e = self.mc.optimize(interface_here, fix_cell_booleans = self.opt_kwargs['fix_cell_booleans'], fmax = 0.05, steps = self.num_relax_bayesian)
+            interface_here_relaxed.film = interface_here.film
+            interface_here_relaxed.substrate = interface_here.substrate
+            interface_here_relaxed.interface_properties = interface_here.interface_properties
+            self.opt_results[(self.match_id_now,self.term_id_now)]['sampled_interfaces'].append(interface_here)
+            return e
+        """
     def get_film_substrate_layer_thickness(self, match_id):
         """
         get single layer thickness
@@ -1171,9 +1120,7 @@ class InterfaceWorker:
         #get lowest-energy relaxed it
         relaxed_its, relaxed_Es = [], []
         for s_id in self.opt_results[(i,j)]['BO_selected_ids']:
-            relaxed_it, relaxed_E = self.relax_with_selective_dyn_it(
-                self.opt_results[(i, j)]["sampled_interfaces"][s_id], fthk_film, fthk_substrate, match_id=i, term_id=j
-            )
+            relaxed_it, relaxed_E = self.relax_with_selective_dyn_it(self.opt_results[(i,j)]['sampled_interfaces'][s_id], fthk_film, fthk_substrate)
             relaxed_its.append(relaxed_it)
             relaxed_Es.append(relaxed_E)
 
@@ -1257,7 +1204,7 @@ class InterfaceWorker:
             pass
         return it_E, strain_E
     
-    def relax_with_selective_dyn_it(self, it, film_shell, substrate_shell, match_id=None, term_id=None):
+    def relax_with_selective_dyn_it(self, it, film_shell, substrate_shell):
         interface_properties = it.interface_properties
         film_indices, substrate_indices = it.film_indices, it.substrate_indices
         if not self.double_interface:
@@ -1265,35 +1212,7 @@ class InterfaceWorker:
             it, mblt_mtx = add_sele_dyn_it(it, film_shell, substrate_shell)
         if not self.double_interface:
             it.add_site_property('selective_dynamics', mblt_mtx)
-        call_kw = dict(self.opt_kwargs)
-        if _viz_runtime_enabled() and match_id is not None and term_id is not None:
-            label = ""
-            A_float = 0.0
-            try:
-                m = self.unique_matches[match_id]
-                fm = getattr(m, "film_miller", None)
-                sm = getattr(m, "substrate_miller", None)
-                area = getattr(m, "match_area", None)
-                label = f"film {fm} | sub {sm} | area={area}"
-                if area is not None:
-                    A_float = float(area)
-            except Exception:
-                pass
-            nf = len(it.film_indices)
-            ns = len(it.substrate_indices)
-            E_film_ref = float(nf) / float(len(self.film)) * float(self.film_e)
-            E_sub_ref = float(ns) / float(len(self.substrate)) * float(self.substrate_e)
-            call_kw["viz_meta"] = {
-                "phase": "relax",
-                "match_id": int(match_id),
-                "term_id": int(term_id),
-                "match_label": label,
-                "match_area_A2": A_float,
-                "E_film_ref": E_film_ref,
-                "E_sub_ref": E_sub_ref,
-                "double_interface": bool(self.double_interface),
-            }
-        it, relaxed_it_sup_E = self.mc.optimize(it, **call_kw)
+        it, relaxed_it_sup_E = self.mc.optimize(it, **self.opt_kwargs)
         it = Structure.from_dict(json.loads(  it.to_json() ) )
         if not self.double_interface:
             it.add_site_property('selective_dynamics', mblt_mtx)
@@ -1327,10 +1246,8 @@ class InterfaceWorker:
         self.opt_results[(i,j)]['film_indices'] = self.opt_results[(i,j)]['sampled_interfaces'][0].film_indices
         self.opt_results[(i,j)]['substrate_indices'] = self.opt_results[(i,j)]['sampled_interfaces'][0].substrate_indices
         for s_id in self.opt_results[(i,j)]['BO_selected_ids']:
-            relaxed_it, relaxed_E = self.relax_with_selective_dyn_it(
-                self.opt_results[(i, j)]["sampled_interfaces"][s_id], fthk_film, fthk_substrate, match_id=i, term_id=j
-            )
-
+            relaxed_it, relaxed_E = self.relax_with_selective_dyn_it(self.opt_results[(i,j)]['sampled_interfaces'][s_id], fthk_film, fthk_substrate)
+            
             if self.do_gd:
                 gd_xs, gd_Es, gd_gs = gradient_descend(sampling_function = self.get_displaced_relaxed_interface,
                                                      dx = 0.05,
@@ -1625,7 +1542,8 @@ class InterfaceWorker:
     def get_lowest_energy_pairs_each_match(self,
                                 only_lowest_energy = False,
                             only_lowest_energy_each_plane = False,
-                            only_substrate = False):
+                            only_substrate = False,
+                            all_optimized_pairs = False):
         
         pd = self.global_optimized_data
         i_s = pd['$i_m$'].to_numpy()
@@ -1633,6 +1551,14 @@ class InterfaceWorker:
         ranked_pairs = list(zip(i_s, j_s))
         pair_order = {pair: idx for idx, pair in enumerate(ranked_pairs)}
         pairs = []
+        if all_optimized_pairs:
+            seen = set()
+            for k in range(len(i_s)):
+                p = (int(i_s[k]), int(j_s[k]))
+                if p not in seen:
+                    seen.add(p)
+                    pairs.append(p)
+            return pairs
         if only_lowest_energy:
             pairs.append((i_s[0], j_s[0]))
         elif only_lowest_energy_each_plane:
@@ -1723,6 +1649,7 @@ class InterfaceWorker:
                             only_lowest_energy = False,
                             only_lowest_energy_each_plane = False,
                             only_substrate = False,
+                            all_optimized_pairs = False,
                             
                             relax_user_incar_settings = None,
                             relax_user_potcar_settings = None,
@@ -1752,7 +1679,8 @@ class InterfaceWorker:
         
         pairs = self.get_lowest_energy_pairs_each_match(only_lowest_energy = only_lowest_energy,
                             only_lowest_energy_each_plane = only_lowest_energy_each_plane,
-                            only_substrate = only_substrate)
+                            only_substrate = only_substrate,
+                            all_optimized_pairs = all_optimized_pairs)
         
         flows = []
         for num in range(2):

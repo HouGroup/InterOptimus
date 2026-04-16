@@ -16,7 +16,6 @@ setup(
     url="https://github.com/HouGroup/InterOptimus/",
     license="MIT",
     packages=find_packages(exclude=("tests", "test", "new_test")),
-    package_data={"InterOptimus.web": ["static/index.html"]},
     include_package_data=True,
     classifiers=[
         "Programming Language :: Python :: 3",
@@ -41,7 +40,6 @@ setup(
         "jobflow-remote",
         "qtoolkit",
         "adjustText",
-        "ipywidgets",
         "tqdm",
         "mp-api",
         "orb-models",
@@ -49,22 +47,10 @@ setup(
         "deepmd-kit",
         "torch",
     ],
-    extras_require={
-        "web": [
-            "fastapi>=0.100",
-            "uvicorn[standard]>=0.22",
-            "python-multipart>=0.0.6",
-        ],
-        "desktop": [
-            "pyinstaller>=6.0",
-        ],
-    },
     entry_points={
         "console_scripts": [
             "interoptimus-env=InterOptimus.agents.server_env:main",
             "interoptimus-simple=InterOptimus.agents.simple_iomaker:main",
-            "interoptimus-web=InterOptimus.web.app:main",
-            "interoptimus-desktop=InterOptimus.desktop_app.entry:main",
         ],
     },
 )

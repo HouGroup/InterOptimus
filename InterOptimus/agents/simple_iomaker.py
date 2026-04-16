@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-No-LLM IOMaker: build ``io_flow.json`` from JSON/YAML.
+IOMaker CLI: build ``io_flow.json`` from JSON/YAML.
 
 Preferred input shape::
 
@@ -44,7 +44,7 @@ from .iomaker_job import (
     TUTORIAL_WITH_VACUUM,
     execute_iomaker_from_settings,
     normalize_iomaker_settings_from_full_dict,
-    uses_full_llm_style_settings_dict,
+    uses_legacy_full_settings_dict,
 )
 
 
@@ -135,6 +135,7 @@ _VASP_SETTINGS_KEYS = frozenset(
         "vasp_relax_settings",
         "vasp_static_settings",
         "lowest_energy_pairs_settings",
+        "vasp_pair_selection",
     }
 )
 _COST_PRESET_NAMES = frozenset({"low", "medium", "high"})
@@ -582,7 +583,7 @@ def _validate_simple_config(flat: Dict[str, Any]) -> None:
     if not isinstance(st, dict):
         raise TypeError("config must include a dict 'settings' with full IOMaker parameters.")
 
-    if not uses_full_llm_style_settings_dict(st):
+    if not uses_legacy_full_settings_dict(st):
         raise ValueError(
             "simple_iomaker requires a **complete** `settings` object "
             "(name, mode, inputs, lattice_matching_settings, structure_settings, "
@@ -768,7 +769,7 @@ def run_simple_iomaker(config: Dict[str, Any]) -> Dict[str, Any]:
 
 def main() -> None:
     p = argparse.ArgumentParser(
-        description="Build IOMaker io_flow.json without LLM (JSON/YAML config)."
+        description="Build IOMaker io_flow.json from JSON/YAML config."
     )
     p.add_argument(
         "-c",

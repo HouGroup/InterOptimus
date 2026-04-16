@@ -25,7 +25,8 @@
       "strain_E_correction": false
     },
     "vasp_settings": {
-      "do_vasp": false
+      "do_vasp": false,
+      "vasp_pair_selection": "each_match_lowest"
     }
   },
   "execution": "server",
