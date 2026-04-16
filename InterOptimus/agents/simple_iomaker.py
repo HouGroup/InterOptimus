@@ -34,7 +34,7 @@ from typing import Any, Callable, Dict, Optional
 
 from qtoolkit.core.data_objects import QResources
 
-from .llm_iomaker_job import (
+from .iomaker_job import (
     BaseBuildConfig,
     DEFAULT_FILM_CIF,
     DEFAULT_SUBSTRATE_CIF,
@@ -665,12 +665,13 @@ def build_config_from_simple_dict(d: Dict[str, Any], settings: Dict[str, Any]) -
     print_settings = bool(d.get("print_settings", True))
 
     server_run_parent = d.get("server_run_parent")
-    server_pre_cmd = str(d.get("server_pre_cmd", os.getenv("INTEROPTIMUS_SERVER_PRE_CMD", "")))
-    _raw_py = d.get("server_python")
-    if _raw_py is not None and str(_raw_py).strip() != "":
-        server_python = str(_raw_py).strip()
-    else:
-        server_python = (os.getenv("INTEROPTIMUS_SERVER_PYTHON") or "").strip() or sys.executable
+    # 默认用当前进程的解释器（如 Jupyter / CLI 所在 conda 环境），避免子进程 `python` 找不到 jobflow-remote
+    server_pre_cmd = str(
+        d.get("server_pre_cmd", os.getenv("INTEROPTIMUS_SERVER_PRE_CMD", ""))
+    )
+    server_python = str(
+        d.get("server_python", os.getenv("INTEROPTIMUS_SERVER_PYTHON", sys.executable))
+    )
     server_jf_bin = str(d.get("server_jf_bin", "jf"))
 
     mlip_worker = str(d.get("mlip_worker", "std_worker"))

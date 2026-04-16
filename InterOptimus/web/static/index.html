@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>InterOptimus · MatRIS 本地工作流</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e6edf3;
+      --muted: #8b9cb3;
+      --accent: #3d8bfd;
+      --border: #2d3a4d;
+      --err: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 1.5rem; }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 0.5rem; }
+    p.lead { color: var(--muted); margin: 0 0 1.25rem; font-size: 0.95rem; }
+    form.card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    fieldset {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 0 0 1rem;
+      padding: 0.75rem 1rem 1rem;
+    }
+    legend { font-size: 0.9rem; color: var(--accent); padding: 0 0.35rem; }
+    label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 0.35rem; }
+    input[type="text"], select {
+      width: 100%;
+      padding: 0.5rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      margin-bottom: 0.75rem;
+    }
+    input[type="file"] { margin-bottom: 1rem; width: 100%; font-size: 0.9rem; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem 1rem; }
+    @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 0.65rem 1.25rem;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .check { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .check input { width: auto; }
+    .check label { margin: 0; color: var(--text); }
+    #status { font-size: 0.9rem; color: var(--muted); margin-top: 0.75rem; min-height: 1.5rem; }
+    #status.err { color: var(--err); }
+    section h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+    pre.report {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      overflow: auto;
+      max-height: 480px;
+      font-size: 0.78rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .fig { margin-top: 1rem; }
+    .fig img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--border); }
+    .fig a { color: var(--accent); font-size: 0.9rem; }
+    .hidden { display: none; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin: -0.4rem 0 0.6rem; }
+    iframe.stereo-frame {
+      width: 100%;
+      min-height: 420px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .mono { font-family: ui-monospace, monospace; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>InterOptimus · MatRIS MLIP（本地）</h1>
+    <p class="lead">
+      上传薄膜 / 基底 CIF，配置点阵匹配与结构参数；本机运行 <code>run_simple_iomaker</code>（<code>calc = matris</code>）。
+      完成后可查看报告、交互式极图，并下载各 pair 最优界面的 POSCAR 压缩包。
+    </p>
+    <p class="lead" style="font-size:0.88rem">
+      使用命令行启动时，首次运行会<strong>自动</strong>在 <code>~/.interoptimus/web_venv</code> 创建独立 Python 环境并安装依赖，无需手动 <code>conda activate</code>。
+      仅打开浏览器、由服务器托管时，请使用 Docker（见仓库 <code>Dockerfile</code>）。
+    </p>
+
+    <form class="card" id="f">
+      <div class="row">
+        <div>
+          <label for="film">薄膜 film.cif</label>
+          <input type="file" id="film" name="film_cif" accept=".cif,.CIF" required />
+        </div>
+        <div>
+          <label for="sub">基底 substrate.cif</label>
+          <input type="file" id="sub" name="substrate_cif" accept=".cif,.CIF" required />
+        </div>
+      </div>
+
+      <fieldset>
+        <legend>任务与预设</legend>
+        <div class="row">
+          <div>
+            <label for="wn">workflow_name</label>
+            <input type="text" id="wn" name="workflow_name" value="IO_web_matris" />
+          </div>
+          <div>
+            <label for="cp">cost_preset（基线；下方参数会覆盖）</label>
+            <select id="cp" name="cost_preset">
+              <option value="low">low</option>
+              <option value="medium" selected>medium</option>
+              <option value="high">high</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="ex">execution</label>
+            <select id="ex" name="execution">
+              <option value="local" selected>local（本机完整 jobflow）</option>
+              <option value="server">server（需 jobflow-remote）</option>
+            </select>
+          </div>
+          <div>
+            <label for="dev">MLIP device</label>
+            <select id="dev" name="opt_device">
+              <option value="cpu" selected>cpu</option>
+              <option value="cuda">cuda</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="steps">MLIP 弛豫最大步数 steps</label>
+            <input type="text" id="steps" name="opt_steps" value="500" />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Lattice matching</legend>
+        <div class="row">
+          <div>
+            <label for="lm_max_area">max_area</label>
+            <input type="text" id="lm_max_area" name="lm_max_area" value="20" />
+          </div>
+          <div>
+            <label for="lm_max_length_tol">max_length_tol</label>
+            <input type="text" id="lm_max_length_tol" name="lm_max_length_tol" value="0.03" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="lm_max_angle_tol">max_angle_tol</label>
+            <input type="text" id="lm_max_angle_tol" name="lm_max_angle_tol" value="0.03" />
+          </div>
+          <div></div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="lm_ffm">film_max_miller</label>
+            <input type="text" id="lm_ffm" name="lm_film_max_miller" value="3" />
+          </div>
+          <div>
+            <label for="lm_sfm">substrate_max_miller</label>
+            <input type="text" id="lm_sfm" name="lm_substrate_max_miller" value="3" />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>结构厚度与终止</legend>
+        <div class="row">
+          <div>
+            <label for="ft">film_thickness（Å）</label>
+            <input type="text" id="ft" name="st_film_thickness" value="10" />
+          </div>
+          <div>
+            <label for="st">substrate_thickness（Å）</label>
+            <input type="text" id="st" name="st_substrate_thickness" value="10" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="tftol">termination_ftol</label>
+            <input type="text" id="tftol" name="st_termination_ftol" value="0.15" />
+          </div>
+          <div>
+            <label for="vac">vacuum_over_film（单界面 / 有真空层，Å）</label>
+            <input type="text" id="vac" name="st_vacuum_over_film" value="5" />
+          </div>
+        </div>
+        <div class="check">
+          <input type="checkbox" id="di" name="double_interface" value="true" checked />
+          <label for="di">双界面（无真空层，double_interface）</label>
+        </div>
+      </fieldset>
+
+      <fieldset id="singleOnly">
+        <legend>单界面：固定区与梯度下降</legend>
+        <p class="hint">
+          「固定区占比」指薄膜/基底厚度中作为固定区（非弛豫区）的比例，对应 InterfaceWorker 在 <code>relax_in_ratio</code> 模式下的 <code>set_relax_thicknesses</code>。
+        </p>
+        <div class="check">
+          <input type="checkbox" id="gd" name="do_mlip_gd" value="true" />
+          <label for="gd">运行 MLIP 梯度下降（do_mlip_gd）</label>
+        </div>
+        <div class="check">
+          <input type="checkbox" id="rir" name="relax_in_ratio" value="true" checked />
+          <label for="rir">按厚度比例划分固定区（relax_in_ratio）</label>
+        </div>
+        <div class="check">
+          <input type="checkbox" id="ril" name="relax_in_layers" value="true" />
+          <label for="ril">按层数划分（relax_in_layers；与比例二选一语义见文档）</label>
+        </div>
+        <div class="row" id="ratioRow">
+          <div>
+            <label for="fff">薄膜固定区占厚度比例（0–1）</label>
+            <input type="text" id="fff" name="fix_film_fraction" value="0.5" />
+          </div>
+          <div>
+            <label for="ffs">基底固定区占厚度比例（0–1）</label>
+            <input type="text" id="ffs" name="fix_substrate_fraction" value="0.5" />
+          </div>
+        </div>
+        <div class="row hidden" id="absRow">
+          <div>
+            <label for="sra">set_relax 薄膜侧（Å，非比例模式）</label>
+            <input type="text" id="sra" name="set_relax_film_ang" value="0" />
+          </div>
+          <div>
+            <label for="srs">set_relax 基底侧（Å）</label>
+            <input type="text" id="srs" name="set_relax_substrate_ang" value="0" />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>高级 MLIP / 全局优化（可选）</legend>
+        <p class="hint">留空则使用成本预设与默认值；与桌面端「高级选项」一致。</p>
+        <div class="row">
+          <div>
+            <label for="adv_ckpt">ckpt_path</label>
+            <input type="text" id="adv_ckpt" name="adv_ckpt_path" placeholder="MatRIS 权重路径" />
+          </div>
+          <div>
+            <label for="adv_model">MatRIS model / task</label>
+            <input type="text" id="adv_model" name="adv_matris_model" placeholder="如 matris_10m_oam" />
+            <input type="text" id="adv_task" name="adv_matris_task" placeholder="如 efsm" style="margin-top:0.35rem" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_fmax">fmax</label>
+            <input type="text" id="adv_fmax" name="adv_fmax" />
+          </div>
+          <div>
+            <label for="adv_discut">discut</label>
+            <input type="text" id="adv_discut" name="adv_discut" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_gd_tol">gd_tol</label>
+            <input type="text" id="adv_gd_tol" name="adv_gd_tol" />
+          </div>
+          <div>
+            <label for="adv_ncd">n_calls_density</label>
+            <input type="text" id="adv_ncd" name="adv_n_calls_density" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_se">strain_E_correction</label>
+            <select id="adv_se" name="adv_strain_E_correction">
+              <option value="" selected>（预设）</option>
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </div>
+          <div>
+            <label for="adv_tst">term_screen_tol</label>
+            <input type="text" id="adv_tst" name="adv_term_screen_tol" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_zlo">z_range 下限</label>
+            <input type="text" id="adv_zlo" name="adv_z_range_lo" />
+          </div>
+          <div>
+            <label for="adv_zhi">z_range 上限</label>
+            <input type="text" id="adv_zhi" name="adv_z_range_hi" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_boc">BO_coord_bin_size</label>
+            <input type="text" id="adv_boc" name="adv_bo_coord_bin" />
+          </div>
+          <div>
+            <label for="adv_boe">BO_energy_bin_size</label>
+            <input type="text" id="adv_boe" name="adv_bo_energy_bin" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="adv_bor">BO_rms_bin_size</label>
+            <input type="text" id="adv_bor" name="adv_bo_rms_bin" />
+          </div>
+          <div></div>
+        </div>
+      </fieldset>
+
+      <button type="submit" id="go">运行工作流</button>
+      <div id="status"></div>
+    </form>
+
+    <section id="errSec" class="hidden">
+      <h2 style="color:var(--err)">运行失败</h2>
+      <p class="hint" id="errHint" style="margin-bottom:0.75rem;"></p>
+      <pre class="report" id="errBody" style="max-height:560px;border-color:var(--err);"></pre>
+    </section>
+
+    <section id="out" class="hidden">
+      <h2>运行报告</h2>
+      <pre class="report" id="report"></pre>
+      <div class="fig" id="figWrap">
+        <h2 style="text-align:left">立体投影 stereographic</h2>
+        <iframe id="stereoFrame" class="stereo-frame hidden" title="stereographic interactive"></iframe>
+        <img id="stereoImg" alt="stereographic" class="hidden" />
+        <p id="stereoMissing" class="hidden" style="color:var(--muted)">未生成 stereographic.jpg。</p>
+        <p><a id="stereoLink" href="#" target="_blank" class="hidden">新窗口打开交互式 stereographic_interactive.html</a></p>
+        <p><a id="projLink" href="#" target="_blank" class="hidden">Lattice matching project.jpg</a></p>
+        <p id="posP" class="hidden"><a id="posZip" href="#" class="mono">下载 pairs_poscars.zip（各 match/term 下 POSCAR）</a></p>
+        <p id="posErr" class="hidden" style="color:var(--err); font-size:0.9rem;"></p>
+      </div>
+    </section>
+  </div>
+  <script>
+    const f = document.getElementById("f");
+    const status = document.getElementById("status");
+    const go = document.getElementById("go");
+    const out = document.getElementById("out");
+    const report = document.getElementById("report");
+    const stereoImg = document.getElementById("stereoImg");
+    const stereoMissing = document.getElementById("stereoMissing");
+    const stereoLink = document.getElementById("stereoLink");
+    const stereoFrame = document.getElementById("stereoFrame");
+    const projLink = document.getElementById("projLink");
+    const di = document.getElementById("di");
+    const singleOnly = document.getElementById("singleOnly");
+    const rir = document.getElementById("rir");
+    const ratioRow = document.getElementById("ratioRow");
+    const absRow = document.getElementById("absRow");
+    const posP = document.getElementById("posP");
+    const posZip = document.getElementById("posZip");
+    const posErr = document.getElementById("posErr");
+    const errSec = document.getElementById("errSec");
+    const errBody = document.getElementById("errBody");
+    const errHint = document.getElementById("errHint");
+
+    function syncSingleUi() {
+      const dbl = di.checked;
+      singleOnly.style.opacity = dbl ? "0.5" : "1";
+      /* Do not use disabled: browsers omit disabled fields from FormData. */
+      if (rir.checked) {
+        ratioRow.classList.remove("hidden");
+        absRow.classList.add("hidden");
+      } else {
+        ratioRow.classList.add("hidden");
+        absRow.classList.remove("hidden");
+      }
+    }
+    di.addEventListener("change", syncSingleUi);
+    rir.addEventListener("change", syncSingleUi);
+    syncSingleUi();
+
+    f.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      status.textContent = "运行中（可能数分钟至更久，请勿关闭页面）…";
+      status.classList.remove("err");
+      go.disabled = true;
+      out.classList.add("hidden");
+      errSec.classList.add("hidden");
+      posP.classList.add("hidden");
+      posErr.classList.add("hidden");
+
+      const fd = new FormData();
+      fd.append("film_cif", document.getElementById("film").files[0]);
+      fd.append("substrate_cif", document.getElementById("sub").files[0]);
+      fd.append("workflow_name", document.getElementById("wn").value);
+      fd.append("cost_preset", document.getElementById("cp").value);
+      fd.append("execution", document.getElementById("ex").value);
+      fd.append("double_interface", di.checked ? "true" : "false");
+
+      fd.append("lm_max_area", document.getElementById("lm_max_area").value);
+      fd.append("lm_max_length_tol", document.getElementById("lm_max_length_tol").value);
+      fd.append("lm_max_angle_tol", document.getElementById("lm_max_angle_tol").value);
+      fd.append("lm_film_max_miller", document.getElementById("lm_ffm").value);
+      fd.append("lm_substrate_max_miller", document.getElementById("lm_sfm").value);
+
+      fd.append("st_film_thickness", document.getElementById("ft").value);
+      fd.append("st_substrate_thickness", document.getElementById("st").value);
+      fd.append("st_termination_ftol", document.getElementById("tftol").value);
+      fd.append("st_vacuum_over_film", document.getElementById("vac").value);
+
+      fd.append("opt_device", document.getElementById("dev").value);
+      fd.append("opt_steps", document.getElementById("steps").value);
+      fd.append("do_mlip_gd", document.getElementById("gd").checked ? "true" : "false");
+      fd.append("relax_in_ratio", document.getElementById("rir").checked ? "true" : "false");
+      fd.append("relax_in_layers", document.getElementById("ril").checked ? "true" : "false");
+      fd.append("fix_film_fraction", document.getElementById("fff").value);
+      fd.append("fix_substrate_fraction", document.getElementById("ffs").value);
+      fd.append("set_relax_film_ang", document.getElementById("sra").value);
+      fd.append("set_relax_substrate_ang", document.getElementById("srs").value);
+
+      fd.append("adv_ckpt_path", document.getElementById("adv_ckpt").value);
+      fd.append("adv_matris_model", document.getElementById("adv_model").value);
+      fd.append("adv_matris_task", document.getElementById("adv_task").value);
+      fd.append("adv_fmax", document.getElementById("adv_fmax").value);
+      fd.append("adv_discut", document.getElementById("adv_discut").value);
+      fd.append("adv_gd_tol", document.getElementById("adv_gd_tol").value);
+      fd.append("adv_n_calls_density", document.getElementById("adv_ncd").value);
+      fd.append("adv_strain_E_correction", document.getElementById("adv_se").value);
+      fd.append("adv_term_screen_tol", document.getElementById("adv_tst").value);
+      fd.append("adv_z_range_lo", document.getElementById("adv_zlo").value);
+      fd.append("adv_z_range_hi", document.getElementById("adv_zhi").value);
+      fd.append("adv_bo_coord_bin", document.getElementById("adv_boc").value);
+      fd.append("adv_bo_energy_bin", document.getElementById("adv_boe").value);
+      fd.append("adv_bo_rms_bin", document.getElementById("adv_bor").value);
+
+      try {
+        const r = await fetch("/api/run", { method: "POST", body: fd });
+        const data = await r.json();
+        if (!data.ok) {
+          status.textContent = "失败（见下方详情）";
+          status.classList.add("err");
+          let block = (data.error || r.statusText || "") + "";
+          if (data.traceback) block += "\n\n" + data.traceback;
+          if (data.python_executable) block += "\n\npython_executable:\n" + data.python_executable;
+          if (data.workdir) block += "\n\nworkdir:\n" + data.workdir;
+          errBody.textContent = block;
+          errHint.textContent = data.hint || "";
+          errSec.classList.remove("hidden");
+          return;
+        }
+        status.textContent = "完成。session: " + data.session_id;
+        report.textContent = data.report_text || "(无报告文本)";
+        out.classList.remove("hidden");
+
+        const art = data.artifacts || {};
+        if (art.stereographic_jpg) {
+          stereoImg.src = art.stereographic_jpg + "?t=" + Date.now();
+          stereoImg.classList.remove("hidden");
+          stereoMissing.classList.add("hidden");
+        } else {
+          stereoImg.classList.add("hidden");
+          stereoMissing.classList.remove("hidden");
+        }
+        if (art.stereographic_interactive_html) {
+          stereoLink.href = art.stereographic_interactive_html;
+          stereoLink.classList.remove("hidden");
+          stereoFrame.src = art.stereographic_interactive_html + "?t=" + Date.now();
+          stereoFrame.classList.remove("hidden");
+        } else {
+          stereoLink.classList.add("hidden");
+          stereoFrame.classList.add("hidden");
+          stereoFrame.removeAttribute("src");
+        }
+        if (art.project_jpg) {
+          projLink.href = art.project_jpg;
+          projLink.classList.remove("hidden");
+        } else projLink.classList.add("hidden");
+
+        if (art.poscars_zip) {
+          posZip.href = art.poscars_zip;
+          const n = art.pairs_count != null ? "（约 " + art.pairs_count + " 个 pair 目录）" : "";
+          posZip.textContent = "下载 pairs_poscars.zip" + n;
+          posP.classList.remove("hidden");
+        } else posP.classList.add("hidden");
+        if (art.poscars_error) {
+          posErr.textContent = "POSCAR 打包: " + art.poscars_error;
+          posErr.classList.remove("hidden");
+        }
+      } catch (err) {
+        status.textContent = "请求失败: " + err;
+        status.classList.add("err");
+      } finally {
+        go.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
