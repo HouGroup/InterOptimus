@@ -1,5 +1,10 @@
-"""This module provides functions to determine whether two sets of slabs with
-different terminations making identical interfaces"""
+"""
+InterOptimus Equivalent Termination Module
+
+This module provides functions to determine whether different slab terminations
+produce identical crystal interfaces under symmetry operations. It helps
+eliminate redundant calculations by identifying equivalent configurations.
+"""
 
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.structure_matcher import StructureMatcher
@@ -186,7 +191,7 @@ def slab_pair_cluster(film_slabs, sub_slabs, c_periodic = True):
             t_id += 1
     return slab_pair_groups, slab_pair_id_groups
 
-def get_non_identical_slab_pairs(film, substrate, match, ftol = 1e-1, c_periodic = False):
+def get_non_identical_slab_pairs(film, substrate, match, ftol = (1e-1, 1e-1), c_periodic = False):
     """
     get the ids of the non-identical slab pairs
     
@@ -210,7 +215,7 @@ def get_non_identical_slab_pairs(film, substrate, match, ftol = 1e-1, c_periodic
             primitive=True,
             reorient_lattice=False,  # This is necessary to not screw up the lattice
         )
-    film_slabs = film_sg.get_slabs(ftol=ftol, filter_out_sym_slabs=False)
+    film_slabs = film_sg.get_slabs(ftol=ftol[0], filter_out_sym_slabs=False)
     sub_sg = SlabGenerator(
                 substrate,
                 match.substrate_miller,
@@ -221,7 +226,7 @@ def get_non_identical_slab_pairs(film, substrate, match, ftol = 1e-1, c_periodic
                 primitive=True,
                 reorient_lattice=False,  # This is necessary to not screw up the lattice
             )
-    substrate_slabs = sub_sg.get_slabs(ftol=ftol, filter_out_sym_slabs=False)
+    substrate_slabs = sub_sg.get_slabs(ftol=ftol[1], filter_out_sym_slabs=False)
     slab_pair_groups, slab_pair_id_groups = slab_pair_cluster(film_slabs, substrate_slabs, c_periodic)
     ids = []
     for i in slab_pair_id_groups:

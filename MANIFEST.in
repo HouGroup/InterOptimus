@@ -1,2 +1,3 @@
-include data/orb-v3-conservative-20-omat-20250404.ckpt
-Include data/checkpoint_sevennet_mf_ompa.pth
+include LICENSE README.md
+recursive-include InterOptimus/web_app/templates *.html
+recursive-include InterOptimus/agents *.json

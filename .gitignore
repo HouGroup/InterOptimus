@@ -1,10 +1,64 @@
-InterOptimus.egg-info/
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Python
 __pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
 dist/
+*.egg-info/
+*.egg
+*.whl
+pip-wheel-metadata/
+.eggs/
+*.manifest
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.env
+.env.*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Slides
+*.pptx
+
+# Project-specific
 test/
 new_test/
-*.pyc
-*.xcodeproj
-*.DS_Store
-*.gitignore
 *.ckpt
+*.tmp
+
+# Xcode
+*.xcodeproj/
