@@ -25,12 +25,6 @@ pip install "InterOptimus[mlip,web,yaml]"   # MLIP backends + browser UI + YAML 
 pip install InterOptimus                    # minimal deps; add [mlip] before running MLIP steps
 ```
 
-From a git checkout:
-
-```bash
-pip install -e .
-```
-
 See **[GETTING_STARTED](https://github.com/HouGroup/InterOptimus/blob/HEAD/docs/GETTING_STARTED.md)** for first-time server setup (MongoDB, jobflow-remote, POTCAR, MLIP checkpoints). Links use `HEAD` so they stay valid on the PyPI project description and on GitHub.
 
 ## Quick start (recommended)
