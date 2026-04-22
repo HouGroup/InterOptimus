@@ -19,7 +19,7 @@ from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBu
 from skopt import gp_minimize
 from skopt.space import Real
 from tqdm.notebook import tqdm
-from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat, cross, inf, round, arccos, pi, where, unique
+from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat, cross, inf, round, arccos, pi, where, unique, savetxt, asarray
 from numpy.linalg import norm
 from InterOptimus.CNID import calculate_cnid_in_supercell
 import os
@@ -30,54 +30,207 @@ import pickle
 import warnings
 import shutil
 from interfacemaster.cellcalc import get_normal_from_MI, get_primitive_hkl
+from typing import Optional
 
 
-def _mlip_checkpoint_search_dirs() -> list[Path]:
-    return [
-        Path.home() / ".cache" / "InterOptimus" / "checkpoints",
-        Path("/Users/jason/Documents/checkpoints"),
-    ]
+def _interoptimus_viz_env_active() -> bool:
+    """True when viz JSONL streaming is enabled (env + optional pin in viz_runtime)."""
+    try:
+        from InterOptimus.viz_runtime import is_enabled
+
+        return bool(is_enabled())
+    except Exception:
+        p = (os.environ.get("INTEROPTIMUS_VIZ_LOG") or "").strip()
+        f = str(os.environ.get("INTEROPTIMUS_VIZ_ENABLE", "")).strip().lower()
+        return bool(p) and f in ("1", "true", "yes", "on")
 
 
-def _auto_checkpoint_candidates(calc: str) -> list[str]:
-    if calc == "orb-models":
-        return [
-            "orb-v3-conservative-20-omat-20250404.ckpt",
-            "orb-v3-conservative-inf-omat-20250404.ckpt",
-            "orb-v3-*.ckpt",
-            "orb-*.ckpt",
-        ]
-    if calc == "sevenn":
-        return [
-            "checkpoint_sevennet_mf_ompa.pth",
-            "checkpoint_sevennet*.pth",
-            "*sevennet*.pth",
-            "*7net*.pth",
-        ]
-    if calc == "dpa":
-        return [
-            "dpa*.pth",
-            "dpa*.pt",
-            "dpa*.pb",
-            "*deepmd*.pth",
-            "*deepmd*.pb",
-        ]
-    return []
+_DEFAULT_RELAX_INCAR_SETTINGS = {
+    "ISMEAR": 0,
+    "SIGMA": 0.1,
+    "NELMIN": 6,
+    "NSW": 300,
+    "EDIFF": 1e-4,
+    "EDIFFG": -0.05,
+    # Override MPRelaxSet.yaml (ALGO=FAST); VASP tag is case-insensitive.
+    "ALGO": "Normal",
+    # None removes MPRelaxSet PREC so it is not written (VASP built-in default).
+    "PREC": None,
+}
+
+_DEFAULT_STATIC_INCAR_SETTINGS = {
+    "ISMEAR": 0,
+    "SIGMA": 0.1,
+    "NELMIN": 6,
+    "EDIFF": 1e-4,
+    "ALGO": "Normal",
+    "PREC": None,
+}
+
+_DOUBLE_INTERFACE_LATTICE_CONSTRAINTS = ".FALSE. .FALSE. .TRUE."
 
 
-def _resolve_mlip_checkpoint(calc: str) -> str | None:
-    seen: set[str] = set()
-    for directory in _mlip_checkpoint_search_dirs():
-        if not directory.exists():
-            continue
-        for pattern in _auto_checkpoint_candidates(calc):
-            for path in sorted(directory.glob(pattern), key=lambda item: item.stat().st_mtime, reverse=True):
-                resolved = str(path.resolve())
-                if resolved in seen or not path.is_file():
-                    continue
-                seen.add(resolved)
-                return resolved
-    return None
+def _merged_vasp_incar_settings(defaults, user_settings=None, *, extra_settings=None, num_atoms=None):
+    """Merge stable default INCAR settings with user overrides without mutating inputs."""
+    out = dict(defaults or {})
+    if isinstance(user_settings, dict):
+        out.update(user_settings)
+    if isinstance(extra_settings, dict):
+        out.update(extra_settings)
+    if "EDIFF_PER_ATOM" in out:
+        if num_atoms is not None:
+            out["EDIFF"] = out["EDIFF_PER_ATOM"] * num_atoms
+        del out["EDIFF_PER_ATOM"]
+    return out
+
+
+def default_relax_incar_settings(user_settings=None, *, extra_settings=None, num_atoms=None):
+    """Default stable INCAR baseline for VASP relax jobs in InterOptimus."""
+    return _merged_vasp_incar_settings(
+        _DEFAULT_RELAX_INCAR_SETTINGS,
+        user_settings,
+        extra_settings=extra_settings,
+        num_atoms=num_atoms,
+    )
+
+
+def default_static_incar_settings(user_settings=None, *, num_atoms=None):
+    """Default stable INCAR baseline for VASP static jobs in InterOptimus."""
+    return _merged_vasp_incar_settings(
+        _DEFAULT_STATIC_INCAR_SETTINGS,
+        user_settings,
+        num_atoms=num_atoms,
+    )
+
+
+def interoptimus_vasp_run_kwargs() -> dict:
+    """Kwargs for atomate2 ``BaseVaspMaker.run_vasp_kwargs`` (defaults inside atomate2/custodian)."""
+    return {}
+
+
+def _flow_append_mpstatic_after_relax(
+    flows,
+    *,
+    relax_job,
+    filter_name: str,
+    energy_tag_root: str,
+    num_atoms: int,
+    static_user_incar_settings,
+    static_user_potcar_settings,
+    static_user_kpoints_settings,
+    static_user_potcar_functional: str,
+) -> None:
+    """Append one ``MPStaticSet`` after a relax so reported energies use a unified static protocol."""
+    from pymatgen.io.vasp.sets import MPStaticSet
+    from atomate2.vasp.jobs.core import StaticMaker
+
+    static_incar_here = default_static_incar_settings(
+        static_user_incar_settings,
+        num_atoms=num_atoms,
+    )
+    static_maker = StaticMaker(
+        input_set_generator=MPStaticSet(
+            user_incar_settings=static_incar_here,
+            user_potcar_settings=static_user_potcar_settings,
+            user_kpoints_settings=static_user_kpoints_settings,
+            user_potcar_functional=static_user_potcar_functional,
+        ),
+        run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
+    )
+    job_s1 = static_maker.make(
+        relax_job.output.output.structure,
+        prev_dir=relax_job.output.dir_name,
+    )
+    job_s1.update_metadata({"filter_name": filter_name, "job": energy_tag_root})
+    flows.append(job_s1)
+
+
+def gd_final_post_relax_static_jobs(
+    *,
+    saved_data: dict,
+    relax_maker_dp,
+    metadata: Optional[dict],
+    filter_name: str,
+    canonical_job_tag: str,
+    num_atoms: int,
+    static_user_incar_settings,
+    static_user_potcar_settings,
+    static_user_kpoints_settings,
+    static_user_potcar_functional: str,
+):
+    """
+    Build the trailing VASP jobs for :class:`~InterOptimus.jobflow.GDVaspMaker` after GD converges:
+    optional dipole relax, then one ``MPStaticSet`` like :func:`_flow_append_mpstatic_after_relax`.
+    """
+    from jobflow import Flow, Response
+    from pymatgen.io.vasp.sets import MPStaticSet
+    from atomate2.vasp.jobs.core import StaticMaker
+
+    meta_base = dict(metadata or {})
+    meta_base.setdefault("filter_name", filter_name)
+    jobs = []
+    if relax_maker_dp is not None:
+        job_dp = relax_maker_dp.make(
+            saved_data["its"][-1], prev_dir=saved_data["vasp_dir"]
+        )
+        mdp = dict(meta_base)
+        mdp["job"] = f"{canonical_job_tag}_dp"
+        job_dp.update_metadata(mdp)
+        jobs.append(job_dp)
+        flow_list = []
+        _flow_append_mpstatic_after_relax(
+            flow_list,
+            relax_job=job_dp,
+            filter_name=filter_name,
+            energy_tag_root=canonical_job_tag,
+            num_atoms=num_atoms,
+            static_user_incar_settings=static_user_incar_settings,
+            static_user_potcar_settings=static_user_potcar_settings,
+            static_user_kpoints_settings=static_user_kpoints_settings,
+            static_user_potcar_functional=static_user_potcar_functional,
+        )
+        jobs.extend(flow_list)
+    else:
+        static_incar_here = default_static_incar_settings(
+            static_user_incar_settings,
+            num_atoms=num_atoms,
+        )
+        static_maker = StaticMaker(
+            input_set_generator=MPStaticSet(
+                user_incar_settings=static_incar_here,
+                user_potcar_settings=static_user_potcar_settings,
+                user_kpoints_settings=static_user_kpoints_settings,
+                user_potcar_functional=static_user_potcar_functional,
+            ),
+            run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
+        )
+        job_s1 = static_maker.make(
+            saved_data["its"][-1],
+            prev_dir=saved_data["vasp_dir"],
+        )
+        m1 = dict(meta_base)
+        m1["job"] = canonical_job_tag
+        job_s1.update_metadata(m1)
+        jobs.append(job_s1)
+
+    return Response(output=saved_data, replace=Flow(jobs))
+
+
+def default_double_interface_relax_extra_settings():
+    """Constrain double-interface relaxations so only the c-axis length is free."""
+    return {"LATTICE_CONSTRAINTS": _DOUBLE_INTERFACE_LATTICE_CONSTRAINTS}
+
+
+def effective_strain_E_correction(strain_E_correction: bool, *, double_interface: bool) -> bool:
+    """
+    Only enable elastic strain correction for single-interface workflows.
+
+    For double-interface models, the current interface-energy expression already uses
+    bulk reference energies directly and applying the legacy film-only strain correction
+    is not considered reliable. Therefore it is disabled unconditionally here.
+    """
+    return bool(strain_E_correction) and not bool(double_interface)
+
 
 def gradient_descend(sampling_function, dx, dim, tol, initial_r, initial_xy, min_steps, **kwargs):
     """
@@ -115,7 +268,10 @@ def gradient_descend(sampling_function, dx, dim, tol, initial_r, initial_xy, min
         rs.append(0)
     else:
         x_n = zeros(dim)
-        y_n = test_func(x_n)
+        y_n = sampling_function(x_n, is_x=True, **kwargs)
+        xs.append(x_n)
+        ys.append(y_n)
+        rs.append(0)
     
     count = 0
     print('-----gradient descend------')
@@ -186,6 +342,24 @@ class InterfaceWorker:
         self.substrate_conv = substrate_conv
         self.film = film_conv.get_primitive_structure()
         self.substrate = substrate_conv.get_primitive_structure()
+
+    def _global_min_debug_enabled(self):
+        flag = None
+        if hasattr(self, "opt_kwargs") and isinstance(self.opt_kwargs, dict):
+            flag = self.opt_kwargs.get("debug_global_min")
+        if flag is None:
+            flag = os.environ.get("INTEROPTIMUS_DEBUG_GLOBAL_MIN", "")
+        if isinstance(flag, str):
+            return flag.strip().lower() not in ("", "0", "false", "no", "off")
+        return bool(flag)
+
+    def _global_min_debug(self, **payload):
+        if not self._global_min_debug_enabled():
+            return
+        print(
+            "[global_min_debug] "
+            + json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True)
+        )
     
     def lattice_matching(self, max_area = 47, max_length_tol = 0.03, max_angle_tol = 0.01,
                          film_max_miller = 3, substrate_max_miller = 3, film_millers = None, substrate_millers = None):
@@ -606,6 +780,65 @@ class InterfaceWorker:
             self.absolute_thicknesses.append((film_thickness * film_l, substrate_thickness * substrate_l))
             print(f'match {i}: thicknesses (film, substrate) ({round(film_l,2)}, {round(substrate_l,2)}) ({film_thickness}, {substrate_thickness}) ({round(film_thickness * film_l, 2)} {round(substrate_thickness * substrate_l, 2)})')
     
+    def _bo_registration_xyz_cart(self, match_id, term_id, x, y, z):
+        """
+        Cartesian coordinates for BO registration samples, same construction as
+        ``xyzs_cart`` in :meth:`optimize_specified_interface_by_mlip` (for live viz / JSONL).
+        """
+        interface = self.get_specified_interface(match_id, term_id)
+        CNID = calculate_cnid_in_supercell(interface)[0]
+        CNID_cart = column_stack((dot(interface.lattice.matrix.T, CNID), [0, 0, 0]))
+        fr = array([float(x), float(y), float(z)], dtype=float)
+        xc = dot(CNID_cart, fr) + array([0.0, 0.0, float(z)], dtype=float)
+        return [float(xc[0]), float(xc[1]), float(xc[2])]
+
+    def _bo_sample_iface_viz_fields(self, interface_here, max_sites: int = 600):
+        """
+        Optional interface snapshot for live viz ``phase=bo`` / ``event=sample``
+        (``positions_cart``, ``numbers``, ``lattice``, ``film_substrate``).
+        """
+        try:
+            n = int(len(interface_here))
+        except Exception:
+            return {}
+        cap = min(int(max_sites), n)
+        if cap <= 0:
+            return {}
+        out = {}
+        try:
+            out["lattice"] = [[float(x) for x in row] for row in interface_here.lattice.matrix.tolist()]
+        except Exception:
+            pass
+        try:
+            fc = interface_here.frac_coords[:cap].tolist()
+            if fc:
+                out["interface_frac"] = fc
+        except Exception:
+            pass
+        try:
+            nums = [int(z) for z in asarray(interface_here.atomic_numbers).ravel().tolist()[:cap]]
+        except Exception:
+            return out
+        try:
+            carts = interface_here.cart_coords[:cap]
+            pc = [[float(r[0]), float(r[1]), float(r[2])] for r in carts]
+        except Exception:
+            return out
+        if len(pc) != len(nums):
+            return out
+        out["positions_cart"] = pc
+        out["numbers"] = nums
+        try:
+            raw = getattr(interface_here, "film_indices", None)
+            if raw is not None:
+                fi = {int(i) for i in asarray(raw).ravel().tolist()}
+                fs = [1 if i in fi else 0 for i in range(cap)]
+                if len(fs) == len(nums):
+                    out["film_substrate"] = fs
+        except Exception:
+            pass
+        return out
+
     def get_specified_interface(self, match_id, term_id, xyz = [0,0,2]):
         """
         get a specified interface by unique match index, unique termination index, and xyz registration
@@ -649,38 +882,10 @@ class InterfaceWorker:
             user_settings = dict(user_settings)
 
         if calc == "matris":
-            import os
-            user_settings.setdefault("model", os.getenv("MATRIS_MODEL", "matris_10m_oam"))
-            user_settings.setdefault("task", os.getenv("MATRIS_TASK", "efsm"))
+            user_settings.setdefault("model", "matris_10m_oam")
+            user_settings.setdefault("task", "efsm")
 
-        # If checkpoint path is not provided, try environment or auto-discovery.
-        env_dict = {
-            "orb-models": "ORB_CHECKPOINT",
-            "sevenn": "SEVENN_CHECKPOINT",
-            "dpa": "DPA_CHECKPOINT",
-        }
-
-        # Always ensure ckpt_path key exists and normalize empty/invalid values
-        if "ckpt_path" not in user_settings:
-            user_settings["ckpt_path"] = None
-        else:
-            try:
-                import os
-                # Treat empty string or directory as unset
-                if user_settings["ckpt_path"] in ("", None) or (isinstance(user_settings["ckpt_path"], str) and os.path.isdir(user_settings["ckpt_path"])):
-                    user_settings["ckpt_path"] = None
-            except Exception:
-                pass
-
-        if user_settings.get("ckpt_path") is None and calc in env_dict:
-            import os
-            # Prefer server environment variables
-            ckpt = os.getenv(env_dict[calc])
-            if not ckpt:
-                ckpt = _resolve_mlip_checkpoint(calc)
-            if ckpt:
-                user_settings["ckpt_path"] = ckpt
-
+        # Checkpoint resolution (INTEROPTIMUS_CHECKPOINT_DIR or ~/.cache/InterOptimus/checkpoints) is in MlipCalc.
         self.mc = MlipCalc(calc=calc, user_settings=user_settings)
     
     def close_energy_calculator(self):
@@ -710,7 +915,43 @@ class InterfaceWorker:
                 return 0
         #if self.num_relax_bayesian == 0:
         self.opt_results[(self.match_id_now, self.term_id_now)]['sampled_interfaces'].append(interface_here)
-        return self.mc.calculate(interface_here)
+        e = float(self.mc.calculate(interface_here))
+        if _interoptimus_viz_env_active():
+            try:
+                from InterOptimus.viz_runtime import emit_event
+
+                si = len(self.opt_results[(self.match_id_now, self.term_id_now)]["sampled_interfaces"]) - 1
+                xyz_cart = self._bo_registration_xyz_cart(
+                    self.match_id_now, self.term_id_now, float(x), float(y), float(z)
+                )
+                nat = int(len(interface_here))
+                row = {
+                    "v": 1,
+                    "phase": "bo",
+                    "event": "sample",
+                    "match_id": int(self.match_id_now),
+                    "term_id": int(self.term_id_now),
+                    "sample_index": int(si),
+                    "xyz_cart": xyz_cart,
+                    "energy": e,
+                    "n_atoms": nat,
+                    "energy_per_atom": float(e) / float(max(nat, 1)),
+                }
+                row.update(self._bo_sample_iface_viz_fields(interface_here))
+                emit_event(row)
+                try:
+                    vp = (os.environ.get("INTEROPTIMUS_VIZ_LOG") or "").strip()
+                    if vp and row.get("positions_cart") and row.get("numbers") and row.get("lattice"):
+                        from pathlib import Path
+
+                        from InterOptimus.viz_ase_iface import write_bo_iface_png
+
+                        write_bo_iface_png(row, Path(vp).resolve().parent / "web_bo_iface.png")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return e
         """
         else:
             fix_thickness_film, fix_thickness_substrate = self.absolute_fix_thicknesses[self.match_id_now]
@@ -955,36 +1196,42 @@ class InterfaceWorker:
                             relax_user_incar_settings = None,
                             relax_user_potcar_settings = None,
                             relax_user_kpoints_settings = None,
-                            relax_user_potcar_functional = None,
+                            relax_user_potcar_functional = 'PBE_54',
                             
                             static_user_incar_settings = None,
                             static_user_potcar_settings = None,
                             static_user_kpoints_settings = None,
-                            static_user_potcar_functional = None,
+                            static_user_potcar_functional = 'PBE_54',
                             
                             filter_name = 'my_conv_jobs',
                             do_dft_gd = False,
                             gd_kwargs = {},
                             ):
-        """
-        Patch JobFlow jobs, only for c_period = True
-        """
+        """Patch JobFlow jobs, only for c_period = True."""
         
         from pymatgen.io.vasp.sets import MPStaticSet, MPRelaxSet
         from atomate2.vasp.jobs.core import StaticMaker, RelaxMaker
         from jobflow import Flow
-        
+
+        if do_dft_gd:
+            from InterOptimus.jobflow import GDVaspMaker
+
         flows = []
         for num in range(2):
             structure = [self.film, self.substrate][num]
+            static_incar_here = default_static_incar_settings(
+                static_user_incar_settings,
+                num_atoms=len(structure),
+            )
             vasp_maker = StaticMaker(
                                     input_set_generator = MPStaticSet(
                                                         structure,
-                                                        user_incar_settings = static_user_incar_settings,
+                                                        user_incar_settings = static_incar_here,
                                                          user_potcar_settings = static_user_potcar_settings,
                                                           user_kpoints_settings = static_user_kpoints_settings,
                                                            user_potcar_functional = static_user_potcar_functional,
-                                                           )
+                                                           ),
+                                    run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
                                     )
             job = vasp_maker.make(structure)
             job.update_metadata({'filter_name':filter_name, 'job': ['film','substrate'][num]})
@@ -992,56 +1239,75 @@ class InterfaceWorker:
 
         for thk in self.thk_conv_test_results.keys():
             if self.double_interface:
-                if not relax_user_incar_settings == None:
-                    it_user_incar_settings = relax_user_incar_settings
-                    it_user_incar_settings['IOPTCELL'] = "0 0 0 0 0 0 0 0 1"
-                else:
-                    it_user_incar_settings = {'IOPTCELL':"0 0 0 0 0 0 0 0 1"}
+                relax_extra_settings = default_double_interface_relax_extra_settings()
             else:
-                if not relax_user_incar_settings == None:
-                    it_user_incar_settings = relax_user_incar_settings
-                    it_user_incar_settings['ISIF'] = 2
-                else:
-                    it_user_incar_settings = {'ISIF':2}
+                relax_extra_settings = {'ISIF':2}
             #interface here
             for it_id in range(len(self.thk_conv_test_results[thk]['relaxed_interfaces'])):
                 it = self.thk_conv_test_results[thk]['relaxed_interfaces'][it_id]
-                if 'EDIFF_PER_ATOM' in it_user_incar_settings.keys():
-                    it_user_incar_settings['EDIFF'] = it_user_incar_settings['EDIFF_PER_ATOM'] * len(it)
+                it_user_incar_settings = default_relax_incar_settings(
+                    relax_user_incar_settings,
+                    extra_settings=relax_extra_settings,
+                    num_atoms=len(it),
+                )
                 vasp_maker = RelaxMaker(
                                         input_set_generator = MPRelaxSet(
                                                                         user_incar_settings = it_user_incar_settings,
                                                                         user_potcar_settings = relax_user_potcar_settings,
                                                                         user_kpoints_settings = relax_user_kpoints_settings,
                                                                         user_potcar_functional = relax_user_potcar_functional,
-                                                                        )
+                                                                        ),
+                                        run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
                                         )
-            if do_dft_gd:
-                flow = GDVaspMaker(
-                                    initial_it = it,
-                                    film_indices = it.film_indices,
-                                    metadata = {'filter_name':filter_name, 'job': f'{thk}_it_{it_id}'},
-                                    relax_maker = vasp_maker,
-                                    **gd_kwargs,
-                                    ).make()
-                flows += flow
-            else:
-                job = vasp_maker.make(it)
-                job.update_metadata({'filter_name':filter_name, 'job': f'{thk}_it_{it_id}'})
-                flows.append(job)
+                if do_dft_gd:
+                    flow = GDVaspMaker(
+                                        initial_it = it,
+                                        film_indices = it.film_indices,
+                                        metadata = {'filter_name':filter_name, 'job': f'{thk}_it_{it_id}'},
+                                        relax_maker = vasp_maker,
+                                        gd_post_static_config={
+                                            "filter_name": filter_name,
+                                            "canonical_job_tag": f'{thk}_it_{it_id}',
+                                            "num_atoms": len(it),
+                                            "static_user_incar_settings": static_user_incar_settings,
+                                            "static_user_potcar_settings": static_user_potcar_settings,
+                                            "static_user_kpoints_settings": static_user_kpoints_settings,
+                                            "static_user_potcar_functional": static_user_potcar_functional,
+                                        },
+                                        **gd_kwargs,
+                                        ).make()
+                    flows += flow
+                else:
+                    job = vasp_maker.make(it)
+                    job.update_metadata({'filter_name':filter_name, 'job': f'{thk}_it_{it_id}_relax'})
+                    flows.append(job)
+                    _flow_append_mpstatic_after_relax(
+                        flows,
+                        relax_job=job,
+                        filter_name=filter_name,
+                        energy_tag_root=f'{thk}_it_{it_id}',
+                        num_atoms=len(it),
+                        static_user_incar_settings=static_user_incar_settings,
+                        static_user_potcar_settings=static_user_potcar_settings,
+                        static_user_kpoints_settings=static_user_kpoints_settings,
+                        static_user_potcar_functional=static_user_potcar_functional,
+                    )
 
             #strained film
             s_film = self.thk_conv_test_results[thk]['strain_film']
-            if 'EDIFF_PER_ATOM' in static_user_incar_settings.keys():
-                static_user_incar_settings['EDIFF'] = static_user_incar_settings['EDIFF_PER_ATOM'] * len(s_film)
+            static_incar_here = default_static_incar_settings(
+                static_user_incar_settings,
+                num_atoms=len(s_film),
+            )
             vasp_maker = StaticMaker(
                                     input_set_generator = MPStaticSet(
                                                                     s_film,
-                                                                    user_incar_settings = static_user_incar_settings,
+                                                                    user_incar_settings = static_incar_here,
                                                                     user_potcar_settings = static_user_potcar_settings,
                                                                     user_kpoints_settings = static_user_kpoints_settings,
-                                                                    user_potcar_functional = static_user_potcar_functional
-                                                                    )
+                                                                    user_potcar_functional = static_user_potcar_functional,
+                                                                    ),
+                                    run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
                                     )
             job = vasp_maker.make(s_film)
             job.update_metadata({'filter_name':filter_name, 'job': f'{thk}_sfilm'})
@@ -1050,20 +1316,36 @@ class InterfaceWorker:
             #film & substrate slab
             if not self.double_interface:
                 for slab in ['film', 'substrate']:
-                    if 'EDIFF_PER_ATOM' in it_user_incar_settings.keys():
-                        it_user_incar_settings['EDIFF'] = it_user_incar_settings['EDIFF_PER_ATOM'] * len(slab)
+                    slab_structure = self.thk_conv_test_results[thk]['slabs'][slab]['structure']
+                    slab_incar_here = default_relax_incar_settings(
+                        relax_user_incar_settings,
+                        extra_settings=relax_extra_settings,
+                        num_atoms=len(slab_structure),
+                    )
                     vasp_maker = RelaxMaker(
                                             input_set_generator = MPRelaxSet(
-                                                                            self.thk_conv_test_results[thk]['slabs'][slab]['structure'],
-                                                                            user_incar_settings = it_user_incar_settings,
+                                                                            slab_structure,
+                                                                            user_incar_settings = slab_incar_here,
                                                                             user_potcar_settings = relax_user_potcar_settings,
                                                                             user_kpoints_settings = relax_user_kpoints_settings,
                                                                             user_potcar_functional = relax_user_potcar_functional,
-                                                                            )
+                                                                            ),
+                                            run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
                                             )
-                    job = vasp_maker.make(self.thk_conv_test_results[thk]['slabs'][slab]['structure'])
-                    job.update_metadata({'filter_name':filter_name, 'job': f'{thk}_{slab}_slab'})
+                    job = vasp_maker.make(slab_structure)
+                    job.update_metadata({'filter_name':filter_name, 'job': f'{thk}_{slab}_slab_relax'})
                     flows.append(job)
+                    _flow_append_mpstatic_after_relax(
+                        flows,
+                        relax_job=job,
+                        filter_name=filter_name,
+                        energy_tag_root=f'{thk}_{slab}_slab',
+                        num_atoms=len(slab_structure),
+                        static_user_incar_settings=static_user_incar_settings,
+                        static_user_potcar_settings=static_user_potcar_settings,
+                        static_user_kpoints_settings=static_user_kpoints_settings,
+                        static_user_potcar_functional=static_user_potcar_functional,
+                    )
  
         return flows
         
@@ -1080,7 +1362,13 @@ class InterfaceWorker:
         #get lowest-energy relaxed it
         relaxed_its, relaxed_Es = [], []
         for s_id in self.opt_results[(i,j)]['BO_selected_ids']:
-            relaxed_it, relaxed_E = self.relax_with_selective_dyn_it(self.opt_results[(i,j)]['sampled_interfaces'][s_id], fthk_film, fthk_substrate)
+            relaxed_it, relaxed_E = self.relax_with_selective_dyn_it(
+                self.opt_results[(i, j)]["sampled_interfaces"][s_id],
+                fthk_film,
+                fthk_substrate,
+                match_id=i,
+                term_id=j,
+            )
             relaxed_its.append(relaxed_it)
             relaxed_Es.append(relaxed_E)
 
@@ -1119,7 +1407,7 @@ class InterfaceWorker:
                 pass
         
         #energy correction by film strain energy
-        if self.strain_E_correction:
+        if self.strain_E_correction and not self.double_interface:
             
             #film length
             fmns_L = self.absolute_thicknesses[i][0]
@@ -1145,9 +1433,26 @@ class InterfaceWorker:
 
         self.opt_results[(i,j)]['thicknesses'] = self.absolute_thicknesses[i]
         self.opt_results[(i,j)]['relaxed_min_it_E'] = it_E
+        self._global_min_debug(
+            stage="post_bayesian_double_interface",
+            match_id=int(i),
+            term_id=int(j),
+            area=float(A),
+            relaxed_best_sup_E=float(relaxed_best_sup_E),
+            relaxed_min_it_E=float(it_E),
+            strain_E=float(strain_E),
+            film_atom_count=int(len(best_it.film_indices)),
+            substrate_atom_count=int(len(best_it.substrate_indices)),
+        )
+        try:
+            m_i = self.unique_matches[i]
+            self.opt_results[(i, j)]["match_area"] = float(m_i.match_area)
+            self.opt_results[(i, j)]["strain"] = float(m_i.von_mises_strain)
+        except Exception:
+            pass
         return it_E, strain_E
     
-    def relax_with_selective_dyn_it(self, it, film_shell, substrate_shell):
+    def relax_with_selective_dyn_it(self, it, film_shell, substrate_shell, match_id=None, term_id=None):
         interface_properties = it.interface_properties
         film_indices, substrate_indices = it.film_indices, it.substrate_indices
         if not self.double_interface:
@@ -1155,7 +1460,28 @@ class InterfaceWorker:
             it, mblt_mtx = add_sele_dyn_it(it, film_shell, substrate_shell)
         if not self.double_interface:
             it.add_site_property('selective_dynamics', mblt_mtx)
-        it, relaxed_it_sup_E = self.mc.optimize(it, **self.opt_kwargs)
+        opt_kw = dict(self.opt_kwargs)
+        opt_kw.pop("viz_meta", None)
+        if match_id is not None and term_id is not None and _interoptimus_viz_env_active():
+            try:
+                area = 0.0
+                try:
+                    m = self.unique_matches[int(match_id)]
+                    area = float(m.match_area)
+                except Exception:
+                    pass
+                opt_kw["viz_meta"] = {
+                    "match_id": int(match_id),
+                    "term_id": int(term_id),
+                    "match_label": f"match {int(match_id)} · term {int(term_id)}",
+                    "double_interface": bool(self.double_interface),
+                    "match_area_A2": area,
+                    "E_film_ref": float(getattr(self, "film_e", 0.0) or 0.0),
+                    "E_sub_ref": float(getattr(self, "substrate_e", 0.0) or 0.0),
+                }
+            except Exception as exc:
+                print(f"[InterOptimus] viz_meta (interface relax) failed: {exc}", flush=True)
+        it, relaxed_it_sup_E = self.mc.optimize(it, **opt_kw)
         it = Structure.from_dict(json.loads(  it.to_json() ) )
         if not self.double_interface:
             it.add_site_property('selective_dynamics', mblt_mtx)
@@ -1189,7 +1515,13 @@ class InterfaceWorker:
         self.opt_results[(i,j)]['film_indices'] = self.opt_results[(i,j)]['sampled_interfaces'][0].film_indices
         self.opt_results[(i,j)]['substrate_indices'] = self.opt_results[(i,j)]['sampled_interfaces'][0].substrate_indices
         for s_id in self.opt_results[(i,j)]['BO_selected_ids']:
-            relaxed_it, relaxed_E = self.relax_with_selective_dyn_it(self.opt_results[(i,j)]['sampled_interfaces'][s_id], fthk_film, fthk_substrate)
+            relaxed_it, relaxed_E = self.relax_with_selective_dyn_it(
+                self.opt_results[(i, j)]["sampled_interfaces"][s_id],
+                fthk_film,
+                fthk_substrate,
+                match_id=i,
+                term_id=j,
+            )
             
             if self.do_gd:
                 gd_xs, gd_Es, gd_gs = gradient_descend(sampling_function = self.get_displaced_relaxed_interface,
@@ -1200,7 +1532,6 @@ class InterfaceWorker:
                                                      initial_xy = [array([0.0,0.0,0.0]), relaxed_E],
                                                      min_steps = 5,
                                                     interface = relaxed_it)
-                relaxed_it
                                                     
                 relaxed_its.append(self.gradient_descend_interfaces[-1])
                 relaxed_Es.append(gd_Es[-1])
@@ -1272,6 +1603,12 @@ class InterfaceWorker:
 
         self.opt_results[(i,j)]['thicknesses'] = self.absolute_thicknesses[i]
         self.opt_results[(i,j)]['relaxed_min_bd_E'] = bd_E
+        try:
+            m_i = self.unique_matches[i]
+            self.opt_results[(i, j)]["match_area"] = float(m_i.match_area)
+            self.opt_results[(i, j)]["strain"] = float(m_i.von_mises_strain)
+        except Exception:
+            pass
         return bd_E, strain_E
 
     def global_minimization(self, n_calls_density = 4, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, term_screen_tol = 1, name = ''):
@@ -1301,12 +1638,34 @@ class InterfaceWorker:
                    r'$u_{s1}$',r'$v_{s1}$',r'$w_{s1}$',
                    r'$u_{s2}$',r'$v_{s2}$',r'$w_{s2}$', r'$T$', r'$i_m$', r'$i_t$']
         self.formated_data = []
-        self.strain_E_correction = strain_E_correction
+        self.strain_E_correction = effective_strain_E_correction(
+            strain_E_correction,
+            double_interface=self.double_interface,
+        )
+        if self.double_interface and strain_E_correction:
+            warnings.warn(
+                "strain_E_correction is disabled for double-interface models; using the uncorrected "
+                "double-interface energy instead.",
+                stacklevel=2,
+            )
         #set mlip calculator
         
         self.set_energy_calculator(calc, self.opt_kwargs)
         self.film_e = self.mc.calculate(self.film)
         self.substrate_e = self.mc.calculate(self.substrate)
+        self._global_min_debug(
+            stage="global_minimization_start",
+            calc=calc,
+            resolved_ckpt_path=(getattr(self.mc, "user_settings", {}) or {}).get("ckpt_path"),
+            film_e=float(self.film_e),
+            substrate_e=float(self.substrate_e),
+            film_primitive_sites=int(len(self.film)),
+            substrate_primitive_sites=int(len(self.substrate)),
+            double_interface=bool(self.double_interface),
+            strain_E_correction=bool(self.strain_E_correction),
+            z_range=list(z_range),
+            n_calls_density=float(n_calls_density),
+        )
         #scanning matches and terminations
         with tqdm(total = len(self.unique_matches), desc = "matches") as match_pbar:
             #for i in range(1):
@@ -1339,14 +1698,41 @@ class InterfaceWorker:
                         self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
                         it = self.opt_results[(i,j)]['sampled_interfaces'][0]
                         A = it.lattice.a * it.lattice.b
+                        supcl_E0 = float(self.opt_results[(i,j)]['supcl_E'][0])
                         if self.double_interface:
-                            it_E = (self.opt_results[(i,j)]['supcl_E'][0] - len(it.film_indices)/len(self.film) * self.film_e - len(it.substrate_indices)/len(self.substrate) * self.substrate_e) / A * 16.02176634 / 2
+                            film_scale = len(it.film_indices)/len(self.film)
+                            substrate_scale = len(it.substrate_indices)/len(self.substrate)
+                            it_E = (supcl_E0 - film_scale * self.film_e - substrate_scale * self.substrate_e) / A * 16.02176634 / 2
                             e_labels.append(it_E)
+                            self._global_min_debug(
+                                stage="prescreen_double_interface",
+                                match_id=int(i),
+                                term_id=int(j),
+                                area=float(A),
+                                supcl_E0=supcl_E0,
+                                prescreen_it_E=float(it_E),
+                                film_scale=float(film_scale),
+                                substrate_scale=float(substrate_scale),
+                                film_atom_count=int(len(it.film_indices)),
+                                substrate_atom_count=int(len(it.substrate_indices)),
+                            )
                         else:
                             film_slab = it.film
                             substrate_slab = it.substrate
-                            bd_E = (self.opt_results[(i,j)]['supcl_E'][0] - self.mc.calculate(film_slab) - self.mc.calculate(substrate_slab)) / A * 16.02176634
+                            film_slab_E = float(self.mc.calculate(film_slab))
+                            substrate_slab_E = float(self.mc.calculate(substrate_slab))
+                            bd_E = (supcl_E0 - film_slab_E - substrate_slab_E) / A * 16.02176634
                             e_labels.append(bd_E)
+                            self._global_min_debug(
+                                stage="prescreen_single_interface",
+                                match_id=int(i),
+                                term_id=int(j),
+                                area=float(A),
+                                supcl_E0=supcl_E0,
+                                film_slab_E=film_slab_E,
+                                substrate_slab_E=substrate_slab_E,
+                                prescreen_bd_E=float(bd_E),
+                            )
                     print(e_labels)
                     for j in range(num_terms):
                         if e_labels[j] < min(e_labels) + term_screen_tol:
@@ -1431,7 +1817,8 @@ class InterfaceWorker:
     def get_lowest_energy_pairs_each_match(self,
                                 only_lowest_energy = False,
                             only_lowest_energy_each_plane = False,
-                            only_substrate = False):
+                            only_substrate = False,
+                            all_optimized_pairs = False):
         
         pd = self.global_optimized_data
         i_s = pd['$i_m$'].to_numpy()
@@ -1439,6 +1826,14 @@ class InterfaceWorker:
         ranked_pairs = list(zip(i_s, j_s))
         pair_order = {pair: idx for idx, pair in enumerate(ranked_pairs)}
         pairs = []
+        if all_optimized_pairs:
+            seen = set()
+            for k in range(len(i_s)):
+                p = (int(i_s[k]), int(j_s[k]))
+                if p not in seen:
+                    seen.add(p)
+                    pairs.append(p)
+            return pairs
         if only_lowest_energy:
             pairs.append((i_s[0], j_s[0]))
         elif only_lowest_energy_each_plane:
@@ -1483,32 +1878,145 @@ class InterfaceWorker:
             data['film'] = _normalize_mapping(self.selected_pairs_film_by_miller)
         return data
     
-    def visualize_minimization_results(self, film_name, substrate_name):
-        
-        pairs = self.get_lowest_energy_pairs_each_match(only_lowest_energy_each_plane = True)
-        matche_bd_e_dict = {}
+    def visualize_minimization_results(
+        self,
+        film_name,
+        substrate_name,
+        only_lowest_energy: bool = False,
+        only_lowest_energy_each_plane: bool = True,
+        only_substrate: bool = False,
+        all_optimized_pairs: bool = False,
+    ):
+        """
+        Write ``area_strain`` and stereographic plots.
+
+        By default (``only_lowest_energy_each_plane=True``) this picks one lowest-energy
+        ``(match, term)`` **per film/substrate Miller bin**, which stereographic summaries need.
+        That choice does **not** control VASP: in :class:`~InterOptimus.jobflow.IOMaker` jobflow,
+        DFT interface relaxations follow ``vasp_pair_selection`` / ``pair_kw`` only
+        (see ``IO_HT_job`` after this call).
+        """
+        pairs = self.get_lowest_energy_pairs_each_match(
+            only_lowest_energy=only_lowest_energy,
+            only_lowest_energy_each_plane=only_lowest_energy_each_plane,
+            only_substrate=only_substrate,
+            all_optimized_pairs=all_optimized_pairs,
+        )
+        selected_pair_by_match = {}
+        selected_energy_by_match = {}
         for key in pairs:
+            selected_pair_by_match[key[0]] = key
             if self.double_interface:
-                matche_bd_e_dict[key[0]] = self.opt_results[key]['relaxed_min_it_E']
+                selected_energy_by_match[key[0]] = self.opt_results[key]['relaxed_min_it_E']
             else:
-                matche_bd_e_dict[key[0]] = self.opt_results[key]['relaxed_min_bd_E']
+                selected_energy_by_match[key[0]] = self.opt_results[key]['relaxed_min_bd_E']
         from InterOptimus.matching import get_area_match
+        # One row per stereographic bin ``i`` and each competing match type ``tp`` in that bin.
+        # ``stereo_winner`` is 1 for the lowest-energy ``tp`` in the bin (same as legacy single row);
+        # 0 for other competing matches in the bin or for symmetrically equivalent Miller labelings.
+        # Stereographic plots still use only ``stereo_winner==1`` rows (see matching.visualize_minimization_results).
+        eq_groups = getattr(self, "equivalent_matches_indices_data", None) or []
+
+        def _hkl_tuple_from_alt(alt_dict, conv_key, prim_key):
+            for key in (conv_key, prim_key):
+                a = alt_dict.get(key)
+                if a is None:
+                    continue
+                a = asarray(a, dtype=float).ravel()
+                if a.size == 3:
+                    return tuple(int(round(x)) for x in a.tolist())
+            return None
+
         data = []
         for i in self.ems.all_matche_data.keys():
             here = self.ems.all_matche_data[i]
             low_E = inf
+            winner_tp = None
             for tp in here.keys():
                 try:
-                    if matche_bd_e_dict[tp] < low_E:
-                        low_E = matche_bd_e_dict[tp]
-                        low_tp = tp
-                    mt = self.unique_matches[tp]
-                except:
+                    e = selected_energy_by_match[tp]
+                    if e < low_E:
+                        low_E = e
+                        winner_tp = tp
+                except Exception:
                     pass
-            data.append([i[0][0], i[0][1], i[0][2], i[1][0], i[1][1], i[1][2],
-                         get_area_match(mt), mt.von_mises_strain, low_E, low_tp])
-        from numpy import savetxt
-        savetxt('area_strain',data,fmt = '(%i %i %i) (%i %i %i) %.4f %.4f %.4f %i')
+            if winner_tp is None:
+                continue
+            bin_f = tuple(int(x) for x in i[0])
+            bin_s = tuple(int(x) for x in i[1])
+            seen_equiv = set()
+            for tp in here.keys():
+                try:
+                    mt = self.unique_matches[tp]
+                    e = selected_energy_by_match[tp]
+                    term_id = selected_pair_by_match[tp][1]
+                    is_winner = 1 if tp == winner_tp else 0
+                    data.append(
+                        [
+                            i[0][0],
+                            i[0][1],
+                            i[0][2],
+                            i[1][0],
+                            i[1][1],
+                            i[1][2],
+                            get_area_match(mt),
+                            mt.von_mises_strain,
+                            e,
+                            tp,
+                            term_id,
+                            is_winner,
+                        ]
+                    )
+                except Exception:
+                    pass
+                if tp >= len(eq_groups):
+                    continue
+                try:
+                    mt = self.unique_matches[tp]
+                    e = selected_energy_by_match[tp]
+                    term_id = selected_pair_by_match[tp][1]
+                except Exception:
+                    continue
+                for alt in eq_groups[tp]:
+                    if not isinstance(alt, dict):
+                        continue
+                    fc = _hkl_tuple_from_alt(alt, "film_conventional_miller", "film_primitive_miller")
+                    sc = _hkl_tuple_from_alt(alt, "substrate_conventional_miller", "substrate_primitive_miller")
+                    if fc is None or sc is None:
+                        continue
+                    if (fc, sc) == (bin_f, bin_s):
+                        continue
+                    ek = (fc, sc, tp, term_id)
+                    if ek in seen_equiv:
+                        continue
+                    seen_equiv.add(ek)
+                    data.append(
+                        [
+                            fc[0],
+                            fc[1],
+                            fc[2],
+                            sc[0],
+                            sc[1],
+                            sc[2],
+                            get_area_match(mt),
+                            mt.von_mises_strain,
+                            e,
+                            tp,
+                            term_id,
+                            0,
+                        ]
+                    )
+        header = (
+            "# InterOptimus area_strain v2: last column stereo_winner — "
+            "1 = lowest-energy match in stereographic bin (used for plots); "
+            "0 = other competing match in bin or equivalent Miller labeling"
+        )
+        savetxt(
+            "area_strain",
+            data,
+            fmt="(%i %i %i) (%i %i %i) %.4f %.4f %.4f %i %i %i",
+            header=header,
+        )
         
         from InterOptimus.matching import visualize_minimization_results
         if self.double_interface:
@@ -1521,16 +2029,17 @@ class InterfaceWorker:
                             only_lowest_energy = False,
                             only_lowest_energy_each_plane = False,
                             only_substrate = False,
+                            all_optimized_pairs = False,
                             
                             relax_user_incar_settings = None,
                             relax_user_potcar_settings = None,
                             relax_user_kpoints_settings = None,
-                            relax_user_potcar_functional = None,
+                            relax_user_potcar_functional = 'PBE_54',
                             
                             static_user_incar_settings = None,
                             static_user_potcar_settings = None,
                             static_user_kpoints_settings = None,
-                            static_user_potcar_functional = None,
+                            static_user_potcar_functional = 'PBE_54',
                             
                             filter_name = 'my_IO_jobs',
                             do_dft_gd = False,
@@ -1538,32 +2047,39 @@ class InterfaceWorker:
                             dipole_correction = False,
                             ):
         """
-        Patch JobFlow jobs, only for c_period = True
+        Patch JobFlow jobs, only for c_period = True.
+
+        After the final interface/slab relax (including optional dipole relax), one
+        ``MPStaticSet`` is appended so reported energies use a unified static protocol.
         """
         
         from pymatgen.io.vasp.sets import MPStaticSet, MPRelaxSet
         from atomate2.vasp.jobs.core import StaticMaker, RelaxMaker
         from jobflow import Flow
-        
+
         if do_dft_gd:
             from InterOptimus.jobflow import GDVaspMaker
         
         pairs = self.get_lowest_energy_pairs_each_match(only_lowest_energy = only_lowest_energy,
                             only_lowest_energy_each_plane = only_lowest_energy_each_plane,
-                            only_substrate = only_substrate)
+                            only_substrate = only_substrate,
+                            all_optimized_pairs = all_optimized_pairs)
         
         flows = []
         for num in range(2):
             structure = [self.film, self.substrate][num]
-            if static_user_incar_settings and 'EDIFF_PER_ATOM' in static_user_incar_settings.keys():
-                static_user_incar_settings['EDIFF'] = static_user_incar_settings['EDIFF_PER_ATOM'] * len(structure)
+            static_incar_here = default_static_incar_settings(
+                static_user_incar_settings,
+                num_atoms=len(structure),
+            )
             vasp_maker = StaticMaker(
                                     input_set_generator = MPStaticSet(
-                                                        user_incar_settings = static_user_incar_settings,
+                                                        user_incar_settings = static_incar_here,
                                                          user_potcar_settings = static_user_potcar_settings,
                                                           user_kpoints_settings = static_user_kpoints_settings,
                                                            user_potcar_functional = static_user_potcar_functional,
-                                                           )
+                                                           ),
+                                    run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
                                     )
             job = vasp_maker.make(structure)
             job.update_metadata({'filter_name':filter_name, 'job': ['film','substrate'][num]})
@@ -1571,37 +2087,24 @@ class InterfaceWorker:
 
         for i in pairs:
             if self.double_interface:
-                if not relax_user_incar_settings == None:
-                    it_user_incar_settings = relax_user_incar_settings
-                    it_user_incar_settings['IOPTCELL'] = "0 0 0 0 0 0 0 0 1"
-                else:
-                    it_user_incar_settings = {'IOPTCELL':"0 0 0 0 0 0 0 0 1"}
+                relax_extra_settings = default_double_interface_relax_extra_settings()
             else:
-                if not relax_user_incar_settings == None:
-                    it_user_incar_settings = relax_user_incar_settings
-                    it_user_incar_settings['ISIF'] = 2
-                else:
-                    it_user_incar_settings = {'ISIF':2}
+                relax_extra_settings = {'ISIF':2}
             #interface here
             it = Structure.from_dict(json.loads(self.opt_results[i]['relaxed_best_interface']['structure']))
-            if it_user_incar_settings and 'EDIFF_PER_ATOM' in it_user_incar_settings.keys():
-                it_user_incar_settings['EDIFF'] = it_user_incar_settings['EDIFF_PER_ATOM'] * len(it)
-            it_user_incar_settings_here = it_user_incar_settings.copy()
-            if not with_LDAUU(it) and 'LDAU' in it_user_incar_settings_here.keys():
-                del it_user_incar_settings_here['LDAU']
-                del it_user_incar_settings_here['LDAUU']
-                del it_user_incar_settings_here['LDAUJ']
-                del it_user_incar_settings_here['LDAUL']
-                del it_user_incar_settings_here['LDAUTYPE']
-                del it_user_incar_settings_here['LDAUPRINT']
-                
+            it_user_incar_settings_here = default_relax_incar_settings(
+                relax_user_incar_settings,
+                extra_settings=relax_extra_settings,
+                num_atoms=len(it),
+            )
             vasp_maker = RelaxMaker(
                                     input_set_generator = MPRelaxSet(
                                                                     user_incar_settings = it_user_incar_settings_here,
                                                                     user_potcar_settings = relax_user_potcar_settings,
                                                                     user_kpoints_settings = relax_user_kpoints_settings,
                                                                     user_potcar_functional = relax_user_potcar_functional,
-                                                                    )
+                                                                    ),
+                                    run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
                                     )
             if do_dft_gd:
                 if dipole_correction:
@@ -1614,7 +2117,8 @@ class InterfaceWorker:
                                                                             user_potcar_settings = relax_user_potcar_settings,
                                                                             user_kpoints_settings = relax_user_kpoints_settings,
                                                                             user_potcar_functional = relax_user_potcar_functional,
-                                                                            )
+                                                                            ),
+                                            run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
                                             )
                 else:
                     vasp_maker_dp = None
@@ -1625,6 +2129,15 @@ class InterfaceWorker:
                                     metadata = {'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_it'},
                                     relax_maker = vasp_maker,
                                     relax_maker_dp = vasp_maker_dp,
+                                    gd_post_static_config={
+                                        "filter_name": filter_name,
+                                        "canonical_job_tag": f'{i[0]}_{i[1]}_it',
+                                        "num_atoms": len(it),
+                                        "static_user_incar_settings": static_user_incar_settings,
+                                        "static_user_potcar_settings": static_user_potcar_settings,
+                                        "static_user_kpoints_settings": static_user_kpoints_settings,
+                                        "static_user_potcar_functional": static_user_potcar_functional,
+                                    },
                                     **gd_kwargs,
                                     ).make()
                 
@@ -1632,9 +2145,10 @@ class InterfaceWorker:
                 flows += flow
             else:
                 job = vasp_maker.make(it)
-                job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_it'})
+                job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_it_relax'})
                 flows.append(job)
-                
+
+                last_iface_relax_for_static = job
                 if dipole_correction:
                     it_user_incar_settings_dp = it_user_incar_settings_here.copy()
                     it_user_incar_settings_dp['IDIPOL'] = 3
@@ -1645,25 +2159,44 @@ class InterfaceWorker:
                                                                             user_potcar_settings = relax_user_potcar_settings,
                                                                             user_kpoints_settings = relax_user_kpoints_settings,
                                                                             user_potcar_functional = relax_user_potcar_functional,
-                                                                            )
+                                                                            ),
+                                            run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
                                             )
-                    job_dp = vasp_maker.make(it, prev_dir = job.output.dir_name)
+                    job_dp = vasp_maker.make(
+                        job.output.output.structure, prev_dir=job.output.dir_name
+                    )
                     job_dp.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_it_dp'})
                     flows.append(job_dp)
+                    last_iface_relax_for_static = job_dp
+
+                _flow_append_mpstatic_after_relax(
+                    flows,
+                    relax_job=last_iface_relax_for_static,
+                    filter_name=filter_name,
+                    energy_tag_root=f'{i[0]}_{i[1]}_it',
+                    num_atoms=len(it),
+                    static_user_incar_settings=static_user_incar_settings,
+                    static_user_potcar_settings=static_user_potcar_settings,
+                    static_user_kpoints_settings=static_user_kpoints_settings,
+                    static_user_potcar_functional=static_user_potcar_functional,
+                )
             
             if self.strain_E_correction:
                 #strained film
                 s_film = Structure.from_dict(json.loads(self.opt_results[i]['strain_film']))
-                if static_user_incar_settings and 'EDIFF_PER_ATOM' in static_user_incar_settings.keys():
-                    static_user_incar_settings['EDIFF'] = static_user_incar_settings['EDIFF_PER_ATOM'] * len(s_film)
+                static_incar_here = default_static_incar_settings(
+                    static_user_incar_settings,
+                    num_atoms=len(s_film),
+                )
                 vasp_maker = StaticMaker(
                                         input_set_generator = MPStaticSet(
                                                                         s_film,
-                                                                        user_incar_settings = static_user_incar_settings,
+                                                                        user_incar_settings = static_incar_here,
                                                                         user_potcar_settings = static_user_potcar_settings,
                                                                         user_kpoints_settings = static_user_kpoints_settings,
-                                                                        user_potcar_functional = static_user_potcar_functional
-                                                                        )
+                                                                        user_potcar_functional = static_user_potcar_functional,
+                                                                        ),
+                                        run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
                                         )
                 job = vasp_maker.make(s_film)
                 job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_sfilm'})
@@ -1673,32 +2206,27 @@ class InterfaceWorker:
             if not self.double_interface:
                 for slab in ['film', 'substrate']:
                     slab_structure = Structure.from_dict(json.loads(self.opt_results[i]['slabs'][slab]['structure']))
-                    if it_user_incar_settings and 'EDIFF_PER_ATOM' in it_user_incar_settings.keys():
-                        it_user_incar_settings['EDIFF'] = it_user_incar_settings['EDIFF_PER_ATOM'] * len(slab_structure)
-                    
-                    it_user_incar_settings_here = it_user_incar_settings.copy()
-                    if not with_LDAUU(slab_structure) and 'LDAU' in it_user_incar_settings_here.keys():
-                        del it_user_incar_settings_here['LDAU']
-                        del it_user_incar_settings_here['LDAUU']
-                        del it_user_incar_settings_here['LDAUJ']
-                        del it_user_incar_settings_here['LDAUL']
-                        del it_user_incar_settings_here['LDAUTYPE']
-                        del it_user_incar_settings_here['LDAUPRINT']
-                    
+                    it_user_incar_settings_here = default_relax_incar_settings(
+                        relax_user_incar_settings,
+                        extra_settings=relax_extra_settings,
+                        num_atoms=len(slab_structure),
+                    )
                     vasp_maker = RelaxMaker(
                                             input_set_generator = MPRelaxSet(
                                                                             user_incar_settings = it_user_incar_settings_here,
                                                                             user_potcar_settings = relax_user_potcar_settings,
                                                                             user_kpoints_settings = relax_user_kpoints_settings,
                                                                             user_potcar_functional = relax_user_potcar_functional,
-                                                                            )
+                                                                            ),
+                                            run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
                                             )
                     job = vasp_maker.make(slab_structure)
-                    job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_{slab}_slab'})
+                    job.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_{slab}_slab_relax'})
                     flows.append(job)
-                    
+
+                    last_slab_relax_for_static = job
                     if dipole_correction:
-                        it_user_incar_settings_dp = it_user_incar_settings.copy()
+                        it_user_incar_settings_dp = it_user_incar_settings_here.copy()
                         it_user_incar_settings_dp['IDIPOL'] = 3
                         it_user_incar_settings_dp['LDIPOL'] = True
                         vasp_maker = RelaxMaker(
@@ -1707,11 +2235,27 @@ class InterfaceWorker:
                                                                                 user_potcar_settings = relax_user_potcar_settings,
                                                                                 user_kpoints_settings = relax_user_kpoints_settings,
                                                                                 user_potcar_functional = relax_user_potcar_functional,
-                                                                                )
+                                                                                ),
+                                                run_vasp_kwargs=interoptimus_vasp_run_kwargs(),
                                                 )
-                        job_dp = vasp_maker.make(slab_structure, prev_dir = job.output.dir_name)
+                        job_dp = vasp_maker.make(
+                            job.output.output.structure, prev_dir=job.output.dir_name
+                        )
                         job_dp.update_metadata({'filter_name':filter_name, 'job': f'{i[0]}_{i[1]}_{slab}_slab_dp'})
                         flows.append(job_dp)
+                        last_slab_relax_for_static = job_dp
+
+                    _flow_append_mpstatic_after_relax(
+                        flows,
+                        relax_job=last_slab_relax_for_static,
+                        filter_name=filter_name,
+                        energy_tag_root=f'{i[0]}_{i[1]}_{slab}_slab',
+                        num_atoms=len(slab_structure),
+                        static_user_incar_settings=static_user_incar_settings,
+                        static_user_potcar_settings=static_user_potcar_settings,
+                        static_user_kpoints_settings=static_user_kpoints_settings,
+                        static_user_potcar_functional=static_user_potcar_functional,
+                    )
                     
                     
         return flows
@@ -1780,29 +2324,3 @@ class InterfaceWorker:
             n_trials += 1
         
         return sampled_interfaces, xyzs, rbt_carts
-
-def with_LDAUU(structure):
-    """
-    Check if a structure requires LDA+U corrections in DFT calculations.
-
-    Determines whether the structure contains elements that typically require
-    Hubbard U corrections when F or O are present (transition metals).
-
-    Args:
-        structure: pymatgen Structure object
-
-    Returns:
-        bool: True if LDA+U corrections are recommended, False otherwise
-
-    Notes:
-        LDA+U is recommended when both oxygen/fluorine and certain transition
-        metals (Co, Cr, Fe, Mn, Mo, Ni, V, W) are present in the structure.
-    """
-    elements = [el.symbol for el in structure.elements]
-    with_LDAUU = False
-    if 'F' in elements or 'O' in elements:
-        for el in ['Co', 'Cr', 'Fe', 'Mn', 'Mo', 'Ni', 'V', 'W']:
-            if el in elements:
-                with_LDAUU = True
-                break
-    return with_LDAUU

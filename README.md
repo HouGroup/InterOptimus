@@ -1,114 +1,116 @@
 
-<img width="2752" height="1536" alt="197a99cc-8f8c-4220-9e95-dc3cae8bbc80" src="https://github.com/user-attachments/assets/0934d4f7-56d5-41bd-b71d-c1137920d19e" />
+<img width="2752" height="1536" alt="InterOptimus" src="https://github.com/user-attachments/assets/0934d4f7-56d5-41bd-b71d-c1137920d19e" />
 
 # InterOptimus
 
-Crystal interface optimization toolkit with MLIP acceleration and LLM-assisted workflow building.
+Crystal **interface** search and optimization with MLIP acceleration, optional VASP, and **Jobflow** / **jobflow-remote** execution.
 
-InterOptimus helps generate and optimize film/substrate interfaces (single or double), run MLIP or VASP workflows, and produce structured outputs (pairs, reports) for downstream analysis.
+This distribution focuses on the **JSON-driven IOMaker pipeline** (submit → lattice match → MLIP → optional DFT → reports and fetch tooling).
 
 ## Highlights
 
-- Interface lattice matching and termination screening
-- Single or double interface construction with thickness controls
-- MLIP-driven global minimization and optional VASP workflows
-- Jobflow-based execution (local or remote)
-- LLM-assisted workflow generation with natural-language prompts
-- Auto outputs: `pairs_best_it/`, `pairs_summary.txt`, `io_report.txt`
-
-## Requirements
-
-- Python >= 3.10 (tested on 3.11)
-- Key deps: `pymatgen`, `interfacemaster`, `atomate2`, `jobflow`, `jobflow-remote`, `mp-api`, `qtoolkit`, `ase`
-- MLIP deps: `orb-models`, `sevenn`, `deepmd-kit`, `torch`
-
-## Supported MLIPs
-
-- ORB models: https://github.com/orbital-materials/orb-models
-- SevenNet: https://github.com/MDIL-SNU/SevenNet
-- Deep Potential (DPA): https://github.com/deepmodeling/deepmd-kit
+- Lattice matching, termination screening, single / double interface builds
+- MLIP global minimization; optional VASP (cluster workers)
+- **One-shot config**: `interoptimus-simple -c your.yaml` or `run_simple_iomaker(...)`
+- Outputs include `io_flow.json`, `io_report.txt`, `pairs_summary.txt`, `opt_results.pkl` (use `iomaker_fetch_results` / `remote_submit` helpers after server submit)
 
 ## Installation
+
+From PyPI (after publish):
+
+```bash
+# Core only (lattice match, jobflow, interface pipeline). MLIP calculators need the extra:
+pip install "InterOptimus[mlip]"         # torch + orb-models + sevenn + deepmd-kit
+
+# Common combinations:
+pip install "InterOptimus[mlip,web,yaml]"   # MLIP backends + browser UI + YAML configs
+pip install InterOptimus                    # minimal deps; add [mlip] before running MLIP steps
+```
+
+From a git checkout:
 
 ```bash
 pip install -e .
 ```
 
-Optional (LLM / remote submission tools):
+See **[GETTING_STARTED](https://github.com/HouGroup/InterOptimus/blob/HEAD/docs/GETTING_STARTED.md)** for first-time server setup (MongoDB, jobflow-remote, POTCAR, MLIP checkpoints). Links use `HEAD` so they stay valid on the PyPI project description and on GitHub.
+
+## Quick start (recommended)
 
 ```bash
-pip install -r InterOptimus/agents/requirements_remote.txt
+# 1) Copy and edit paths / cluster / workers
+cp InterOptimus/agents/simple_iomaker.example.json my_run.json
+vim my_run.json
+
+# 2) On the login node, after JOBFLOW / JFREMOTE / conda are configured:
+interoptimus-simple -c my_run.json
 ```
 
-## Quick Start
-
-### Core API
+Python API:
 
 ```python
-from InterOptimus.itworker import InterfaceWorker
-from pymatgen.core.structure import Structure
-
-film = Structure.from_file("film.cif")
-substrate = Structure.from_file("substrate.cif")
-
-iw = InterfaceWorker(film, substrate)
-iw.lattice_matching(max_area=150)
-iw.parse_interface_structure_params(
-    charge_filter_settings={
-        "oxidation_states": {"Li": 1, "Ni": 2, "P": 5, "S": -2, "O": -2},
-    }
+from pathlib import Path
+import json
+from InterOptimus.agents.simple_iomaker import (
+    run_simple_iomaker,
+    iomaker_status,
+    iomaker_fetch_results,
 )
-iw.parse_optimization_params(calc="orb-models")
-iw.global_minimization()
+
+with open("my_run.json") as f:
+    result = run_simple_iomaker(json.load(f))
+
+print(iomaker_status(result))
+# When finished:
+# iomaker_fetch_results(result, copy_images_to=Path("./out"))
 ```
 
-If the input structures already carry oxidation states, `charge_filter_settings` can be enabled without
-passing `oxidation_states`. The charge filter removes obviously unreasonable terminations before MLIP
-energy estimation by checking same-sign contact layers and overly short cross-interface contacts.
-
-### LLM + IOMaker Workflow
+Lower-level builder (already-normalized `settings` dict):
 
 ```python
-from InterOptimus.agents.llm_iomaker_job import BuildConfig, build_iomaker_flow_from_prompt
-
-cfg = BuildConfig(
-    api_key="YOUR_API_KEY",
-    base_url="https://api.openai.com/v1",
-    submit_target="local",
-)
-
-result = build_iomaker_flow_from_prompt(
-    "建立双界面模型，厚度为10，最大匹配面积不超过20",
-    cfg,
+from InterOptimus.agents.iomaker_job import (
+    LocalBuildConfig,
+    execute_iomaker_from_settings,
+    normalize_iomaker_settings_from_full_dict,
 )
 ```
 
-## Project Layout
+Full parameter reference: **[simple_iomaker_parameters](https://github.com/HouGroup/InterOptimus/blob/HEAD/docs/simple_iomaker_parameters.md)**.
+
+### Optional: browser GUI (local runs)
+
+```bash
+pip install -e '.[web]'
+interoptimus-web
+```
+
+The web UI drives the same `run_simple_iomaker` pipeline as the CLI; session directories default to `~/.interoptimus/web_sessions/` (override with `INTEROPTIMUS_DESKTOP_SESSIONS` or `INTEROPTIMUS_WEB_SESSIONS`). Optional relaxation telemetry uses `INTEROPTIMUS_VIZ_LOG` + `INTEROPTIMUS_VIZ_ENABLE` (see `InterOptimus.viz_runtime`).
+
+## Requirements
+
+- Python ≥ 3.10
+- Core stack: `pymatgen`, `interfacemaster`, `atomate2`, `jobflow`, `jobflow-remote`, `qtoolkit`, … (see `setup.py`)
+- MLIP stack (optional): install **`InterOptimus[mlip]`** for `torch`, `orb-models`, `sevenn`, and `deepmd-kit`, or install those packages into your environment manually. **MatRIS** is not on PyPI; install from the upstream project if you use `calc=matris`.
+
+## Layout
 
 ```
 InterOptimus/
-├── itworker.py          # Main interface logic
-├── matching.py          # Lattice matching & screening
-├── jobflow.py           # Jobflow-based workflows
-├── mlip.py              # MLIP calculators
-├── CNID.py              # CNID calculations
-├── equi_term.py         # Equivalent termination analysis
-├── tool.py              # Utility functions
-├── agents/              # LLM workflow and remote submission tools
-├── Tutorial/            # Example data and notebooks
+├── itworker.py       # InterfaceWorker (physics + optimization)
+├── matching.py       # Lattice matching & screening
+├── jobflow.py        # IOMaker + Jobflow makers
+├── mlip.py           # MLIP calculators + checkpoint resolution
+├── agents/
+│   ├── simple_iomaker.py   # CLI + run_simple_iomaker / status / fetch / rerun helpers
+│   ├── iomaker_job.py      # BuildConfig + execute_iomaker_from_settings
+│   ├── remote_submit.py    # submit_io_flow_locally, progress, fetch
+│   └── server_env.py       # interoptimus-env
+├── web_app/                # FastAPI UI + job_worker (interoptimus-web)
+├── session_workflow.py     # web session driver (form → run_simple_iomaker)
+├── result_bundle.py        # curated result/ artifact folder
+└── docs/
 ```
-
-## Outputs
-
-Typical run outputs include:
-
-- `io_flow.json` – serialized jobflow workflow
-- `pairs_best_it/` – best interfaces for each pair
-- `pairs_summary.txt` – tabulated energies and atom counts
-- `io_report.txt` – full report with settings and results
 
 ## License
 
-
-MIT License. See `LICENSE`.
-
+MIT — see `LICENSE`.

@@ -1,0 +1,3 @@
+include LICENSE README.md
+recursive-include InterOptimus/web_app/templates *.html
+recursive-include InterOptimus/agents *.json

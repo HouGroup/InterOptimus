@@ -1,37 +1,24 @@
-# InterOptimus - Crystal Interface Optimization
+# InterOptimus (package overview)
 
-An efficient python package for Interface Simulation with LLM-powered intelligent agents.
+Python toolkit for **film/substrate interface** lattice matching, termination screening, MLIP relaxation / global search, and optional **VASP** workflows via **Jobflow** / **jobflow-remote**.
 
-## 🚀 Core Features
-1. Visualizing lattice matching information by polar projection figure;
-2. Symmetry analysis to screen out identical matching and termination conditions;
-3. Structure pre-optimization by MLIP-predicted interface energy.
+## Workflow entry (this branch)
 
-## 🤖 LLM Agents (New!)
+- **`agents/simple_iomaker.py`** — `interoptimus-simple` CLI and `run_simple_iomaker` / status / fetch helpers.
+- **`agents/iomaker_job.py`** — `BuildConfig`, `execute_iomaker_from_settings`, settings normalization.
+- **`agents/remote_submit.py`** — submit to the local host’s jobflow-remote, poll progress, pull artifacts.
+- **`web_app/`** — `interoptimus-web` browser UI; **`session_workflow.py`** — same pipeline from HTTP form sessions.
 
-InterOptimus now includes powerful LLM-powered agents that can understand natural language descriptions and automatically generate optimized crystal interfaces:
+See the repository root **`README.md`** and **`docs/GETTING_STARTED.md`**.
 
-### Core Agents
-- **`interface_agent.py`** - Basic rule-based agent for interface generation
-- **`llm_interface_agent.py`** - OpenAI GPT-powered intelligent agent
-- **`advanced_agent.py`** - Advanced agent with comprehensive analysis
+## Core modules
 
-### Materials Project Integration
-- **`mp_interface_agent.py`** - MP-integrated agent for automatic CIF download
-- **`mp_interface_agent_fixed.py`** - Fixed version with error handling
+| Module | Role |
+|--------|------|
+| `itworker.py` | `InterfaceWorker` — physics, MLIP, optimization |
+| `matching.py` | Lattice matching & stereographic-style figures |
+| `jobflow.py` | `IOMaker` Jobflow makers |
+| `mlip.py` | MLIP calculators + checkpoint directory |
+| `equi_term.py`, `CNID.py`, `tool.py` | Symmetry / CNID / utilities |
 
-### Specialized Agents
-- **`llm_iomaker_job.py`** - LLM IOMaker with LOCAL/REMOTE config
-- **`remote_submit.py`** - Remote submission helper
-
-### Documentation & Examples
-- **`LLM_AGENT_README.md`** - LLM agent usage guide
-- **`USAGE_GUIDE.md`** - Complete usage guide
-- **`demo_*.py`** - Various demonstration scripts
-- **`test_*.py`** - Test suites for all components
-
-### Requirements
-- **`requirements_llm.txt`** - Dependencies for LLM agents
-
-Install
-`pip install .`
+Install from repo root: `pip install -e .`

@@ -1,9 +1,8 @@
 """
-InterOptimus LLM/Agent utilities.
+InterOptimus workflow execution: server submit, local run, fetch results.
 
-This subpackage contains code that:
-- uses an LLM (OpenAI-compatible API) to translate natural language into
-  InterOptimus workflow parameters
-- builds jobflow Jobs/Flows (via InterOptimus.jobflow.IOMaker)
+- :mod:`InterOptimus.agents.simple_iomaker` — JSON/YAML config → submit / run IOMaker
+- :mod:`InterOptimus.agents.iomaker_job` — programmatic BuildConfig + ``execute_iomaker_from_settings``
+- :mod:`InterOptimus.agents.remote_submit` — progress / fetch results after server submit
+- :mod:`InterOptimus.agents.iomaker_core` — small helpers (e.g. MLIP name normalization)
 """
-

@@ -1,0 +1,1494 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>InterOptimus · IOMaker Web</title>
+  <style>
+    :root {
+      --bg: #e8edf5;
+      --bg-elev: #ffffff;
+      --panel: #ffffff;
+      --muted: #64748b;
+      --text: #0f172a;
+      --accent: #0284c7;
+      --accent-soft: #e0f2fe;
+      --border: #cbd5e1;
+      --shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+      --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.07);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(165deg, #f1f5f9 0%, #e2e8f0 45%, #f8fafc 100%);
+      color: var(--text);
+      line-height: 1.55;
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.35rem 1.6rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-elev);
+      box-shadow: var(--shadow-md);
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.4rem;
+      font-weight: 750;
+      letter-spacing: -0.02em;
+      color: #0c4a6e;
+    }
+    p.sub { margin: 0.4rem 0 0; color: var(--muted); font-size: 0.9rem; max-width: 58rem; }
+    main { max-width: 920px; margin: 0 auto; padding: 1.25rem 1.35rem 3.5rem; }
+    fieldset {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.05rem 1.15rem;
+      margin-bottom: 1rem;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    legend { padding: 0 0.55rem; color: var(--accent); font-weight: 650; font-size: 0.92rem; }
+    label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 0.22rem; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem 1rem; }
+    @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
+    .field { margin-bottom: 0.5rem; }
+    input[type="text"], input[type="number"], input[type="file"], select, textarea {
+      width: 100%;
+      padding: 0.48rem 0.6rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #f8fafc;
+      color: var(--text);
+      font-size: 0.9rem;
+      transition: border-color 0.12s ease, box-shadow 0.12s ease;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    textarea { min-height: 200px; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+    #py-output {
+      min-height: 280px;
+      max-height: 50vh;
+      overflow: auto;
+      resize: vertical;
+      background: #f8fafc;
+      color: #334155;
+      line-height: 1.5;
+      border: 1px solid var(--border);
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; margin-top: 0.55rem; }
+    button[type="submit"] {
+      background: linear-gradient(180deg, #0ea5e9, var(--accent));
+      color: #fff;
+      border: none;
+      padding: 0.58rem 1.35rem;
+      border-radius: 9px;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 0.95rem;
+      box-shadow: 0 2px 10px rgba(2, 132, 199, 0.35);
+    }
+    button[type="submit"]:hover:not(:disabled) { filter: brightness(1.03); }
+    button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+    button#btn-stop {
+      background: #e2e8f0;
+      color: #475569;
+      border: 1px solid var(--border);
+      padding: 0.55rem 1.05rem;
+      border-radius: 9px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.92rem;
+    }
+    button#btn-stop:hover:not(:disabled) { background: #cbd5e1; }
+    button#btn-stop:disabled { opacity: 0.45; cursor: not-allowed; }
+    .hint { font-size: 0.82rem; color: var(--muted); margin-top: 0.5rem; }
+    a { color: #0369a1; text-underline-offset: 2px; }
+    a:hover { color: #0c4a6e; }
+    .status {
+      margin-top: 0.85rem;
+      padding: 0.85rem 1rem;
+      border-radius: 10px;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+    .ok { border-color: #86efac; background: #f0fdf4; }
+    .err { border-color: #fca5a5; background: #fef2f2; }
+    input:disabled, select:disabled, textarea:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .relax-panel {
+      margin-top: 0.75rem;
+      padding: 0.9rem 1rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #f8fafc;
+    }
+    .relax-panel h4 {
+      margin: 0 0 0.5rem;
+      font-size: 0.88rem;
+      font-weight: 650;
+      color: var(--accent);
+    }
+    #result-wrap {
+      margin-top: 1.35rem;
+      display: none;
+    }
+    #result-wrap h3 {
+      margin: 0 0 0.5rem;
+      font-size: 0.98rem;
+      font-weight: 650;
+      color: #0c4a6e;
+    }
+    #result-frame {
+      width: 100%;
+      height: min(480px, 55vh);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+    #viz-wrap {
+      margin-top: 1.1rem;
+      display: none;
+    }
+    #viz-out {
+      min-height: 100px;
+      max-height: 26vh;
+      font-size: 0.78rem;
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid var(--border);
+    }
+    .aux-hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; }
+    .plot-cell {
+      width: 100%;
+      height: 300px;
+      min-height: 280px;
+      box-sizing: border-box;
+      margin-top: 0.65rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--bg-elev);
+      box-shadow: var(--shadow);
+    }
+    .plot-bo-iface-cell {
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      overflow: hidden;
+    }
+    .bo-iface-frame {
+      flex: 1;
+      min-height: 220px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(180deg, #f8fafc, #f1f5f9);
+      position: relative;
+    }
+    .bo-iface-placeholder {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 1rem 1.1rem;
+      color: var(--muted);
+      font-size: 0.82rem;
+      line-height: 1.5;
+      min-height: 200px;
+    }
+    .bo-iface-img {
+      max-width: 100%;
+      max-height: 248px;
+      object-fit: contain;
+    }
+    .bo-iface-foot {
+      margin: 0;
+      padding: 0.4rem 0.65rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      background: #fafbfc;
+    }
+    .plot-bo-grid { margin-top: 0.55rem; }
+    .plot-row-bo {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      align-items: stretch;
+    }
+    .plot-row-bo .plot-half {
+      flex: 1 1 300px;
+      margin-top: 0;
+      min-height: 260px;
+      height: 280px;
+    }
+    #viz-charts h4 {
+      margin: 0.55rem 0 0.3rem;
+      font-size: 0.98rem;
+      font-weight: 650;
+      color: #0c4a6e;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>InterOptimus · IOMaker Web</h1>
+    <p class="sub">表单字段与本地 IOMaker 流程一致（<code>run_iomaker_session</code> / <code>run_simple_iomaker</code>）。MLIP 可选 ORB、SevenNet、MatRIS、DeepMD。任务在<strong>子进程</strong>中运行：可用「停止」结束；uvicorn <kbd>Ctrl+C</kbd> 会终止服务及在跑任务。</p>
+    {% if default_host %}
+    <p class="sub">提示：若经反向代理访问，请设置环境变量 <code>INTEROPTIMUS_WEB_PUBLIC_HOST</code> 以生成正确的下载链接。</p>
+    {% endif %}
+  </header>
+  <main>
+    <form id="io-form" enctype="multipart/form-data">
+      <fieldset>
+        <legend>CIF</legend>
+        <div class="row">
+          <div class="field">
+            <label for="film_cif">film.cif</label>
+            <input id="film_cif" name="film_cif" type="file" accept=".cif,.CIF" required />
+          </div>
+          <div class="field">
+            <label for="substrate_cif">substrate.cif</label>
+            <input id="substrate_cif" name="substrate_cif" type="file" accept=".cif,.CIF" required />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>基本</legend>
+        <div class="row">
+          <div class="field">
+            <label for="workflow_name">workflow_name</label>
+            <input id="workflow_name" name="workflow_name" type="text" value="IO_web"/>
+          </div>
+          <div class="field">
+            <label for="cost_preset">cost_preset</label>
+            <select id="cost_preset" name="cost_preset">
+              <option value="low">low</option>
+              <option value="medium" selected>medium</option>
+              <option value="high">high</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="mlip_calc">MLIP 后端</label>
+          <select id="mlip_calc" name="mlip_calc">
+            <option value="orb-models" selected>orb-models (ORB)</option>
+            <option value="sevenn">sevenn (SevenNet)</option>
+            <option value="matris">matris (MatRIS)</option>
+            <option value="dpa">dpa (DeepMD)</option>
+          </select>
+        </div>
+        <div id="matris-fields" class="row" style="display:none;">
+          <div class="field">
+            <label for="matris_model">matris_model</label>
+            <input id="matris_model" name="matris_model" type="text" placeholder="MatRIS 模型名（可选）"/>
+          </div>
+          <div class="field">
+            <label for="matris_task">matris_task</label>
+            <input id="matris_task" name="matris_task" type="text" placeholder="任务名（可选）"/>
+          </div>
+        </div>
+        <p id="matris-hint" class="aux-hint" style="display:none;">与桌面版一致：选择 matris 时写入 <code>optimization_settings.model</code> / <code>task</code>。</p>
+        <div class="field">
+          <label for="chk-double-if">界面模型（单界面 / 双界面）</label>
+          <label style="display:flex;align-items:flex-start;gap:0.5rem;margin-top:0.35rem;font-size:0.9rem;color:var(--text);">
+            <input type="checkbox" id="chk-double-if" name="double_interface" value="true" checked style="width:auto;margin-top:0.2rem;"/>
+            <span><strong>双界面</strong>（两侧真空、界面能用 γ 双体相参考；<strong>取消勾选</strong> = <strong>单界面</strong>，粘附能 + slab 参考）</span>
+          </label>
+          <p class="hint">对应后端 <code>structure_settings.double_interface</code>；与桌面版「基本」标签页中的选项一致。</p>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Device（CUDA）</legend>
+        <div class="row">
+          <div class="field">
+            <label for="opt_device">device</label>
+            <select id="opt_device" name="opt_device">
+              <option value="cpu" selected>cpu</option>
+              <option value="cuda">cuda</option>
+              <option value="gpu">gpu（同 cuda）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="opt_steps">steps</label>
+            <input id="opt_steps" name="opt_steps" type="text" value="500"/>
+          </div>
+        </div>
+        <p class="hint">选择 GPU 前请确认服务器已安装 CUDA 驱动与 PyTorch GPU 版本；若驱动不匹配可改用 cpu。</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>点阵匹配</legend>
+        <div class="row">
+          <div class="field"><label for="lm_max_area">max_area</label><input name="lm_max_area" value="20"/></div>
+          <div class="field"><label for="lm_max_length_tol">max_length_tol</label><input name="lm_max_length_tol" value="0.03"/></div>
+          <div class="field"><label for="lm_max_angle_tol">max_angle_tol</label><input name="lm_max_angle_tol" value="0.03"/></div>
+          <div class="field"><label for="lm_film_max_miller">film_max_miller</label><input name="lm_film_max_miller" value="3"/></div>
+          <div class="field"><label for="lm_substrate_max_miller">substrate_max_miller</label><input name="lm_substrate_max_miller" value="3"/></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>结构</legend>
+        <div class="row">
+          <div class="field"><label for="st_film_thickness">film_thickness</label><input name="st_film_thickness" value="10"/></div>
+          <div class="field"><label for="st_substrate_thickness">substrate_thickness</label><input name="st_substrate_thickness" value="10"/></div>
+          <div class="field"><label for="st_termination_ftol">termination_ftol</label><input name="st_termination_ftol" value="0.15"/></div>
+          <div class="field"><label for="st_vacuum_over_film">vacuum_over_film</label><input name="st_vacuum_over_film" value="5"/></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>优化（单界面时可调；双界面时弛豫相关项用默认）</legend>
+        <div class="field">
+          <label><input type="checkbox" name="do_mlip_gd" value="true"/> do_mlip_gd</label>
+        </div>
+
+        <div class="field">
+          <label for="relax-mode">弛豫厚度：三种模式（三选一）</label>
+          <select id="relax-mode">
+            <option value="ratio" selected>① 比例弛豫（relax_in_ratio）</option>
+            <option value="layers">② 层数弛豫（relax_in_layers）</option>
+            <option value="absolute">③ 绝对厚度（Å，非 ratio 且非 layers）</option>
+          </select>
+        </div>
+        <p class="hint" id="hint-relax-mode">与后端 <code>set_relax_thicknesses</code> 的三种解释一致；请勿混用。</p>
+
+        <div id="block-ratio" class="relax-panel">
+          <h4>① 比例弛豫</h4>
+          <p class="hint">各侧「参与弛豫」的厚度占该侧 slab 总厚度的比例（0–1）。对应参数名 <code>relax_film_ratio</code> / <code>relax_substrate_ratio</code>。</p>
+          <div class="row">
+            <div class="field"><label for="inp-relax-film">relax_film_ratio</label><input id="inp-relax-film" name="relax_film_ratio" value="0.5"/></div>
+            <div class="field"><label for="inp-relax-sub">relax_substrate_ratio</label><input id="inp-relax-sub" name="relax_substrate_ratio" value="0.5"/></div>
+          </div>
+        </div>
+
+        <div id="block-thickness" class="relax-panel" style="display:none;">
+          <h4 id="block-thickness-title">② 层数弛豫</h4>
+          <p class="hint" id="hint-thickness">占位说明</p>
+          <div class="row">
+            <div class="field"><label for="inp-ang-film" id="lbl-setrelax-film">set_relax_film_ang</label><input id="inp-ang-film" name="set_relax_film_ang" value="0"/></div>
+            <div class="field"><label for="inp-ang-sub" id="lbl-setrelax-sub">set_relax_substrate_ang</label><input id="inp-ang-sub" name="set_relax_substrate_ang" value="0"/></div>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>高级（可选）</legend>
+        <div class="row">
+          <div class="field"><label for="adv_ckpt_path">ckpt_path</label><input name="adv_ckpt_path" placeholder="留空则按默认/缓存解析 checkpoint"/></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="adv_fmax">fmax</label><input name="adv_fmax"/></div>
+          <div class="field"><label for="adv_discut">discut</label><input name="adv_discut"/></div>
+          <div class="field"><label for="adv_gd_tol">gd_tol</label><input name="adv_gd_tol"/></div>
+          <div class="field"><label for="adv_n_calls_density">n_calls_density</label><input name="adv_n_calls_density"/></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="adv_term_screen_tol">term_screen_tol</label><input name="adv_term_screen_tol"/></div>
+          <div class="field"><label for="adv-strain">strain_E_correction（仅单界面有效）</label>
+            <select id="adv-strain" name="adv_strain_E_correction"> <option value="">default</option> <option value="true">true</option> <option value="false">false</option> </select>
+          </div>
+          <div class="field"><label for="adv_z_range_lo">z_range 下限</label><input name="adv_z_range_lo"/></div>
+          <div class="field"><label for="adv_z_range_hi">z_range 上限</label><input name="adv_z_range_hi"/></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="adv_bo_coord_bin">BO_coord_bin_size</label><input id="adv_bo_coord_bin" name="adv_bo_coord_bin"/></div>
+          <div class="field"><label for="adv_bo_energy_bin">BO_energy_bin_size</label><input id="adv_bo_energy_bin" name="adv_bo_energy_bin"/></div>
+          <div class="field"><label for="adv_bo_rms_bin">BO_rms_bin_size</label><input id="adv_bo_rms_bin" name="adv_bo_rms_bin"/></div>
+        </div>
+      </fieldset>
+
+      <div class="actions">
+        <label style="display:flex;align-items:center;gap:0.45rem;margin-right:0.5rem;font-size:0.88rem;color:var(--text);">
+          <input type="checkbox" id="chk-viz" name="viz_enable" value="true" checked style="width:auto;"/>
+          实时可视化（relax 步 JSONL，与桌面版同源）
+        </label>
+        <button type="submit" id="btn-run">运行计算</button>
+        <button type="button" id="btn-stop" disabled>停止计算</button>
+        <span class="hint" id="run-hint">「Python 输出」= 任务日志；勾选可视化时显示「Viz 事件」；完成后嵌入交互极图（若有 plotly 输出）。</span>
+      </div>
+    </form>
+
+    <label for="py-output" style="display:block;margin-top:1.25rem;color:var(--muted);font-size:0.82rem;">Python 输出（实时，来自 web_job.log）</label>
+    <textarea id="py-output" readonly placeholder="运行任务后，此处显示 Python / tqdm / 日志…"></textarea>
+
+    <div id="viz-wrap">
+      <label for="viz-out" style="display:block;margin-top:0.75rem;color:var(--muted);font-size:0.82rem;">Viz 事件（web_viz.jsonl，仅勾选「实时可视化」时）</label>
+      <textarea id="viz-out" readonly placeholder="relax_step / relax_final 等 JSON 行…"></textarea>
+      <div id="viz-charts" style="display:none;">
+        <h4>过程可视化（与桌面版同源 JSONL + Plotly）</h4>
+        <p id="viz-parse-status" class="hint" style="margin:0 0 0.35rem;">运行中：等待 web_viz.jsonl 数据…</p>
+        <p class="hint" style="margin:0 0 0.5rem;">
+          贝叶斯区与桌面 <code>WorkflowVizWindow</code> 对齐：注册 3D（Plotly）· <strong>界面 ASE 正投</strong>（服务端 <code>plot_atoms</code> PNG）· E/N（当前对）· E/N（所有对）；其下为 MLIP 弛豫与终态 3D。
+        </p>
+        <div class="plot-bo-grid">
+          <div class="plot-row-bo">
+            <div id="plot-bo-3d" class="plot-cell plot-half"></div>
+            <div id="plot-bo-iface" class="plot-cell plot-half plot-bo-iface-cell">
+              <div class="bo-iface-frame">
+                <div id="bo-iface-placeholder" class="bo-iface-placeholder">
+                  BO 界面（ASE <code>plot_atoms</code>，与桌面同视角）：等待贝叶斯采样…
+                </div>
+                <img id="bo-iface-img" class="bo-iface-img" alt="BO interface (ASE plot_atoms)" style="display:none;"/>
+              </div>
+              <p class="bo-iface-foot">与桌面相同：正投影、jmol 配色、单胞；由每次 BO 采样写入 <code>web_bo_iface.png</code></p>
+            </div>
+          </div>
+          <div class="plot-row-bo">
+            <div id="plot-bo-en" class="plot-cell plot-half"></div>
+            <div id="plot-bo-en-all" class="plot-cell plot-half"></div>
+          </div>
+        </div>
+        <div id="plot-relax" class="plot-cell"></div>
+        <div id="plot-atoms" class="plot-cell"></div>
+        <p id="viz-plotly-miss" class="hint" style="display:none;color:#b45309;">未加载 plotly.js（检查网络或 CDN），图表不可用；原始 JSONL 见上方。</p>
+      </div>
+    </div>
+
+    <div id="result-wrap">
+      <h3>交互极图（嵌入）</h3>
+      <iframe id="result-frame" title="stereographic interactive" sandbox="allow-scripts allow-same-origin"></iframe>
+    </div>
+
+    <div id="out" class="status" style="display:none;"></div>
+    <label for="logbox" style="display:block;margin-top:1rem;color:var(--muted);font-size:0.82rem;">结果 JSON</label>
+    <textarea id="logbox" readonly placeholder="任务结束后在此显示 web_result.json…"></textarea>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js@2.29.1/dist/plotly.min.js" charset="utf-8"></script>
+  <script>
+    if (typeof Plotly === "undefined") {
+      document.write(
+        "<scr" + 'ipt src="https://unpkg.com/plotly.js-dist-min@2.29.1/plotly.min.js" charset="utf-8"><\/scr' + "ipt>"
+      );
+    }
+  </script>
+  <script>
+    const form = document.getElementById("io-form");
+    const out = document.getElementById("out");
+    const logbox = document.getElementById("logbox");
+    const pyOut = document.getElementById("py-output");
+    const btn = document.getElementById("btn-run");
+    const btnStop = document.getElementById("btn-stop");
+    const chkDouble = document.getElementById("chk-double-if");
+    const relaxMode = document.getElementById("relax-mode");
+    const blockRatio = document.getElementById("block-ratio");
+    const blockThickness = document.getElementById("block-thickness");
+    const hintThickness = document.getElementById("hint-thickness");
+    const blockThicknessTitle = document.getElementById("block-thickness-title");
+    const lblFilm = document.getElementById("lbl-setrelax-film");
+    const lblSub = document.getElementById("lbl-setrelax-sub");
+    const advStrain = document.getElementById("adv-strain");
+    const inpRelaxFilm = document.getElementById("inp-relax-film");
+    const inpRelaxSub = document.getElementById("inp-relax-sub");
+    const inpAngFilm = document.getElementById("inp-ang-film");
+    const inpAngSub = document.getElementById("inp-ang-sub");
+    const mlipCalc = document.getElementById("mlip_calc");
+    const matrisFields = document.getElementById("matris-fields");
+    const matrisHint = document.getElementById("matris-hint");
+    const chkViz = document.getElementById("chk-viz");
+    const vizWrap = document.getElementById("viz-wrap");
+    const vizOut = document.getElementById("viz-out");
+    const resultWrap = document.getElementById("result-wrap");
+    const resultFrame = document.getElementById("result-frame");
+
+    function syncMlipAux() {
+      if (!mlipCalc || !matrisFields || !matrisHint) return;
+      const isMatris = mlipCalc.value === "matris";
+      matrisFields.style.display = isMatris ? "" : "none";
+      matrisHint.style.display = isMatris ? "" : "none";
+    }
+    if (mlipCalc) {
+      mlipCalc.addEventListener("change", syncMlipAux);
+      syncMlipAux();
+    }
+
+    function setEnabled(el, on) {
+      if (el) el.disabled = !on;
+    }
+
+    function updateRelaxPanels() {
+      const mode = relaxMode.value;
+      if (mode === "ratio") {
+        blockRatio.style.display = "";
+        blockThickness.style.display = "none";
+        setEnabled(inpRelaxFilm, true);
+        setEnabled(inpRelaxSub, true);
+        setEnabled(inpAngFilm, false);
+        setEnabled(inpAngSub, false);
+        return;
+      }
+      blockRatio.style.display = "none";
+      blockThickness.style.display = "";
+      setEnabled(inpRelaxFilm, false);
+      setEnabled(inpRelaxSub, false);
+      setEnabled(inpAngFilm, true);
+      setEnabled(inpAngSub, true);
+      if (mode === "layers") {
+        blockThicknessTitle.textContent = "② 层数弛豫（relax_in_layers）";
+        hintThickness.textContent =
+          "从各自厚度方向上的层数里减去的层数（与 backend 中 relax_in_layers 分支一致）。字段名仍为 set_relax_film_ang / set_relax_substrate_ang（历史命名，此处表示层数而非 Å）。";
+        lblFilm.textContent = "film 侧减去层数";
+        lblSub.textContent = "substrate 侧减去层数";
+      } else {
+        blockThicknessTitle.textContent = "③ 绝对厚度（Å）";
+        hintThickness.textContent =
+          "从各侧 slab 总厚度中减去的绝对厚度，单位 Å（与 backend 非 ratio、非 layers 分支一致）。字段名仍为 set_relax_*（历史命名）。";
+        lblFilm.textContent = "film 侧减去厚度 (Å)";
+        lblSub.textContent = "substrate 侧减去厚度 (Å)";
+      }
+    }
+
+    /** 双界面：单界面专用项禁用；单界面：按 relax-mode 切换面板与可用输入。 */
+    function syncRelaxForm() {
+      const di = chkDouble && chkDouble.checked;
+      if (di) {
+        setEnabled(advStrain, false);
+        setEnabled(relaxMode, false);
+        setEnabled(inpRelaxFilm, false);
+        setEnabled(inpRelaxSub, false);
+        setEnabled(inpAngFilm, false);
+        setEnabled(inpAngSub, false);
+        return;
+      }
+      setEnabled(advStrain, true);
+      setEnabled(relaxMode, true);
+      updateRelaxPanels();
+    }
+
+    chkDouble.addEventListener("change", syncRelaxForm);
+    relaxMode.addEventListener("change", syncRelaxForm);
+    syncRelaxForm();
+
+    const vizCharts = document.getElementById("viz-charts");
+    const vizPlotlyMiss = document.getElementById("viz-plotly-miss");
+    let vizLineRemainder = "";
+    const WBV = {
+      boPairs: {},
+      boOrder: [],
+      activeBoKey: null,
+      relax: {},
+      relaxOrder: [],
+      lastFinal: null,
+      raf: null,
+      eventCount: 0,
+      jsonlLines: 0,
+      vizLogExists: null,
+      lastVizFileSize: 0,
+      vizPollError: "",
+    };
+    const vizParseStatus = document.getElementById("viz-parse-status");
+    function updateVizStatus() {
+      if (!vizParseStatus) return;
+      const pl = typeof Plotly !== "undefined" ? "Plotly 已加载" : "Plotly 未加载（检查 CDN / 网络）";
+      let ex = "";
+      if (WBV.vizLogExists === false) {
+        ex = " · web_viz.jsonl 不存在（未启用 viz 或 session 无效）";
+      } else if (WBV.vizLogExists === true) {
+        ex = " · 日志文件在服务器上存在";
+      }
+      const fsz = " · 服务器文件约 " + WBV.lastVizFileSize + " B";
+      const err = WBV.vizPollError ? " · 轮询: " + WBV.vizPollError : "";
+      vizParseStatus.textContent =
+        pl +
+        " · JSONL " +
+        WBV.jsonlLines +
+        " 行 · 绘图事件 " +
+        WBV.eventCount +
+        ex +
+        fsz +
+        err;
+    }
+
+    function bk(m, t) {
+      return String(m) + "," + String(t);
+    }
+    const VIZ_BO_PLOT_IDS = ["plot-bo-3d", "plot-bo-en", "plot-bo-en-all"];
+    function resetBoIfaceImg() {
+      const img = document.getElementById("bo-iface-img");
+      const ph = document.getElementById("bo-iface-placeholder");
+      if (img) {
+        img.removeAttribute("src");
+        img.style.display = "none";
+      }
+      if (ph) {
+        ph.style.display = "flex";
+        ph.textContent =
+          "BO 界面（ASE plot_atoms，与桌面同视角）：勾选可视化并开始采样后将显示预览。";
+      }
+    }
+    function refreshBoIfaceImg() {
+      const img = document.getElementById("bo-iface-img");
+      const ph = document.getElementById("bo-iface-placeholder");
+      if (!img) return;
+      if (!currentSid || !chkViz || !chkViz.checked) {
+        if (ph) {
+          ph.style.display = "flex";
+          ph.textContent = "勾选「实时可视化」后由服务端 ASE 生成界面图。";
+        }
+        img.style.display = "none";
+        img.removeAttribute("src");
+        return;
+      }
+      const showErr = () => {
+        img.style.display = "none";
+        if (ph) {
+          ph.style.display = "flex";
+          ph.textContent =
+            "暂无 ASE 预览：等待 BO 采样写入 web_bo_iface.png，或服务器缺少 matplotlib / ASE。";
+        }
+      };
+      if (ph) {
+        ph.style.display = "flex";
+        ph.textContent = "加载 ASE 预览…";
+      }
+      img.style.display = "none";
+      img.onload = function () {
+        img.style.display = "block";
+        if (ph) ph.style.display = "none";
+      };
+      img.onerror = function () {
+        showErr();
+      };
+      img.src = "/api/session/" + encodeURIComponent(currentSid) + "/bo_iface.png?t=" + Date.now();
+    }
+    function emptyBO() {
+      return { xyz_cart: [], e: [], e_per_atom: [], bo_idx: [], lastIface: null };
+    }
+    function emptyRB() {
+      return { step: [], e_pa: [], rms: [], gamma: [] };
+    }
+    function resetWorkflowViz() {
+      WBV.boPairs = {};
+      WBV.boOrder = [];
+      WBV.activeBoKey = null;
+      WBV.relax = {};
+      WBV.relaxOrder = [];
+      WBV.lastFinal = null;
+      WBV.eventCount = 0;
+      WBV.jsonlLines = 0;
+      WBV.vizLogExists = null;
+      WBV.lastVizFileSize = 0;
+      WBV.vizPollError = "";
+      vizLineRemainder = "";
+      updateVizStatus();
+      resetBoIfaceImg();
+      [...VIZ_BO_PLOT_IDS, "plot-relax", "plot-atoms"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (typeof Plotly !== "undefined") {
+          try {
+            Plotly.purge(el);
+          } catch (e) {}
+        }
+        el.innerHTML = "";
+      });
+    }
+    function handleVizEvent(ev) {
+      const ph = ev.phase;
+      const evn = ev.event;
+      let handled = false;
+      if (ph === "bo" && evn === "sample") {
+        const mk = parseInt(ev.match_id, 10);
+        const tk = parseInt(ev.term_id, 10);
+        if (!isNaN(mk) && !isNaN(tk)) {
+          const k = bk(mk, tk);
+          if (!WBV.boPairs[k]) {
+            WBV.boPairs[k] = emptyBO();
+            WBV.boOrder.push(k);
+          }
+          WBV.activeBoKey = k;
+          const b = WBV.boPairs[k];
+          const xc = ev.xyz_cart;
+          if (Array.isArray(xc) && xc.length === 3) {
+            b.xyz_cart.push([Number(xc[0]), Number(xc[1]), Number(xc[2])]);
+          }
+          let e0 = Number(ev.energy);
+          if (!isFinite(e0)) e0 = 0;
+          b.e.push(e0);
+          const na = ev.n_atoms;
+          const epa = ev.energy_per_atom;
+          if (epa != null && isFinite(Number(epa))) b.e_per_atom.push(Number(epa));
+          else if (typeof na === "number" && na > 0) b.e_per_atom.push(e0 / na);
+          else b.e_per_atom.push(e0);
+          let si = ev.sample_index;
+          if (si == null || !isFinite(Number(si))) si = b.e.length - 1;
+          b.bo_idx.push(Number(si));
+          if (
+            Array.isArray(ev.positions_cart) &&
+            Array.isArray(ev.numbers) &&
+            ev.positions_cart.length === ev.numbers.length &&
+            ev.positions_cart.length > 0
+          ) {
+            b.lastIface = {
+              pc: ev.positions_cart.map((p) => [Number(p[0]), Number(p[1]), Number(p[2])]),
+              nums: ev.numbers.map((x) => Number(x)),
+              fs:
+                Array.isArray(ev.film_substrate) && ev.film_substrate.length === ev.numbers.length
+                  ? ev.film_substrate.map((x) => Number(x))
+                  : null,
+            };
+          }
+          handled = true;
+        }
+      } else if (evn === "relax_step") {
+        const mk = parseInt(ev.match_id, 10);
+        const tk = parseInt(ev.term_id, 10);
+        if (!isNaN(mk) && !isNaN(tk)) {
+          const k = bk(mk, tk);
+          if (!WBV.relax[k]) {
+            WBV.relax[k] = emptyRB();
+            WBV.relaxOrder.push(k);
+          }
+          const rb = WBV.relax[k];
+          rb.step.push(Number(ev.step));
+          const e = Number(ev.energy);
+          const epa = ev.energy_per_atom;
+          if (epa != null && isFinite(Number(epa))) rb.e_pa.push(Number(epa));
+          else if (ev.n_atoms != null && Number(ev.n_atoms) > 0) rb.e_pa.push(e / Number(ev.n_atoms));
+          else rb.e_pa.push(e);
+          rb.rms.push(Number(ev.rms_displacement) || 0);
+          const gj = ev.interface_gamma_J_m2;
+          rb.gamma.push(gj != null && isFinite(Number(gj)) ? Number(gj) : NaN);
+          handled = true;
+        }
+      } else if (evn === "relax_final") {
+        WBV.lastFinal = ev;
+        handled = true;
+      } else if (evn === "viz_log_ready") {
+        handled = true;
+      }
+      if (handled) {
+        WBV.eventCount += 1;
+        scheduleWbRedraw();
+      }
+    }
+    function feedVizParser(text) {
+      if (text) vizLineRemainder += text;
+      const parts = vizLineRemainder.split("\n");
+      vizLineRemainder = parts.pop() || "";
+      for (const line of parts) {
+        const t = line.trim();
+        if (!t) continue;
+        WBV.jsonlLines += 1;
+        try {
+          handleVizEvent(JSON.parse(t));
+        } catch (e) {}
+      }
+      updateVizStatus();
+    }
+    function flushVizParser() {
+      const t = vizLineRemainder.trim();
+      if (t) {
+        WBV.jsonlLines += 1;
+        try {
+          handleVizEvent(JSON.parse(t));
+        } catch (e) {}
+        vizLineRemainder = "";
+      }
+      scheduleWbRedraw();
+      updateVizStatus();
+    }
+    const wbLight = {
+      paper_bgcolor: "#ffffff",
+      plot_bgcolor: "#f8fafc",
+      font: { color: "#334155", size: 11 },
+      margin: { t: 42, r: 14, b: 44, l: 50 },
+      autosize: true,
+    };
+    const wbPlotConfig = { displayModeBar: false, responsive: true };
+    function wbEmptyHtml(msg) {
+      return (
+        "<div style=\"display:flex;align-items:center;justify-content:center;height:100%;min-height:260px;color:#64748b;font-size:12px;text-align:center;padding:1rem;line-height:1.45;\">" +
+        msg +
+        "</div>"
+      );
+    }
+    function wbEnsurePlotSurface(el) {
+      if (!el) return;
+      try {
+        Plotly.purge(el);
+      } catch (e) {}
+      el.innerHTML = "";
+    }
+    function resizeWorkflowPlots() {
+      if (typeof Plotly === "undefined") return;
+      [...VIZ_BO_PLOT_IDS, "plot-relax", "plot-atoms"].forEach((id) => {
+        const gd = document.getElementById(id);
+        if (!gd) return;
+        try {
+          Plotly.Plots.resize(gd);
+        } catch (e) {}
+      });
+    }
+    function scheduleWbRedraw() {
+      if (WBV.raf) cancelAnimationFrame(WBV.raf);
+      WBV.raf = requestAnimationFrame(() => {
+        WBV.raf = null;
+        drawBo3d();
+        refreshBoIfaceImg();
+        drawBoEn();
+        drawBoEnAll();
+        drawWbRelax();
+        drawWbAtoms();
+        updateVizStatus();
+        setTimeout(resizeWorkflowPlots, 100);
+        setTimeout(resizeWorkflowPlots, 400);
+      });
+    }
+    /** 与桌面 viz_window._ylim_focus_low_band 一致：突出低能带，避免离群点拉扁纵轴 */
+    function ylimFocusLowBand(e) {
+      const arr = (e || []).map(Number).filter((v) => isFinite(v));
+      if (!arr.length) return [0, 1];
+      const emin = Math.min(...arr);
+      const sorted = [...arr].sort((a, b) => a - b);
+      const p90 = sorted[Math.min(sorted.length - 1, Math.floor(0.9 * (sorted.length - 1)))];
+      const p100 = Math.max(...arr);
+      const span = Math.max(p90 - emin, 1e-12);
+      let yMax;
+      if (p100 > p90 + 0.25 * span + 1e-9) yMax = emin + 1.25 * span;
+      else yMax = p100 + 0.04 * Math.max(Math.abs(p100), 1e-9);
+      let yMin = emin - 0.03 * Math.max(Math.abs(emin), 1e-9);
+      if (yMax <= yMin) yMax = yMin + 1e-6;
+      return [yMin, yMax];
+    }
+    function _boActiveBucket() {
+      let k = WBV.activeBoKey;
+      if (!k && WBV.boOrder.length) k = WBV.boOrder[WBV.boOrder.length - 1];
+      return k ? WBV.boPairs[k] : null;
+    }
+    function drawBo3d() {
+      const el = document.getElementById("plot-bo-3d");
+      if (!el) return;
+      if (typeof Plotly === "undefined") {
+        el.innerHTML = wbEmptyHtml(
+          "Plotly 未加载（CDN 被拦截或离线）。可查看上方原始 JSONL；或换网络 / 本机代理。"
+        );
+        return;
+      }
+      const b = _boActiveBucket();
+      if (!b || !b.xyz_cart || !b.xyz_cart.length) {
+        try {
+          Plotly.purge(el);
+        } catch (e) {}
+        el.innerHTML = wbEmptyHtml(
+          "暂无 BO 注册 3D：请勾选「实时可视化」；每步 gp 采样会写 phase=bo（与桌面 ax_reg 同源）。"
+        );
+        return;
+      }
+      wbEnsurePlotSurface(el);
+      const k = WBV.activeBoKey || (WBV.boOrder.length ? WBV.boOrder[WBV.boOrder.length - 1] : "");
+      const layout = Object.assign(
+        {
+          title: "BO 注册空间 (3D，色=E/N；轴关闭，同桌面 ax_reg)",
+          scene: {
+            bgcolor: "#f1f5f9",
+            xaxis: {
+              showbackground: false,
+              showgrid: false,
+              zeroline: false,
+              showticklabels: false,
+              title: { text: "" },
+            },
+            yaxis: {
+              showbackground: false,
+              showgrid: false,
+              zeroline: false,
+              showticklabels: false,
+              title: { text: "" },
+            },
+            zaxis: {
+              showbackground: false,
+              showgrid: false,
+              zeroline: false,
+              showticklabels: false,
+              title: { text: "" },
+            },
+            camera: { eye: { x: 1.45, y: 1.35, z: 1.15 } },
+          },
+        },
+        wbLight
+      );
+      const X = b.xyz_cart.map((p) => p[0]);
+      const Y = b.xyz_cart.map((p) => p[1]);
+      const Z = b.xyz_cart.map((p) => p[2]);
+      let E = b.e_per_atom;
+      if (!E || E.length < X.length) E = b.e;
+      const m = Math.min(X.length, E.length);
+      const tr = {
+        type: "scatter3d",
+        mode: "markers",
+        x: X.slice(0, m),
+        y: Y.slice(0, m),
+        z: Z.slice(0, m),
+        marker: { size: 6, color: E.slice(0, m), colorscale: "Viridis", showscale: true },
+        name: k || "BO",
+      };
+      let jmin = 0;
+      if (E.length >= m && m > 0) {
+        let emin = Infinity;
+        for (let i = 0; i < m; i++) {
+          if (E[i] < emin) {
+            emin = E[i];
+            jmin = i;
+          }
+        }
+      }
+      const trStar = {
+        type: "scatter3d",
+        mode: "markers",
+        x: [X[jmin]],
+        y: [Y[jmin]],
+        z: [Z[jmin]],
+        marker: { size: 14, color: "#dc2626", symbol: "diamond", line: { width: 0.5, color: "#fecaca" } },
+        name: "当前最低 E",
+      };
+      Plotly.react(el, [tr, trStar], layout, wbPlotConfig);
+    }
+    function drawBoEn() {
+      const el = document.getElementById("plot-bo-en");
+      if (!el) return;
+      if (typeof Plotly === "undefined") {
+        el.innerHTML = wbEmptyHtml("Plotly 未加载");
+        return;
+      }
+      const b = _boActiveBucket();
+      let yvals = b && b.e_per_atom && b.e_per_atom.length ? b.e_per_atom.map(Number) : null;
+      if ((!yvals || !yvals.length) && b && b.e && b.e.length) yvals = b.e.map(Number);
+      if (!yvals || !yvals.length) {
+        try {
+          Plotly.purge(el);
+        } catch (e) {}
+        el.innerHTML = wbEmptyHtml("BO E/N（当前对）：等待 phase=bo 采样（桌面 ax_ebo）。");
+        return;
+      }
+      wbEnsurePlotSurface(el);
+      const x = yvals.map((_, i) => i);
+      const ylim = ylimFocusLowBand(yvals);
+      const useAtom = b.e_per_atom && b.e_per_atom.length === yvals.length;
+      const layout = Object.assign(
+        {
+          title: useAtom ? "BO E/N · 当前 (match,term)" : "BO 总能量 · 当前对（无 per-atom 时）",
+          xaxis: { title: "样本次序（本对）" },
+          yaxis: { title: useAtom ? "eV/atom" : "eV", range: ylim },
+        },
+        wbLight
+      );
+      Plotly.react(
+        el,
+        [
+          {
+            type: "scatter",
+            mode: "lines+markers",
+            x,
+            y: yvals,
+            line: { color: "#0284c7", width: 2 },
+            marker: { size: 6 },
+            name: "BO",
+          },
+        ],
+        layout,
+        wbPlotConfig
+      );
+    }
+    function drawBoEnAll() {
+      const el = document.getElementById("plot-bo-en-all");
+      if (!el) return;
+      if (typeof Plotly === "undefined") {
+        el.innerHTML = wbEmptyHtml("Plotly 未加载");
+        return;
+      }
+      const traces = [];
+      const allE = [];
+      const palette = ["#0284c7", "#7c3aed", "#059669", "#d97706", "#db2777", "#64748b", "#e11d48", "#0d9488"];
+      WBV.boOrder.forEach((key, pi) => {
+        const pd = WBV.boPairs[key];
+        if (!pd) return;
+        let ep =
+          pd.e_per_atom && pd.e_per_atom.length
+            ? pd.e_per_atom.map(Number)
+            : pd.e && pd.e.length
+              ? pd.e.map(Number)
+              : null;
+        if (!ep || !ep.length) return;
+        allE.push(...ep);
+        const x = ep.map((_, i) => i);
+        const isAct = WBV.activeBoKey === key || (!WBV.activeBoKey && key === WBV.boOrder[WBV.boOrder.length - 1]);
+        traces.push({
+          type: "scatter",
+          mode: "lines+markers",
+          x,
+          y: ep,
+          name: "M" + key.replace(",", " T"),
+          line: { color: palette[pi % palette.length], width: isAct ? 2.8 : 1.05 },
+          marker: { size: isAct ? 5 : 3 },
+          opacity: isAct ? 1.0 : 0.42,
+        });
+      });
+      if (!traces.length) {
+        try {
+          Plotly.purge(el);
+        } catch (e) {}
+        el.innerHTML = wbEmptyHtml("BO E/N · 所有 (match,term)（桌面 ax_ebo_all）：等待多对采样。");
+        return;
+      }
+      wbEnsurePlotSurface(el);
+      const ylim = ylimFocusLowBand(allE);
+      const layout = Object.assign(
+        {
+          title: "BO E/N · 所有 (match,term)",
+          xaxis: { title: "样本次序（各对内）" },
+          yaxis: { title: "eV/atom 或 eV", range: ylim },
+          showlegend: traces.length <= 14,
+          legend: { font: { size: 8 } },
+        },
+        wbLight
+      );
+      Plotly.react(el, traces, layout, wbPlotConfig);
+    }
+    function drawWbRelax() {
+      const el = document.getElementById("plot-relax");
+      if (!el) return;
+      if (typeof Plotly === "undefined") {
+        el.innerHTML = wbEmptyHtml(
+          "Plotly 未加载（CDN 被拦截或离线）。弛豫曲线需 Plotly；原始事件见上方文本框。"
+        );
+        return;
+      }
+      const traces = [];
+      const palette = ["#0284c7", "#7c3aed", "#059669", "#d97706", "#db2777", "#64748b"];
+      let i = 0;
+      for (const k of WBV.relaxOrder) {
+        const rb = WBV.relax[k];
+        if (!rb || !rb.step.length) continue;
+        traces.push({
+          type: "scatter",
+          mode: "lines",
+          x: rb.step,
+          y: rb.e_pa,
+          name: "E/atom " + k,
+          line: { color: palette[i % palette.length], width: 2 },
+        });
+        i++;
+      }
+      if (!traces.length) {
+        try {
+          Plotly.purge(el);
+        } catch (e) {}
+        el.innerHTML = wbEmptyHtml(
+          "暂无弛豫曲线：等待 relax_step。若状态行显示 JSONL 行数不增加，请确认已勾选「实时可视化」且 Python 日志中有 [InterOptimus] web viz JSONL enabled。"
+        );
+        return;
+      }
+      wbEnsurePlotSurface(el);
+      const layout = Object.assign(
+        { title: "MLIP 弛豫 · 能量/原子 vs 步", xaxis: { title: "step" }, yaxis: { title: "eV/atom" } },
+        wbLight
+      );
+      Plotly.react(el, traces, layout, wbPlotConfig);
+    }
+    function drawWbAtoms() {
+      const el = document.getElementById("plot-atoms");
+      if (!el) return;
+      if (typeof Plotly === "undefined") {
+        el.innerHTML = wbEmptyHtml(
+          "Plotly 未加载（CDN 被拦截或离线）。终态 3D 需 Plotly；可先看 JSONL 是否含 relax_final。"
+        );
+        return;
+      }
+      const ev = WBV.lastFinal;
+      if (!ev || !Array.isArray(ev.positions) || !Array.isArray(ev.numbers)) {
+        try {
+          Plotly.purge(el);
+        } catch (e) {}
+        el.innerHTML = wbEmptyHtml(
+          "暂无终态 3D：等待 relax_final（每段 MLIP 弛豫结束会写入一条）。"
+        );
+        return;
+      }
+      wbEnsurePlotSurface(el);
+      const layout = Object.assign(
+        {
+          title: "最近一次弛豫终态（3D 散点，色=原子序数）",
+          scene: {
+            bgcolor: "#f1f5f9",
+            xaxis: {
+              showbackground: false,
+              showgrid: false,
+              zeroline: false,
+              showticklabels: false,
+              title: { text: "" },
+            },
+            yaxis: {
+              showbackground: false,
+              showgrid: false,
+              zeroline: false,
+              showticklabels: false,
+              title: { text: "" },
+            },
+            zaxis: {
+              showbackground: false,
+              showgrid: false,
+              zeroline: false,
+              showticklabels: false,
+              title: { text: "" },
+            },
+            camera: { eye: { x: 1.45, y: 1.35, z: 1.15 } },
+          },
+        },
+        wbLight
+      );
+      const pos = ev.positions;
+      const nums = ev.numbers;
+      const n = Math.min(Math.floor(pos.length / 3), nums.length);
+      const x = [];
+      const y = [];
+      const z = [];
+      const c = [];
+      const cap = Math.min(n, 8000);
+      for (let i = 0; i < cap; i++) {
+        x.push(pos[i * 3]);
+        y.push(pos[i * 3 + 1]);
+        z.push(pos[i * 3 + 2]);
+        c.push(Number(nums[i]) || 0);
+      }
+      const tr = {
+        type: "scatter3d",
+        mode: "markers",
+        x,
+        y,
+        z,
+        marker: { size: 2.5, color: c, colorscale: "Viridis", showscale: true },
+      };
+      Plotly.react(el, [tr], layout, wbPlotConfig);
+    }
+
+    if (vizCharts && typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(() => {
+        if (vizCharts.offsetParent !== null && vizCharts.style.display !== "none") {
+          resizeWorkflowPlots();
+        }
+      }).observe(vizCharts);
+    }
+
+    let pollTimer = null;
+    let logPollTimer = null;
+    let logOffset = 0;
+    let vizPollTimer = null;
+    let vizOffset = 0;
+    let currentSid = null;
+
+    function baseUrl() {
+      return window.location.origin;
+    }
+
+    function clearPoll() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    function clearLogPoll() {
+      if (logPollTimer) {
+        clearInterval(logPollTimer);
+        logPollTimer = null;
+      }
+    }
+
+    function clearVizPoll() {
+      if (vizPollTimer) {
+        clearInterval(vizPollTimer);
+        vizPollTimer = null;
+      }
+    }
+
+    async function fetchVizChunk(force) {
+      if (!currentSid) return;
+      if (!force && (!chkViz || !chkViz.checked)) return;
+      try {
+        const u = "/api/session/" + encodeURIComponent(currentSid) + "/viz_log?offset=" + vizOffset;
+        const res = await fetch(u);
+        let j = {};
+        try {
+          j = await res.json();
+        } catch (e) {
+          WBV.vizPollError = "响应非 JSON";
+          updateVizStatus();
+          return;
+        }
+        if (!res.ok) {
+          WBV.vizPollError = "HTTP " + res.status;
+          updateVizStatus();
+          return;
+        }
+        WBV.vizPollError = "";
+        if (typeof j.exists === "boolean") WBV.vizLogExists = j.exists;
+        if (typeof j.file_size === "number") WBV.lastVizFileSize = j.file_size;
+        if (j.chunk && vizOut) {
+          vizOut.value += j.chunk;
+          vizOut.scrollTop = vizOut.scrollHeight;
+          feedVizParser(j.chunk);
+        } else {
+          updateVizStatus();
+        }
+        if (typeof j.next_offset === "number") {
+          vizOffset = j.next_offset;
+        }
+      } catch (e) {
+        WBV.vizPollError = String(e);
+        updateVizStatus();
+      }
+    }
+
+    function startVizPolling() {
+      clearVizPoll();
+      vizOffset = 0;
+      resetWorkflowViz();
+      if (vizOut) vizOut.value = "";
+      if (!chkViz || !chkViz.checked || !vizWrap) {
+        if (vizWrap) vizWrap.style.display = "none";
+        if (vizCharts) vizCharts.style.display = "none";
+        return;
+      }
+      vizWrap.style.display = "block";
+      if (vizCharts) vizCharts.style.display = "block";
+      if (vizPlotlyMiss) vizPlotlyMiss.style.display = typeof Plotly === "undefined" ? "block" : "none";
+      vizPollTimer = setInterval(() => fetchVizChunk(false), 500);
+      fetchVizChunk(false).finally(() => {
+        scheduleWbRedraw();
+        updateVizStatus();
+      });
+    }
+
+    async function fetchLogChunk() {
+      if (!currentSid) return;
+      try {
+        const u = "/api/session/" + encodeURIComponent(currentSid) + "/job_log?offset=" + logOffset;
+        const res = await fetch(u);
+        const j = await res.json();
+        if (j.chunk) {
+          pyOut.value += j.chunk;
+          pyOut.scrollTop = pyOut.scrollHeight;
+        }
+        if (typeof j.next_offset === "number") {
+          logOffset = j.next_offset;
+        }
+      } catch (e) {
+        /* ignore transient log read errors */
+      }
+    }
+
+    function startLogPolling() {
+      clearLogPoll();
+      logOffset = 0;
+      pyOut.value = "";
+      logPollTimer = setInterval(fetchLogChunk, 400);
+      fetchLogChunk();
+    }
+
+    function showResultPayload(data) {
+      logbox.value = JSON.stringify(data, null, 2);
+      out.style.display = "block";
+      const ok = data && data.ok;
+      const sid = data && data.session_id;
+      if (resultFrame && resultWrap) {
+        resultFrame.src = "about:blank";
+        resultWrap.style.display = "none";
+      }
+      if (ok) {
+        out.className = "status ok";
+        const art = (data.artifacts) || {};
+        const notes = (data.artifacts_notes) || {};
+        const links = [];
+        const fileLink = (label, fname) => {
+          const name = encodeURIComponent(fname);
+          return `<a href="${baseUrl()}/api/session/${encodeURIComponent(sid)}/file?name=${name}" target="_blank" rel="noopener">${label}</a>`;
+        };
+        const structUrl =
+          baseUrl() + "/api/session/" + encodeURIComponent(sid) + "/structures.zip";
+        if (art.stereographic_interactive_html) {
+          links.push(fileLink("交互极图 (HTML，推荐)", "stereographic_interactive.html"));
+        }
+        if (art.stereographic_jpg) {
+          links.push(fileLink("静态极图 JPG", "stereographic.jpg"));
+        }
+        links.push(
+          `<a href="${structUrl}" download="pairs_best_it.zip" rel="noopener">弛豫界面结构 ZIP (pairs_best_it)</a>`
+        );
+        links.push(fileLink("全文报告 io_report.txt", "io_report.txt"));
+        let noteHtml = "";
+        if (notes.stereographic_interactive) {
+          noteHtml =
+            '<p style="margin:0.6rem 0 0;color:#b45309;font-size:0.88rem;">' +
+            notes.stereographic_interactive +
+            "</p>";
+        }
+        out.innerHTML =
+          "<strong>完成</strong><br/>session_id: <code>" +
+          sid +
+          "</code><br/>" +
+          links.join(" · ") +
+          noteHtml;
+        if (art.stereographic_interactive_html && resultFrame && resultWrap) {
+          resultWrap.style.display = "block";
+          resultFrame.src =
+            baseUrl() +
+            "/api/session/" +
+            encodeURIComponent(sid) +
+            "/file?name=" +
+            encodeURIComponent("stereographic_interactive.html");
+        }
+      } else {
+        out.className = "status err";
+        out.innerHTML = "<strong>失败</strong><br/>" + ((data && (data.error || data.detail)) || "");
+      }
+    }
+
+    btnStop.addEventListener("click", async () => {
+      if (!currentSid) return;
+      btnStop.disabled = true;
+      try {
+        const res = await fetch("/api/cancel/" + encodeURIComponent(currentSid), { method: "POST" });
+        const j = await res.json();
+        logbox.value = JSON.stringify(j, null, 2);
+        out.style.display = "block";
+        out.className = "status err";
+        out.innerHTML = "<strong>已请求停止计算</strong><br/>" + (j.detail || "");
+      } catch (e) {
+        logbox.value = String(e);
+      }
+      clearPoll();
+      clearLogPoll();
+      clearVizPoll();
+      if (vizWrap) vizWrap.style.display = "none";
+      await fetchLogChunk();
+      currentSid = null;
+      btn.disabled = false;
+      btnStop.disabled = true;
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      clearPoll();
+      clearLogPoll();
+      clearVizPoll();
+      if (vizWrap) vizWrap.style.display = "none";
+      if (resultFrame && resultWrap) {
+        resultFrame.src = "about:blank";
+        resultWrap.style.display = "none";
+      }
+      btn.disabled = true;
+      btnStop.disabled = true;
+      out.style.display = "none";
+      logbox.value = "提交中…";
+      pyOut.value = "";
+      const fd = new FormData(form);
+      if (!fd.has("double_interface")) fd.append("double_interface", "false");
+      if (!fd.has("do_mlip_gd")) fd.append("do_mlip_gd", "false");
+
+      if (fd.get("double_interface") === "true") {
+        fd.set("relax_in_ratio", "true");
+        fd.set("relax_in_layers", "false");
+        fd.set("relax_film_ratio", "0.5");
+        fd.set("relax_substrate_ratio", "0.5");
+        fd.set("set_relax_film_ang", "0");
+        fd.set("set_relax_substrate_ang", "0");
+      } else {
+        const mode = relaxMode.value;
+        if (mode === "ratio") {
+          fd.set("relax_in_ratio", "true");
+          fd.set("relax_in_layers", "false");
+          fd.set("set_relax_film_ang", "0");
+          fd.set("set_relax_substrate_ang", "0");
+        } else if (mode === "layers") {
+          fd.set("relax_in_ratio", "false");
+          fd.set("relax_in_layers", "true");
+        } else {
+          fd.set("relax_in_ratio", "false");
+          fd.set("relax_in_layers", "false");
+        }
+      }
+
+      try {
+        const res = await fetch("/api/run", { method: "POST", body: fd });
+        const start = await res.json();
+        logbox.value = JSON.stringify(start, null, 2);
+        if (!start.session_id || !start.started) {
+          out.style.display = "block";
+          out.className = "status err";
+          out.innerHTML = "<strong>未能启动任务</strong>";
+          btn.disabled = false;
+          return;
+        }
+        currentSid = start.session_id;
+        btnStop.disabled = false;
+        logbox.value = "运行中… session_id=" + currentSid;
+        startLogPolling();
+        startVizPolling();
+
+        pollTimer = setInterval(async () => {
+          if (!currentSid) return;
+          try {
+            const st = await fetch("/api/status/" + encodeURIComponent(currentSid));
+            const j = await st.json();
+            if (!st.ok && st.status === 404) {
+              clearPoll();
+              clearLogPoll();
+              clearVizPoll();
+              currentSid = null;
+              btnStop.disabled = true;
+              btn.disabled = false;
+              logbox.value = JSON.stringify(j, null, 2);
+              return;
+            }
+            if (j.status === "running") {
+              return;
+            }
+            clearPoll();
+            await fetchLogChunk();
+            await fetchVizChunk(true);
+            flushVizParser();
+            clearLogPoll();
+            clearVizPoll();
+            currentSid = null;
+            btnStop.disabled = true;
+            btn.disabled = false;
+            if (j.status === "completed" || j.status === "failed") {
+              const payload = j.result || j;
+              showResultPayload(payload);
+            } else {
+              logbox.value = JSON.stringify(j, null, 2);
+            }
+          } catch (err) {
+            clearPoll();
+            clearLogPoll();
+            clearVizPoll();
+            currentSid = null;
+            btn.disabled = false;
+            btnStop.disabled = true;
+            logbox.value = String(err);
+          }
+        }, 1500);
+      } catch (err) {
+        logbox.value = String(err);
+        out.style.display = "block";
+        out.className = "status err";
+        out.innerHTML = "<strong>请求失败</strong>";
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -14,8 +14,18 @@ setup(
     long_description=readme,
     long_description_content_type="text/markdown",
     url="https://github.com/HouGroup/InterOptimus/",
+    project_urls={
+        "Source": "https://github.com/HouGroup/InterOptimus/",
+        "Documentation": "https://github.com/HouGroup/InterOptimus/blob/HEAD/docs/GETTING_STARTED.md",
+    },
     license="MIT",
+    keywords="materials science, interfaces, MLIP, VASP, jobflow, pymatgen",
     packages=find_packages(exclude=("tests", "test", "new_test")),
+    include_package_data=True,
+    package_data={
+        "InterOptimus.web_app": ["templates/*.html"],
+        "InterOptimus.agents": ["*.json"],
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3 :: Only",
@@ -29,8 +39,10 @@ setup(
     install_requires=[
         "pymatgen",
         "interfacemaster",
-        "dscribe",
         "scikit-optimize",
+        "scikit-learn",
+        "scipy",
+        "pandas",
         "matplotlib",
         "numpy",
         "ase",
@@ -39,20 +51,33 @@ setup(
         "jobflow-remote",
         "qtoolkit",
         "adjustText",
-        "ipywidgets",
         "tqdm",
         "mp-api",
-        "openai",
-        "orb-models",
-        "sevenn",
-        "deepmd-kit",
-        "torch",
     ],
-    include_package_data=True,
-    package_data={
-        "InterOptimus": [
-            "data/orb-v3-conservative-20-omat-20250404.ckpt",
-            "data/checkpoint_sevennet_mf_ompa.pth",
-        ]
+    extras_require={
+        # ORB / SevenNet / DeepMD + PyTorch (needed at runtime when calc is orb-models, sevenn, or dpa).
+        "mlip": [
+            "torch",
+            "orb-models",
+            "sevenn",
+            "deepmd-kit",
+        ],
+        # Browser UI: interoptimus-web (see InterOptimus.web_app).
+        "web": [
+            "fastapi>=0.100",
+            "uvicorn[standard]>=0.22",
+            "python-multipart>=0.0.6",
+            "jinja2>=3.1",
+            "plotly>=5.18",
+        ],
+        # interoptimus-simple -c config.yml
+        "yaml": ["pyyaml>=6.0"],
+    },
+    entry_points={
+        "console_scripts": [
+            "interoptimus-env=InterOptimus.agents.server_env:main",
+            "interoptimus-simple=InterOptimus.agents.simple_iomaker:main",
+            "interoptimus-web=InterOptimus.web_app.cli:main",
+        ],
     },
 )

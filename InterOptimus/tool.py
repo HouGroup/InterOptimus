@@ -18,7 +18,11 @@ from scipy.spatial.distance import squareform
 from scipy.cluster.hierarchy import fcluster, linkage
 import os
 import json
+import pickle
+import shutil
 import matplotlib.pyplot as plt
+from numpy import array, dot
+from numpy.linalg import norm
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from scipy.stats.mstats import spearmanr
 from scipy.stats import pearsonr
@@ -39,13 +43,9 @@ def convert_dict_to_json(obj):
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     elif isinstance(obj, dict):
-        for k, v in obj.items():
-            obj[k] = convert_dict_to_json(v)
-        return obj
+        return {k: convert_dict_to_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
-        for k in range(len(obj)):
-            obj[k] = convert_dict_to_json(obj[k])
-        return obj
+        return [convert_dict_to_json(item) for item in obj]
     elif isinstance(obj, Structure):
         return obj.to_json()
     else:
