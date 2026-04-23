@@ -774,8 +774,18 @@ class InterfaceWorker:
             film_l, substrate_l = self.get_film_substrate_layer_thickness(i)
             self.ftol_termination_tuples.append((film_l * self.termination_ftol, substrate_l * self.termination_ftol))
             self.layer_thicknesses.append((film_l, substrate_l))
-            film_thickness = int(round(self.film_thickness/film_l))
-            substrate_thickness = int(round(self.substrate_thickness/substrate_l))
+            # 用户给的是埃；单层厚度 film_l / substrate_l 因取向与匹配会很大。用 round(Angstrom/单层) 时，若
+            # 设定薄于约半层，round 会得到 0 层，get_interfaces 可能切出空 slab（pymatgen center_slab 崩）。
+            raw_f = float(self.film_thickness) / float(film_l) if float(film_l) > 0 else 0.0
+            raw_s = float(self.substrate_thickness) / float(substrate_l) if float(substrate_l) > 0 else 0.0
+            film_thickness = max(1, int(round(raw_f)))
+            substrate_thickness = max(1, int(round(raw_s)))
+            if raw_f < 0.5 or raw_s < 0.5:
+                warnings.warn(
+                    f"match {i}: film/substrate 设定厚度过薄（相对单层 {film_l:.3f} / {substrate_l:.3f} Å），"
+                    f"换算层数会为 0，已**强制为至少 1 层**；请增大 `film_thickness` / `substrate_thickness` 以免物理上过薄。",
+                    stacklevel=2,
+                )
             self.thickness_in_layers.append((film_thickness, substrate_thickness))
             self.absolute_thicknesses.append((film_thickness * film_l, substrate_thickness * substrate_l))
             print(f'match {i}: thicknesses (film, substrate) ({round(film_l,2)}, {round(substrate_l,2)}) ({film_thickness}, {substrate_thickness}) ({round(film_thickness * film_l, 2)} {round(substrate_thickness * substrate_l, 2)})')
