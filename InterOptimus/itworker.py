@@ -1199,6 +1199,9 @@ class InterfaceWorker:
                 it_bd_E, strain_E = self.post_bayesian_process(i,j,A)
                 
             self.thk_conv_test_results[thk] = self.opt_results[(i,j)]
+        for _d in self.thk_conv_test_results.values():
+            if isinstance(_d, dict):
+                self._strip_one_opt_result_entry_bayesian(_d)
         with open(f'conv_test_results.pkl','wb') as f:
             pickle.dump(self.thk_conv_test_results, f)
     
@@ -1621,6 +1624,29 @@ class InterfaceWorker:
             pass
         return bd_E, strain_E
 
+    @staticmethod
+    def _strip_one_opt_result_entry_bayesian(entry: dict) -> None:
+        """Remove BO interface object lists; keep n_bayesian_samples count."""
+        n = 0
+        siv = entry.get("sampled_interfaces")
+        if siv is not None:
+            try:
+                n = len(siv)
+            except TypeError:
+                n = 0
+        entry["n_bayesian_samples"] = n
+        entry["sampled_interfaces"] = []
+        entry.pop("selected_its", None)
+
+    def _strip_bayesian_interfaces_for_export(self, opt_results: dict) -> None:
+        """
+        Shrink on-disk opt_results: drop full BO-sampled interface objects (and
+        selected_its) while keeping scalars, relaxed structures, and a sample count.
+        """
+        for entry in opt_results.values():
+            if isinstance(entry, dict):
+                self._strip_one_opt_result_entry_bayesian(entry)
+
     def global_minimization(self, n_calls_density = 4, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, term_screen_tol = 1, name = ''):
         """
         apply bassian optimization for the xyz registration of all the interfaces with the predicted
@@ -1773,6 +1799,7 @@ class InterfaceWorker:
             self.best_key = None
             self.close_energy_calculator()
             self.global_optimized_data.to_csv(f'all_data_{name}.csv')
+            self._strip_bayesian_interfaces_for_export(self.opt_results)
             with open(f'opt_results_{name}.pkl','wb') as f:
                 pickle.dump(self.opt_results, f)
             self.opt_results = convert_dict_to_json(self.opt_results)
@@ -1783,6 +1810,7 @@ class InterfaceWorker:
         #close docker container
         self.close_energy_calculator()
         self.global_optimized_data.to_csv(f'all_data_{name}.csv')
+        self._strip_bayesian_interfaces_for_export(self.opt_results)
         with open(f'opt_results_{name}.pkl','wb') as f:
             pickle.dump(self.opt_results, f)
         self.opt_results = convert_dict_to_json(self.opt_results)
