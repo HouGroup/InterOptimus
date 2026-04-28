@@ -1,3 +1,5 @@
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/3743a66f-8af3-4aee-85e5-44d37f44ab74" />
+
 # InterOptimus
 
 Crystal **interface** search and optimization with MLIP acceleration, optional VASP, and **Jobflow** / **jobflow-remote** execution.
