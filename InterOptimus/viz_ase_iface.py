@@ -1,8 +1,8 @@
 """
-Render BO interface snapshots with ASE ``plot_atoms`` (orthographic view).
+Render interface snapshots with ASE ``plot_atoms`` (orthographic view).
 
-Used by the web worker to write ``web_bo_iface.png`` next to ``web_viz.jsonl`` so the
-browser can display the image without running ASE in JavaScript.
+Used by the web worker to write preview PNGs next to ``web_viz.jsonl`` so the browser
+can display interface images without running ASE in JavaScript.
 """
 
 from __future__ import annotations
@@ -15,16 +15,37 @@ from typing import Any, Dict, List, Optional
 ASE_PLOT_VIEW_ROTATION = "90x,0y,90z"
 
 
+def _positions_from_event(ev: Dict[str, Any]) -> Optional[Any]:
+    """Return an ``(N, 3)`` positions-like object from BO or relax-final payloads."""
+    pc = ev.get("positions_cart")
+    if isinstance(pc, list):
+        return pc
+    flat = ev.get("positions")
+    nums = ev.get("numbers")
+    if not isinstance(flat, list) or not isinstance(nums, list):
+        return None
+    try:
+        import numpy as np
+
+        arr = np.asarray(flat, dtype=float).reshape((-1, 3))
+    except Exception:
+        return None
+    if len(arr) > len(nums):
+        arr = arr[: len(nums)]
+    return arr
+
+
 def render_bo_iface_png_to_bytes(ev: Dict[str, Any], *, dpi: int = 110) -> Optional[bytes]:
     """
     Build PNG bytes from one ``phase=bo`` / ``event=sample`` JSONL row.
 
-    Expects ``positions_cart``, ``numbers``, ``lattice``; optional ``film_substrate`` (tags).
+    Expects BO payload fields ``positions_cart`` / ``lattice`` or relax-final fields
+    ``positions`` / ``cell``; optional ``film_substrate`` (tags).
     """
-    pc = ev.get("positions_cart")
+    pc = _positions_from_event(ev)
     nums = ev.get("numbers")
-    lat = ev.get("lattice")
-    if not isinstance(pc, list) or not isinstance(nums, list) or len(pc) != len(nums):
+    lat = ev.get("lattice") or ev.get("cell")
+    if pc is None or not isinstance(nums, list) or len(pc) != len(nums):
         return None
     if not lat or not isinstance(lat, list):
         return None

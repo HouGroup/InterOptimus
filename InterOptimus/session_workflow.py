@@ -324,7 +324,8 @@ def run_iomaker_session(
         }
 
     workflow_name = _form_get(form, "workflow_name", "IO_web")
-    cost_preset = _form_get(form, "cost_preset", "medium")
+    # Web 表单不再暴露 low/medium/high（易引起误解）；固定按 medium 档位合并默认。
+    cost_preset = "medium"
     double_interface = _form_get(form, "double_interface", "true")
     execution = _form_get(form, "execution", "local")
     lm_max_area = _form_get(form, "lm_max_area", "20")
@@ -337,15 +338,15 @@ def run_iomaker_session(
     st_termination_ftol = _form_get(form, "st_termination_ftol", "0.15")
     st_vacuum_over_film = _form_get(form, "st_vacuum_over_film", "5")
     opt_device = _form_get(form, "opt_device", "cpu")
-    opt_steps = _form_get(form, "opt_steps", "500")
+    adv_steps = _form_get(form, "adv_steps", "").strip()
+    if not adv_steps:
+        adv_steps = _form_get(form, "opt_steps", "500")
     do_mlip_gd = _form_get(form, "do_mlip_gd", "false")
     relax_in_ratio = _form_get(form, "relax_in_ratio", "true")
     relax_in_layers = _form_get(form, "relax_in_layers", "false")
     set_relax_film_ang = _form_get(form, "set_relax_film_ang", "0")
     set_relax_substrate_ang = _form_get(form, "set_relax_substrate_ang", "0")
 
-    if cost_preset not in ("low", "medium", "high"):
-        return {"ok": False, "session_id": sid, "error": "cost_preset must be low, medium, or high"}
     ex = execution.strip().lower().replace("-", "_")
     if ex not in ("local", "server"):
         return {"ok": False, "session_id": sid, "error": "execution must be local or server"}
@@ -375,7 +376,7 @@ def run_iomaker_session(
     if dev == "gpu":
         dev = "cuda"
 
-    opt_steps_i = int(_parse_float(opt_steps, 500))
+    opt_steps_i = int(_parse_float(adv_steps, 500))
     gd = _parse_bool(do_mlip_gd)
     rir = _parse_bool(relax_in_ratio)
     ril = _parse_bool(relax_in_layers)

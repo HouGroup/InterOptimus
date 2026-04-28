@@ -75,6 +75,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
+            "itom=InterOptimus.cli:main",
             "interoptimus-env=InterOptimus.agents.server_env:main",
             "interoptimus-simple=InterOptimus.agents.simple_iomaker:main",
             "interoptimus-web=InterOptimus.web_app.cli:main",

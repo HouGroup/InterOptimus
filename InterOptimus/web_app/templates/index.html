@@ -224,6 +224,55 @@
       gap: 0.55rem;
       align-items: stretch;
     }
+    #plot-atoms.plot-cell {
+      min-height: auto;
+      padding: 0.5rem 0.55rem 0.35rem;
+    }
+    /* 弛豫终态：同一面板内多张小缩略图，不成套多个独立「窗口」 */
+    .relax-final-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 0.65rem;
+      align-items: flex-end;
+      justify-content: flex-start;
+      padding: 0.15rem 0 0.25rem;
+    }
+    .relax-final-thumb {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.2rem;
+      max-width: 168px;
+    }
+    .relax-final-img-frame {
+      width: 156px;
+      height: 118px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #e8eef5;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+    .relax-final-img {
+      max-width: 100%;
+      max-height: 100%;
+      width: auto;
+      height: auto;
+      object-fit: contain;
+      display: block;
+    }
+    .relax-final-cap {
+      font-size: 0.68rem;
+      color: var(--muted);
+      line-height: 1.25;
+      text-align: center;
+      max-width: 11rem;
+      word-break: break-all;
+    }
     .plot-row-bo .plot-half {
       flex: 1 1 300px;
       margin-top: 0;
@@ -269,14 +318,6 @@
             <label for="workflow_name">workflow_name</label>
             <input id="workflow_name" name="workflow_name" type="text" value="IO_web"/>
           </div>
-          <div class="field">
-            <label for="cost_preset">cost_preset</label>
-            <select id="cost_preset" name="cost_preset">
-              <option value="low">low</option>
-              <option value="medium" selected>medium</option>
-              <option value="high">high</option>
-            </select>
-          </div>
         </div>
         <div class="field">
           <label for="mlip_calc">MLIP 后端</label>
@@ -318,10 +359,6 @@
               <option value="cuda">cuda</option>
               <option value="gpu">gpu（同 cuda）</option>
             </select>
-          </div>
-          <div class="field">
-            <label for="opt_steps">steps</label>
-            <input id="opt_steps" name="opt_steps" type="text" value="500"/>
           </div>
         </div>
         <p class="hint">选择 GPU 前请确认服务器已安装 CUDA 驱动与 PyTorch GPU 版本；若驱动不匹配可改用 cpu。</p>
@@ -389,7 +426,12 @@
           <div class="field"><label for="adv_ckpt_path">ckpt_path</label><input name="adv_ckpt_path" placeholder="留空则按默认/缓存解析 checkpoint"/></div>
         </div>
         <div class="row">
-          <div class="field"><label for="adv_fmax">fmax</label><input name="adv_fmax"/></div>
+          <div class="field"><label for="adv_fmax">fmax</label><input id="adv_fmax" name="adv_fmax"/></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="adv_steps">steps</label><input id="adv_steps" name="adv_steps" type="text" value="500"/></div>
+        </div>
+        <div class="row">
           <div class="field"><label for="adv_discut">discut</label><input name="adv_discut"/></div>
           <div class="field"><label for="adv_gd_tol">gd_tol</label><input name="adv_gd_tol"/></div>
           <div class="field"><label for="adv_n_calls_density">n_calls_density</label><input name="adv_n_calls_density"/></div>
@@ -430,7 +472,7 @@
         <h4>过程可视化（与桌面版同源 JSONL + Plotly）</h4>
         <p id="viz-parse-status" class="hint" style="margin:0 0 0.35rem;">运行中：等待 web_viz.jsonl 数据…</p>
         <p class="hint" style="margin:0 0 0.5rem;">
-          贝叶斯区与桌面 <code>WorkflowVizWindow</code> 对齐：注册 3D（Plotly）· <strong>界面 ASE 正投</strong>（服务端 <code>plot_atoms</code> PNG）· E/N（当前对）· E/N（所有对）；其下为 MLIP 弛豫与终态 3D。
+          贝叶斯区与桌面 <code>WorkflowVizWindow</code> 对齐：注册 3D（Plotly）· <strong>界面 ASE 正投</strong>（服务端 <code>plot_atoms</code> PNG）· E/N（当前对）· E/N（所有对）；其下为 MLIP 弛豫曲线与各 <strong>(match, term)</strong> 弛豫终态 ASE 界面图。
         </p>
         <div class="plot-bo-grid">
           <div class="plot-row-bo">
@@ -580,13 +622,15 @@
       activeBoKey: null,
       relax: {},
       relaxOrder: [],
-      lastFinal: null,
+      relaxFinalOrder: [],
+      relaxFinalLegacy: false,
       raf: null,
       eventCount: 0,
       jsonlLines: 0,
       vizLogExists: null,
       lastVizFileSize: 0,
       vizPollError: "",
+      sessionId: null,
     };
     const vizParseStatus = document.getElementById("viz-parse-status");
     function updateVizStatus() {
@@ -675,12 +719,14 @@
       WBV.activeBoKey = null;
       WBV.relax = {};
       WBV.relaxOrder = [];
-      WBV.lastFinal = null;
+      WBV.relaxFinalOrder = [];
+      WBV.relaxFinalLegacy = false;
       WBV.eventCount = 0;
       WBV.jsonlLines = 0;
       WBV.vizLogExists = null;
       WBV.lastVizFileSize = 0;
       WBV.vizPollError = "";
+      WBV.sessionId = currentSid;
       vizLineRemainder = "";
       updateVizStatus();
       resetBoIfaceImg();
@@ -764,7 +810,14 @@
           handled = true;
         }
       } else if (evn === "relax_final") {
-        WBV.lastFinal = ev;
+        const mk = parseInt(ev.match_id, 10);
+        const tk = parseInt(ev.term_id, 10);
+        if (!isNaN(mk) && !isNaN(tk)) {
+          const k = bk(mk, tk);
+          if (WBV.relaxFinalOrder.indexOf(k) < 0) WBV.relaxFinalOrder.push(k);
+        } else {
+          WBV.relaxFinalLegacy = true;
+        }
         handled = true;
       } else if (evn === "viz_log_ready") {
         handled = true;
@@ -1101,77 +1154,65 @@
     function drawWbAtoms() {
       const el = document.getElementById("plot-atoms");
       if (!el) return;
-      if (typeof Plotly === "undefined") {
+      const sidForImage = WBV.sessionId || currentSid;
+      const pairs = WBV.relaxFinalOrder || [];
+      const legacyOnly = WBV.relaxFinalLegacy && pairs.length === 0;
+      if (!sidForImage || (!pairs.length && !legacyOnly)) {
         el.innerHTML = wbEmptyHtml(
-          "Plotly 未加载（CDN 被拦截或离线）。终态 3D 需 Plotly；可先看 JSONL 是否含 relax_final。"
+          "暂无终态界面图：等待 relax_final（每个 (match, term) 一段 MLIP 弛豫结束后由服务端 ASE plot_atoms 生成 PNG）。"
         );
         return;
       }
-      const ev = WBV.lastFinal;
-      if (!ev || !Array.isArray(ev.positions) || !Array.isArray(ev.numbers)) {
-        try {
-          Plotly.purge(el);
-        } catch (e) {}
-        el.innerHTML = wbEmptyHtml(
-          "暂无终态 3D：等待 relax_final（每段 MLIP 弛豫结束会写入一条）。"
+      const foot =
+        "弛豫终态（ASE plot_atoms，与右上 BO 界面图同视角）；每对对应 web_relax_final_iface_m*_t*.png";
+      const base =
+        "/api/session/" + encodeURIComponent(sidForImage) + "/relax_final_iface.png";
+      function relaxFinalSrc(extra) {
+        let u = base + "?";
+        if (extra) u += extra + "&";
+        u += "t=" + Date.now();
+        return u;
+      }
+      /** 加载失败时不插入整段提示文案，仅隐藏图片，保留灰色占位框 */
+      function thumbImg(extra) {
+        const url = relaxFinalSrc(extra);
+        return (
+          '<img class="relax-final-img" alt="" src="' +
+          url +
+          "\" onerror=\"this.style.visibility='hidden';\"/>"
         );
-        return;
       }
-      wbEnsurePlotSurface(el);
-      const layout = Object.assign(
-        {
-          title: "最近一次弛豫终态（3D 散点，色=原子序数）",
-          scene: {
-            bgcolor: "#f1f5f9",
-            xaxis: {
-              showbackground: false,
-              showgrid: false,
-              zeroline: false,
-              showticklabels: false,
-              title: { text: "" },
-            },
-            yaxis: {
-              showbackground: false,
-              showgrid: false,
-              zeroline: false,
-              showticklabels: false,
-              title: { text: "" },
-            },
-            zaxis: {
-              showbackground: false,
-              showgrid: false,
-              zeroline: false,
-              showticklabels: false,
-              title: { text: "" },
-            },
-            camera: { eye: { x: 1.45, y: 1.35, z: 1.15 } },
-          },
-        },
-        wbLight
-      );
-      const pos = ev.positions;
-      const nums = ev.numbers;
-      const n = Math.min(Math.floor(pos.length / 3), nums.length);
-      const x = [];
-      const y = [];
-      const z = [];
-      const c = [];
-      const cap = Math.min(n, 8000);
-      for (let i = 0; i < cap; i++) {
-        x.push(pos[i * 3]);
-        y.push(pos[i * 3 + 1]);
-        z.push(pos[i * 3 + 2]);
-        c.push(Number(nums[i]) || 0);
+      function thumbBlock(extra, cap) {
+        return (
+          '<div class="relax-final-thumb">' +
+          '<div class="relax-final-img-frame">' +
+          thumbImg(extra) +
+          "</div>" +
+          '<span class="relax-final-cap">' +
+          cap +
+          "</span>" +
+          "</div>"
+        );
       }
-      const tr = {
-        type: "scatter3d",
-        mode: "markers",
-        x,
-        y,
-        z,
-        marker: { size: 2.5, color: c, colorscale: "Viridis", showscale: true },
-      };
-      Plotly.react(el, [tr], layout, wbPlotConfig);
+      let inner = '<div class="relax-final-strip">';
+      if (legacyOnly) {
+        inner += thumbBlock("", "relax_final（兼容）");
+      } else {
+        for (const key of pairs) {
+          const ps = key.split(",");
+          const m = ps[0];
+          const t = ps[1];
+          inner += thumbBlock(
+            "match_id=" +
+              encodeURIComponent(m) +
+              "&term_id=" +
+              encodeURIComponent(t),
+            "match " + String(m) + " · term " + String(t)
+          );
+        }
+      }
+      inner += "</div>";
+      el.innerHTML = inner + '<p class="bo-iface-foot">' + foot + "</p>";
     }
 
     if (vizCharts && typeof ResizeObserver !== "undefined") {

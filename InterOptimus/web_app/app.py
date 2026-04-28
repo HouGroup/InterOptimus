@@ -353,6 +353,35 @@ async def session_bo_iface_png(session_id: str) -> FileResponse:
     )
 
 
+@app.get("/api/session/{session_id}/relax_final_iface.png")
+async def session_relax_final_iface_png(
+    session_id: str,
+    match_id: Optional[int] = None,
+    term_id: Optional[int] = None,
+) -> FileResponse:
+    """
+    MLIP relaxation final state rendered server-side with ASE ``plot_atoms``.
+
+    With ``match_id`` and ``term_id``, serves ``web_relax_final_iface_m{m}_t{t}.png``
+    (one file per relaxed interface pair). Without query params, serves legacy
+    ``web_relax_final_iface.png`` when present.
+    """
+    if ".." in session_id or "/" in session_id or "\\" in session_id:
+        raise HTTPException(status_code=400, detail="Invalid session_id")
+    root = sessions_root() / session_id
+    if match_id is not None and term_id is not None:
+        path = root / f"web_relax_final_iface_m{match_id}_t{term_id}.png"
+    else:
+        path = root / "web_relax_final_iface.png"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Relax-final interface image not available")
+    return FileResponse(
+        path,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/api/session/{session_id}/job_log")
 async def session_job_log(session_id: str, offset: int = 0) -> JSONResponse:
     """

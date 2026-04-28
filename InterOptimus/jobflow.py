@@ -239,6 +239,35 @@ def resolve_opt_results_pickle_path(run_dir: os.PathLike[str]) -> Optional[str]:
     return str(best.resolve())
 
 
+def _compact_opt_results_for_pickle(opt_results: Dict[Any, Any]) -> Dict[Any, Any]:
+    """
+    Return an on-disk copy of ``opt_results`` without full BO sampled-interface lists.
+
+    The full ``sampled_interfaces`` and ``selected_its`` lists can dominate pickle size.
+    Keep the best/relaxed structures and scalar metadata, and preserve the sample count
+    as ``n_bayesian_samples`` for provenance.
+    """
+    compact: Dict[Any, Any] = {}
+    for key, value in (opt_results or {}).items():
+        if not isinstance(value, dict):
+            compact[key] = value
+            continue
+        entry = dict(value)
+        sampled = entry.get("sampled_interfaces")
+        if sampled is not None:
+            try:
+                n_samples = len(sampled)
+            except TypeError:
+                n_samples = 0
+        else:
+            n_samples = int(entry.get("n_bayesian_samples") or 0)
+        entry["n_bayesian_samples"] = n_samples
+        entry["sampled_interfaces"] = []
+        entry.pop("selected_its", None)
+        compact[key] = entry
+    return compact
+
+
 def _serialize_unique_matches_millers_for_payload(idt: Any) -> List[Dict[str, Any]]:
     """
     Per lattice-match film/substrate conventional Miller indices (JSON-friendly lists).
@@ -269,7 +298,7 @@ def _write_opt_results_pickle(
     path = os.path.join(cwd, "opt_results.pkl")
     payload = {
         "version": 1,
-        "opt_results": iw.opt_results,
+        "opt_results": _compact_opt_results_for_pickle(iw.opt_results),
         "materialize_pairs": list(pair_keys),
         "double_interface": bool(iw.double_interface),
         "strain_E_correction": bool(iw.strain_E_correction),

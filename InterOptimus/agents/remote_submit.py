@@ -832,7 +832,7 @@ def collect_interoptimus_run_dir_results(
     - ``stereographic.jpg``: compact static stereographic summary plot.
     - ``stereographic_interactive.html``: larger interactive stereographic plot with hover labels.
     - ``unique_matches.jpg``: unique-match overview.
-    - ``opt_results.pkl``: full optimization payload; :func:`fetch_interoptimus_task_results`
+    - ``opt_results.pkl``: compact optimization payload; :func:`fetch_interoptimus_task_results`
       materializes ``pairs_best_it/`` locally from this file.
     - ``opt_results_summary.json``: JSON summary of ``opt_results`` (no pymatgen blobs).
     - ``area_strain``: stereographic energy-plot input data when present.
@@ -851,9 +851,16 @@ def collect_interoptimus_run_dir_results(
         "unique_matches_jpg": p if os.path.isfile(p := os.path.join(rd, "unique_matches.jpg")) else None,
     }
 
+    try:
+        from InterOptimus.jobflow import resolve_opt_results_pickle_path
+
+        opt_results_pkl = resolve_opt_results_pickle_path(rd)
+    except Exception:
+        opt_results_pkl = p if os.path.isfile(p := os.path.join(rd, "opt_results.pkl")) else None
+
     out["artifact_paths"] = {
         "pairs_best_it_dir": p if os.path.isdir(p := os.path.join(rd, "pairs_best_it")) else None,
-        "opt_results_pkl": p if os.path.isfile(p := os.path.join(rd, "opt_results.pkl")) else None,
+        "opt_results_pkl": opt_results_pkl,
         "opt_results_summary_json": p
         if os.path.isfile(p := os.path.join(rd, "opt_results_summary.json"))
         else None,

@@ -530,6 +530,23 @@ class MlipCalc:
             if igf is not None:
                 fin["interface_gamma_J_m2"] = igf
             emit_event(fin)
+            try:
+                vp = (os.environ.get("INTEROPTIMUS_VIZ_LOG") or "").strip()
+                if vp and fin.get("positions") and fin.get("numbers") and fin.get("cell"):
+                    from pathlib import Path
+
+                    from InterOptimus.viz_ase_iface import write_bo_iface_png
+
+                    dirp = Path(vp).resolve().parent
+                    mid = fin.get("match_id")
+                    tid = fin.get("term_id")
+                    if mid is not None and tid is not None:
+                        fname = f"web_relax_final_iface_m{int(mid)}_t{int(tid)}.png"
+                    else:
+                        fname = "web_relax_final_iface.png"
+                    write_bo_iface_png(fin, dirp / fname)
+            except Exception:
+                pass
         else:
             relax.run(fmax=fmax, steps=max_steps)
 

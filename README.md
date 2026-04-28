@@ -51,18 +51,15 @@ Python API:
 ```python
 from pathlib import Path
 import json
-from InterOptimus.agents.simple_iomaker import (
-    run_simple_iomaker,
-    iomaker_status,
-    iomaker_fetch_results,
-)
+from InterOptimus.agents.simple_iomaker import run_simple_iomaker
+from InterOptimus.agents.remote_submit import iomaker_fetch_results, iomaker_status
 
 with open("my_run.json") as f:
     result = run_simple_iomaker(json.load(f))
 
 print(iomaker_status(result))
 # When finished:
-# iomaker_fetch_results(result, copy_images_to=Path("./out"))
+# iomaker_fetch_results(dest_dir=Path("./out"), result=result)
 ```
 
 Lower-level builder (already-normalized `settings` dict):

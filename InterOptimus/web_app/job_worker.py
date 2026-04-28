@@ -22,6 +22,53 @@ from InterOptimus.session_workflow import run_iomaker_session, sessions_root
 from InterOptimus.web_app.session_artifacts import enrich_ok_payload_artifacts
 
 
+def _ensure_relax_final_iface_png(workdir: Path) -> None:
+    """Best-effort fallback: render missing ``relax_final`` ASE PNGs from ``web_viz.jsonl``."""
+    viz_path = workdir / "web_viz.jsonl"
+    if not viz_path.is_file():
+        return
+    by_pair: dict[tuple[int, int] | None, dict] = {}
+    try:
+        for line in viz_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if '"event": "relax_final"' not in line and '"event":"relax_final"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("event") != "relax_final":
+                continue
+            mid, tid = row.get("match_id"), row.get("term_id")
+            if mid is not None and tid is not None:
+                try:
+                    key = (int(mid), int(tid))
+                except (TypeError, ValueError):
+                    key = None
+                by_pair[key] = row
+            else:
+                by_pair[None] = row
+    except OSError:
+        return
+    if not by_pair:
+        return
+    try:
+        from InterOptimus.viz_ase_iface import write_bo_iface_png
+    except Exception:
+        return
+    for key, row in by_pair.items():
+        if key is None:
+            out_path = workdir / "web_relax_final_iface.png"
+        else:
+            m, t = key
+            out_path = workdir / f"web_relax_final_iface_m{m}_t{t}.png"
+        if out_path.is_file():
+            continue
+        try:
+            write_bo_iface_png(row, out_path)
+        except Exception:
+            pass
+
+
 def _write_result(workdir: Path, payload: dict) -> None:
     p = workdir / "web_result.json"
     try:
@@ -141,6 +188,7 @@ def main() -> None:
             "workdir": str(workdir.resolve()),
         }
     if isinstance(result, dict):
+        _ensure_relax_final_iface_png(workdir)
         enrich_ok_payload_artifacts(workdir, result)
     _write_result(workdir, result)
 
