@@ -1,4 +1,5 @@
-<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/9fe500a1-e385-48f4-933a-ae7a17e1c612" />
+
+<img width="2752" height="1536" alt="InterOptimus" src="https://github.com/user-attachments/assets/0934d4f7-56d5-41bd-b71d-c1137920d19e" />
 
 # InterOptimus
 
@@ -18,12 +19,11 @@ This distribution focuses on the **JSON-driven IOMaker pipeline** (submit → la
 From PyPI (after publish):
 
 ```bash
-# Core only (lattice match, jobflow, interface pipeline). MLIP calculators need the extra:
-pip install "InterOptimus[mlip]"         # torch + orb-models + sevenn + deepmd-kit
+# Core workflow (lattice match, jobflow, interface pipeline):
+pip install InterOptimus
 
-# Common combinations:
-pip install "InterOptimus[mlip,web,yaml]"   # MLIP backends + browser UI + YAML configs
-pip install InterOptimus                    # minimal deps; add [mlip] before running MLIP steps
+# Optional browser UI:
+pip install "InterOptimus[web]"   # interoptimus-web (FastAPI + Plotly); PyYAML is in core deps
 ```
 
 From a git checkout:
@@ -86,7 +86,7 @@ The web UI drives the same `run_simple_iomaker` pipeline as the CLI; session dir
 
 - Python ≥ 3.10
 - Core stack: `pymatgen`, `interfacemaster`, `atomate2`, `jobflow`, `jobflow-remote`, `qtoolkit`, … (see `setup.py`)
-- MLIP stack (optional): install **`InterOptimus[mlip]`** for `torch`, `orb-models`, `sevenn`, and `deepmd-kit`, or install those packages into your environment manually. **MatRIS** is not on PyPI; install from the upstream project if you use `calc=matris`.
+- MLIP stack (optional): provision conda envs and jobflow-remote workers with **`itom config --with-mlip-workers`** (see **[GETTING_STARTED](docs/GETTING_STARTED.md)**), or install `torch`, `orb-models`, `sevenn`, and `deepmd-kit` manually into the Python env that runs MLIP. **MatRIS** is not on PyPI; install from the upstream project if you use `calc=matris`.
 
 ## Layout
 

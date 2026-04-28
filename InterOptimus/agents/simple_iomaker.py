@@ -354,7 +354,7 @@ def _flatten_cluster_bundle(sub: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def load_config_file(path: str) -> Dict[str, Any]:
-    """Load JSON or YAML (YAML requires ``pip install 'InterOptimus[yaml]'`` or ``pyyaml``)."""
+    """Load JSON or YAML (YAML uses PyYAML, a core InterOptimus dependency)."""
     with open(path, encoding="utf-8") as f:
         raw = f.read()
     path_lower = path.lower()
@@ -363,7 +363,7 @@ def load_config_file(path: str) -> Dict[str, Any]:
             import yaml  # type: ignore
         except ImportError as e:
             raise ImportError(
-                "YAML config requires PyYAML. Install with: pip install 'InterOptimus[yaml]'"
+                "YAML config requires PyYAML. Reinstall InterOptimus or: pip install 'pyyaml>=6'"
             ) from e
         data = yaml.safe_load(raw)
         if not isinstance(data, dict):

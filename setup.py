@@ -53,15 +53,11 @@ setup(
         "adjustText",
         "tqdm",
         "mp-api",
+        "pyyaml>=6.0",
     ],
     extras_require={
-        # ORB / SevenNet / DeepMD + PyTorch (needed at runtime when calc is orb-models, sevenn, or dpa).
-        "mlip": [
-            "torch",
-            "orb-models",
-            "sevenn",
-            "deepmd-kit",
-        ],
+        # MLIP backends (torch, orb-models, …) are not bundled here—use `itom config --with-mlip-workers`
+        # or install those packages manually into your worker / local conda env.
         # Browser UI: interoptimus-web (see InterOptimus.web_app).
         "web": [
             "fastapi>=0.100",
@@ -70,8 +66,6 @@ setup(
             "jinja2>=3.1",
             "plotly>=5.18",
         ],
-        # interoptimus-simple -c config.yml
-        "yaml": ["pyyaml>=6.0"],
     },
     entry_points={
         "console_scripts": [
