@@ -1,5 +1,5 @@
 
-<img width="2752" height="1536" alt="InterOptimus" src="https://github.com/user-attachments/assets/0934d4f7-56d5-41bd-b71d-c1137920d19e" />
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/c689cb68-d3d0-4442-9908-2cabb57d3107" />
 
 # InterOptimus
 
