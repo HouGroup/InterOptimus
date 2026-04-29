@@ -268,6 +268,35 @@ def _compact_opt_results_for_pickle(opt_results: Dict[Any, Any]) -> Dict[Any, An
     return compact
 
 
+def _serialize_global_optimized_data_for_payload(iw: InterfaceWorker) -> List[Dict[str, Any]]:
+    """JSON-friendly rows from ``InterfaceWorker.global_optimized_data``."""
+    data = getattr(iw, "global_optimized_data", None)
+    if data is None:
+        return []
+    try:
+        rows = data.to_dict(orient="records")
+    except Exception:
+        return []
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        clean: Dict[str, Any] = {}
+        for key, value in row.items():
+            try:
+                if hasattr(value, "item"):
+                    value = value.item()
+            except Exception:
+                pass
+            try:
+                json.dumps(value)
+                clean[str(key)] = value
+            except Exception:
+                clean[str(key)] = str(value)
+        out.append(clean)
+    return out
+
+
 def _serialize_unique_matches_millers_for_payload(idt: Any) -> List[Dict[str, Any]]:
     """
     Per lattice-match film/substrate conventional Miller indices (JSON-friendly lists).
@@ -302,6 +331,7 @@ def _write_opt_results_pickle(
         "materialize_pairs": list(pair_keys),
         "double_interface": bool(iw.double_interface),
         "strain_E_correction": bool(iw.strain_E_correction),
+        "global_optimized_data": _serialize_global_optimized_data_for_payload(iw),
         "unique_matches_millers": _serialize_unique_matches_millers_for_payload(
             getattr(iw, "unique_matches_indices_data", None)
         ),
@@ -1047,6 +1077,12 @@ class IOMaker(Maker):
                 global_minimization_settings=self.global_minimization_settings,
                 do_vasp=self.do_vasp,
             )
+        except Exception:
+            pass
+        try:
+            from InterOptimus.result_bundle import write_mlip_results_bundle
+
+            write_mlip_results_bundle(cwd)
         except Exception:
             pass
 

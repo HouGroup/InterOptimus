@@ -6,6 +6,7 @@ jobflow-remote helpers: submit InterOptimus ``io_flow.json`` on the **current** 
 There is no SSH or cross-host submission in this module.
 """
 
+import csv
 import hashlib
 import json
 import os
@@ -2717,6 +2718,55 @@ def _iomaker_collect_vasp_energy_rows(
     return out
 
 
+def _global_rows_by_pair_for_csv(payload: Dict[str, Any]) -> Dict[Tuple[int, int], Dict[str, Any]]:
+    rows = payload.get("global_optimized_data") if isinstance(payload, dict) else None
+    out: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    if not isinstance(rows, list):
+        return out
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            pair = (int(row.get("$i_m$")), int(row.get("$i_t$")))
+        except (TypeError, ValueError):
+            continue
+        out[pair] = dict(row)
+    return out
+
+
+def _global_rows_by_pair_from_all_data_csv(dest_root: str) -> Dict[Tuple[int, int], Dict[str, Any]]:
+    out: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    for path in sorted(Path(dest_root).glob("all_data*.csv")):
+        if not path.is_file():
+            continue
+        try:
+            with open(path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for raw in reader:
+                    row = {
+                        str(k): v
+                        for k, v in raw.items()
+                        if k is not None and str(k) and not str(k).startswith("Unnamed:")
+                    }
+                    try:
+                        pair = (int(float(row.get("$i_m$"))), int(float(row.get("$i_t$"))))
+                    except (TypeError, ValueError):
+                        continue
+                    out[pair] = row
+        except OSError:
+            continue
+        if out:
+            return out
+    return out
+
+
+def _global_energy_column_for_csv(row: Dict[str, Any]) -> str:
+    for key in row:
+        if "E_{it}" in str(key) or "E_{bd}" in str(key):
+            return str(key)
+    return ""
+
+
 def _area_strain_planes_nonempty(rec: Dict[str, Any]) -> bool:
     """True when both Miller triplets look usable (from :func:`parse_area_strain_records`)."""
     p1 = rec.get("material1_plane") or []
@@ -3032,9 +3082,8 @@ def iomaker_build_vasp_mlip_style_results(
     """
     Rebuild MLIP-style exported artifacts using finished VASP energies.
 
-    Writes a ``vasp_results/`` directory under *dest_dir* containing
-    ``io_report.txt``, ``pairs_summary.txt``, ``area_strain``,
-    ``opt_results_summary.json``, ``stereographic.jpg``, and
+    Writes a compact ``vasp_results/`` directory under *dest_dir* containing
+    ``selected_interfaces.csv``, ``area_match``, ``stereographic.jpg``, and
     ``stereographic_interactive.html``.
     """
     out = _iomaker_collect_vasp_energy_rows(
@@ -3065,6 +3114,8 @@ def iomaker_build_vasp_mlip_style_results(
 
     dest_root = os.path.abspath(dest_dir)
     vasp_root = os.path.join(dest_root, "vasp_results")
+    if os.path.isdir(vasp_root):
+        shutil.rmtree(vasp_root)
     os.makedirs(vasp_root, exist_ok=True)
 
     rows_out_list = out.get("rows") or []
@@ -3097,31 +3148,13 @@ def iomaker_build_vasp_mlip_style_results(
             "scheduled pairs when tags match."
         )
 
-    summary_src = os.path.join(dest_root, "opt_results_summary.json")
-    summary_data: Dict[str, Any] = {}
-    if os.path.isfile(summary_src):
-        try:
-            summary_data = json.loads(Path(summary_src).read_text(encoding="utf-8"))
-        except Exception:
-            summary_data = {}
-    for item in summary_data.values():
-        if not isinstance(item, dict):
-            continue
-        pair = (int(item.get("match_id", -1)), int(item.get("term_id", -1)))
-        hit = rows_by_pair_complete.get(pair)
-        if not hit:
-            continue
-        key = "relaxed_min_it_E" if out.get("double_interface") else "relaxed_min_bd_E"
-        item[key] = float(hit["vasp_energy"])
-    vasp_summary_path = os.path.join(vasp_root, "opt_results_summary.json")
-    Path(vasp_summary_path).write_text(
-        json.dumps(summary_data, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    vasp_summary_path = ""
 
     # ``area_strain`` from the MLIP worker: per stereographic bin, (match_id, term_id) is the winning pair
     # among competing matches using the same per-plane selection as DFT (see itworker.visualize_minimization_results).
     area_src = os.path.join(dest_root, "area_strain")
+    if not os.path.isfile(area_src):
+        area_src = os.path.join(dest_root, "mlip_results", "area_match")
     records = parse_area_strain_records(area_src) if os.path.isfile(area_src) else []
     vasp_area_records: List[Dict[str, Any]] = []
     for record in records:
@@ -3141,7 +3174,7 @@ def iomaker_build_vasp_mlip_style_results(
             updated["binding_energy"] = float(record["binding_energy"])
             updated["dft_status"] = "pending"
         vasp_area_records.append(updated)
-    vasp_area_path = os.path.join(vasp_root, "area_strain")
+    vasp_area_path = os.path.join(vasp_root, "area_match")
     lines: List[str] = []
     for record in vasp_area_records:
         p1 = tuple(int(x) for x in record["material1_plane"])
@@ -3193,6 +3226,14 @@ def iomaker_build_vasp_mlip_style_results(
                 "strain": hit.get("strain"),
             }
         )
+    def _vasp_csv_sort_key(row: Dict[str, Any]) -> Tuple[float, int, int]:
+        try:
+            energy = float(row.get("energy_value"))
+        except (TypeError, ValueError):
+            energy = float("inf")
+        return (energy, int(row["match_id"]), int(row["term_id"]))
+
+    pair_summary_rows.sort(key=_vasp_csv_sort_key)
     with open(pairs_summary_path, "w", encoding="utf-8") as f:
         f.write(
             "# DFT-scheduled pairs only (mlip_only terminations omitted; see opt_results.pkl).\n"
@@ -3235,9 +3276,44 @@ def iomaker_build_vasp_mlip_style_results(
                 + "\n"
             )
 
+    docs_by_tag = out.get("docs_by_tag") or {}
+    vasp_csv_path = os.path.join(vasp_root, "selected_interfaces.csv")
+    global_rows_for_csv = _global_rows_by_pair_for_csv(pkl_payload if isinstance(pkl_payload, dict) else {})
+    if not global_rows_for_csv:
+        global_rows_for_csv = _global_rows_by_pair_from_all_data_csv(dest_root)
+    vasp_csv_rows: List[Dict[str, Any]] = []
+    for row in pair_summary_rows:
+        mi = int(row["match_id"])
+        ti = int(row["term_id"])
+        out_row = dict(global_rows_for_csv.get((mi, ti), {"$i_m$": mi, "$i_t$": ti}))
+        energy_col = _global_energy_column_for_csv(out_row)
+        if energy_col:
+            out_row[energy_col] = row["energy_value"]
+        best_it = _structure_from_store_doc(
+            docs_by_tag.get(f"{mi}_{ti}_it_ismear2", {})
+        ) or _structure_from_store_doc(docs_by_tag.get(f"{mi}_{ti}_it", {}))
+        out_row["cif"] = best_it.to(fmt="cif") if best_it is not None else ""
+        vasp_csv_rows.append(out_row)
+
+    csv_fields: List[str] = []
+    seen_csv_fields: set[str] = set()
+    for row in vasp_csv_rows:
+        for key in row:
+            if key not in seen_csv_fields:
+                seen_csv_fields.add(key)
+                csv_fields.append(key)
+    if "cif" in csv_fields:
+        csv_fields = [c for c in csv_fields if c != "cif"] + ["cif"]
+    elif not csv_fields:
+        csv_fields = ["cif"]
+    with open(vasp_csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=csv_fields, extrasaction="ignore")
+        writer.writeheader()
+        for out_row in vasp_csv_rows:
+            writer.writerow(out_row)
+
     vasp_pairs_best_it_dir = os.path.join(vasp_root, "pairs_best_it")
     os.makedirs(vasp_pairs_best_it_dir, exist_ok=True)
-    docs_by_tag = out.get("docs_by_tag") or {}
     materialized_vasp_pairs: List[str] = []
     for pair in sorted(rows_by_pair_complete):
         mi, ti = pair
@@ -3370,7 +3446,7 @@ def iomaker_build_vasp_mlip_style_results(
         report_lines.extend(["Notes", "-" * 80, partial_note, ""])
     report_lines.extend(
         [
-            "Pairs (DFT-scheduled only; MLIP-only terminations are in area_strain / opt_results.pkl)",
+            "Pairs (DFT-scheduled only; MLIP-only terminations are in opt_results.pkl)",
             "(interface energy column: VASP J/m^2 when complete, else N/A; vasp_dft_status column)",
             "-" * 80,
         ]
@@ -3378,15 +3454,26 @@ def iomaker_build_vasp_mlip_style_results(
     report_lines.extend(Path(pairs_summary_path).read_text(encoding="utf-8").splitlines())
     Path(io_report_path).write_text("\n".join(report_lines), encoding="utf-8")
 
+    for obsolete in (io_report_path, pairs_summary_path, vasp_summary_path):
+        if obsolete and os.path.isfile(obsolete):
+            try:
+                os.remove(obsolete)
+            except OSError:
+                pass
+    if os.path.isdir(vasp_pairs_best_it_dir):
+        shutil.rmtree(vasp_pairs_best_it_dir, ignore_errors=True)
+
     out.update(
         {
             "success": True,
             "vasp_results_dir": vasp_root,
-            "vasp_io_report_path": io_report_path,
-            "vasp_pairs_summary_path": pairs_summary_path,
+            "vasp_csv_path": vasp_csv_path,
+            "vasp_io_report_path": None,
+            "vasp_pairs_summary_path": None,
+            "vasp_area_match_path": vasp_area_path,
             "vasp_area_strain_path": vasp_area_path,
-            "vasp_opt_results_summary_path": vasp_summary_path,
-            "vasp_pairs_best_it_dir": vasp_pairs_best_it_dir if materialized_vasp_pairs else None,
+            "vasp_opt_results_summary_path": None,
+            "vasp_pairs_best_it_dir": None,
             "vasp_stereographic_path": stereographic_jpg if os.path.isfile(stereographic_jpg) else None,
             "vasp_stereographic_interactive_path": (
                 stereographic_html if stereographic_html and os.path.isfile(stereographic_html) else None
@@ -3394,32 +3481,11 @@ def iomaker_build_vasp_mlip_style_results(
             "vasp_partial_export": bool(partial_note),
         }
     )
-    # Copy merged stereographic outputs to the export root (same filenames as ``iomaker_fetch_results``).
-    # The first artifact pull leaves MLIP-only ``stereographic.jpg`` at *dest_root*; without this step,
-    # opening *dest_root*/stereographic.jpg still shows the old plot even after a successful VASP rebuild
-    # under *dest_root*/vasp_results/.
-    try:
-        for src_name, dst_name in (
-            ("stereographic.jpg", "stereographic.jpg"),
-            ("stereographic_interactive.html", "stereographic_interactive.html"),
-            ("area_strain", "area_strain"),
-        ):
-            src = os.path.join(vasp_root, src_name)
-            dst = os.path.join(dest_root, dst_name)
-            if os.path.isfile(src):
-                shutil.copy2(src, dst)
-        out["merged_stereographic_to_export_root"] = True
-    except Exception as e:
-        out["merged_stereographic_to_export_root_error"] = str(e)
     if verbose:
         print("VASP rebuilt results:", vasp_root)
-        print(" VASP io_report:", io_report_path)
+        print(" VASP csv:", vasp_csv_path)
         if out.get("vasp_stereographic_path"):
             print(" VASP stereographic:", out["vasp_stereographic_path"])
-        if out.get("merged_stereographic_to_export_root"):
-            print(
-                " (also copied stereographic.jpg / stereographic_interactive.html / area_strain to export root)"
-            )
     return out
 
 
@@ -3709,6 +3775,15 @@ def iomaker_fetch_results(
             fr["progress_refresh_error"] = str(e)
     if fr.get("success"):
         try:
+            from InterOptimus.result_bundle import write_mlip_results_bundle
+
+            mlip_dir = write_mlip_results_bundle(dest_root)
+            fr["mlip_results_dir"] = str(mlip_dir)
+            fr["mlip_csv_path"] = str(mlip_dir / "selected_interfaces.csv")
+            fr["mlip_area_match_path"] = str(mlip_dir / "area_match")
+        except Exception as e:
+            fr["mlip_results_error"] = str(e)
+        try:
             vr2 = iomaker_build_vasp_mlip_style_results(
                 dest_root,
                 result,
@@ -3721,8 +3796,10 @@ def iomaker_fetch_results(
             if vr2.get("success"):
                 for key in (
                     "vasp_results_dir",
+                    "vasp_csv_path",
                     "vasp_io_report_path",
                     "vasp_pairs_summary_path",
+                    "vasp_area_match_path",
                     "vasp_area_strain_path",
                     "vasp_opt_results_summary_path",
                     "vasp_pairs_best_it_dir",
@@ -3730,23 +3807,6 @@ def iomaker_fetch_results(
                     "vasp_stereographic_interactive_path",
                 ):
                     fr[key] = vr2.get(key)
-                # Overwrite MLIP-only artifacts at export root so opening stereographic.jpg / area_strain
-                # shows DFT-merged plots (fetch copied run_dir files before this step).
-                try:
-                    vasp_dir = vr2.get("vasp_results_dir")
-                    if vasp_dir and os.path.isdir(vasp_dir):
-                        for src_name, dst_name in (
-                            ("stereographic.jpg", "stereographic.jpg"),
-                            ("stereographic_interactive.html", "stereographic_interactive.html"),
-                            ("area_strain", "area_strain"),
-                        ):
-                            src = os.path.join(vasp_dir, src_name)
-                            dst = os.path.join(dest_root, dst_name)
-                            if os.path.isfile(src):
-                                shutil.copy2(src, dst)
-                        fr["merged_stereographic_to_export_root"] = True
-                except Exception as e:
-                    fr["merged_stereographic_to_export_root_error"] = str(e)
             elif vr2.get("error"):
                 fr["vasp_results_error"] = vr2.get("error")
                 if vr2.get("hint"):
@@ -3754,29 +3814,22 @@ def iomaker_fetch_results(
         except Exception as e:
             fr["vasp_results"] = {"success": False, "error": str(e)}
             fr["vasp_results_error"] = str(e)
-        try:
-            vr = iomaker_build_vasp_interface_report(
-                dest_root,
-                result,
-                ref=ref,
-                jf_job_id=jf_job_id,
-                jf_bin=jf_bin,
-                verbose=False,
-            )
-            fr["vasp_interface_report"] = vr
-            if vr.get("success"):
-                fr["vasp_interface_energy_report_path"] = vr.get("vasp_interface_energy_report_path")
-                fr["vasp_interface_energy_plot_path"] = vr.get("vasp_interface_energy_plot_path")
-            elif vr.get("error"):
-                fr["vasp_interface_report_error"] = vr.get("error")
-                if vr.get("hint"):
-                    fr["vasp_interface_report_hint"] = vr.get("hint")
-        except Exception as e:
-            fr["vasp_interface_report"] = {
-                "success": False,
-                "error": str(e),
-            }
-            fr["vasp_interface_report_error"] = str(e)
+        for rel in (
+            "project.jpg",
+            "stereographic.jpg",
+            "stereographic_interactive.html",
+            "unique_matches.jpg",
+            "area_strain",
+            "pairs_best_it",
+        ):
+            p = os.path.join(dest_root, rel)
+            try:
+                if os.path.isdir(p):
+                    shutil.rmtree(p)
+                elif os.path.isfile(p):
+                    os.remove(p)
+            except OSError:
+                pass
     if verbose:
         print("job_id:", task_ref)
         print(" export_dir:", dest_root)
@@ -3786,17 +3839,10 @@ def iomaker_fetch_results(
             print(" summary:", prog.get("stage_summary"))
         if fr.get("vasp_results_dir"):
             print(" vasp_results:", fr.get("vasp_results_dir"))
+        if fr.get("mlip_results_dir"):
+            print(" mlip_results:", fr.get("mlip_results_dir"))
         if fr.get("vasp_stereographic_path"):
             print(" vasp stereographic:", fr.get("vasp_stereographic_path"))
-        if fr.get("merged_stereographic_to_export_root"):
-            print(
-                " note: stereographic.jpg / stereographic_interactive.html / area_strain at export root "
-                "were overwritten with VASP-merged versions (see vasp_results/ for copies)."
-            )
-        if fr.get("vasp_interface_energy_report_path"):
-            print(" vasp_report:", fr.get("vasp_interface_energy_report_path"))
-        if fr.get("vasp_interface_energy_plot_path"):
-            print(" vasp_plot:", fr.get("vasp_interface_energy_plot_path"))
     return fr
 
 
@@ -4759,6 +4805,11 @@ def fetch_interoptimus_task_results(
                 dst = os.path.join(dest_root, fname)
                 shutil.copy2(src, dst)
                 copied_art.append({"from": src, "to": dst, "kind": "file"})
+        for src_path in sorted(Path(rd).glob("all_data*.csv")):
+            if src_path.is_file():
+                dst = os.path.join(dest_root, src_path.name)
+                shutil.copy2(str(src_path), dst)
+                copied_art.append({"from": str(src_path), "to": dst, "kind": "file"})
         if copied_art:
             collected["copied_artifacts"] = copied_art
 

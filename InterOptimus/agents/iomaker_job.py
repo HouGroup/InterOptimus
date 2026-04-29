@@ -553,6 +553,14 @@ def execute_iomaker_pipeline(settings: Dict[str, Any], cfg: BaseBuildConfig, fil
         result['local_workdir'] = os.path.abspath(run_dir)
         result['pairs_summary_path'] = os.path.abspath(os.path.join(run_dir, 'pairs_summary.txt'))
         result['opt_results_pkl'] = os.path.abspath(os.path.join(run_dir, 'opt_results.pkl'))
+        try:
+            from InterOptimus.result_bundle import write_mlip_results_bundle
+            mlip_dir = write_mlip_results_bundle(run_dir)
+            result['mlip_results_dir'] = str(mlip_dir)
+            result['mlip_csv_path'] = str(mlip_dir / 'selected_interfaces.csv')
+            result['mlip_area_match_path'] = str(mlip_dir / 'area_match')
+        except Exception as e:
+            result['mlip_results_error'] = str(e)
     if cfg.submit_target == 'server' and local_workdir_abs:
         result['local_workdir'] = local_workdir_abs
     if cfg.submit_target == 'server':
