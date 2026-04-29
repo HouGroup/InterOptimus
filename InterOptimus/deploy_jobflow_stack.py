@@ -631,6 +631,8 @@ def _write_jfremote_project(
     if m.get("username"):
         store_common["username"] = m["username"]
         store_common["password"] = m["password"]
+        if m.get("auth_source"):
+            store_common["auth_source"] = m["auth_source"]
 
     queue_store = dict(store_common)
     queue_store["collection_name"] = m.get("queue_jobs_collection", "jf_jobs")
@@ -648,6 +650,8 @@ def _write_jfremote_project(
     if m.get("username"):
         gridfs_store["username"] = m["username"]
         gridfs_store["password"] = m["password"]
+        if m.get("auth_source"):
+            gridfs_store["auth_source"] = m["auth_source"]
 
     project = {
         "name": name,
@@ -694,6 +698,8 @@ def _build_jobflow_yaml_for_atomate2(
     if mongo.get("username"):
         docs_store["username"] = mongo["username"]
         docs_store["password"] = mongo["password"]
+        if mongo.get("auth_source"):
+            docs_store["auth_source"] = mongo["auth_source"]
 
     gridfs_store: dict[str, Any] = {
         "type": "GridFSStore",
@@ -705,6 +711,8 @@ def _build_jobflow_yaml_for_atomate2(
     if mongo.get("username"):
         gridfs_store["username"] = mongo["username"]
         gridfs_store["password"] = mongo["password"]
+        if mongo.get("auth_source"):
+            gridfs_store["auth_source"] = mongo["auth_source"]
 
     return {
         "JOB_STORE": {
@@ -872,10 +880,6 @@ def _apply_interactive_config(args: argparse.Namespace) -> None:
                 default=env_pw,
                 secret=True,
             )
-        args.mongo_auth_source = _prompt_text(
-            "MongoDB authSource（用户建在 admin 时填 admin；默认同 database）",
-            default=args.mongo_auth_source or "",
-        ) or None
 
     print("\nStep 2/5: jobflow-remote")
     args.project_name = _prompt_text("jobflow-remote project name", default=args.project_name, required=True)
@@ -1063,6 +1067,8 @@ def main() -> None:
         "username": args.mongo_user,
         "password": mongo_password or "",
     }
+    if args.mongo_auth_source:
+        mongo["auth_source"] = args.mongo_auth_source
 
     _ensure_pymongo_for_mongo_check()
     mongo_errs = verify_mongodb_access(mongo, auth_source=args.mongo_auth_source)
