@@ -973,6 +973,26 @@ def _apply_interactive_config(args: argparse.Namespace) -> None:
             "是否自动下载/补齐 checkpoint",
             default=not args.skip_checkpoint_download,
         )
+        if not args.skip_checkpoint_download:
+            try:
+                from InterOptimus.checkpoints import (
+                    parse_checkpoint_selection,
+                    print_manual_download_help,
+                    probe_checkpoint_download,
+                )
+
+                checkpoint_specs = parse_checkpoint_selection(args.checkpoint_models)
+                ok, msg = probe_checkpoint_download(checkpoint_specs, timeout=args.checkpoint_probe_timeout)
+                if ok:
+                    print(f"Checkpoint 下载连通性检测通过：{msg}")
+                else:
+                    print(f"Checkpoint 自动下载连通性检测失败：{msg}")
+                    print("将跳过自动下载。请按以下地址手动下载后放到目标路径：")
+                    for spec in checkpoint_specs:
+                        print_manual_download_help(spec)
+                    args.skip_checkpoint_download = True
+            except ValueError as exc:
+                print(f"Checkpoint 选择无效：{exc}")
 
     print("\nStep 5/5: shell integration")
     print("将自动安装/补齐 jobflow/jobflow-remote/atomate2 依赖，并更新 ~/.bashrc 中的 JOBFLOW/JFREMOTE 环境变量。")
@@ -1085,6 +1105,12 @@ def main() -> None:
         type=int,
         default=60,
         help="checkpoint 下载单次请求超时秒数",
+    )
+    parser.add_argument(
+        "--checkpoint-probe-timeout",
+        type=int,
+        default=5,
+        help="自动下载 checkpoint 前的快速连通性检测超时秒数；检测失败时跳过自动下载并打印手动下载地址",
     )
     parser.add_argument(
         "--skip-checkpoint-download",
@@ -1219,6 +1245,8 @@ def main() -> None:
         from InterOptimus.checkpoints import (
             download_checkpoints,
             parse_checkpoint_selection,
+            print_manual_download_help,
+            probe_checkpoint_download,
             verify_checkpoints,
         )
 
@@ -1254,8 +1282,16 @@ def main() -> None:
         if args.skip_checkpoint_download:
             print("已跳过 checkpoint 自动下载（--skip-checkpoint-download）；稍后将只校验现有文件。")
         else:
-            print("正在检查/下载 MLIP checkpoints（若失败会打印手动下载地址与目标路径）…")
-            download_checkpoints(checkpoint_specs, timeout=args.checkpoint_timeout, verify_after=False)
+            ok, msg = probe_checkpoint_download(checkpoint_specs, timeout=args.checkpoint_probe_timeout)
+            if not ok:
+                print(f"Checkpoint 自动下载连通性检测失败：{msg}")
+                print("已跳过自动下载。请按以下地址手动下载后放到目标路径：")
+                for spec in checkpoint_specs:
+                    print_manual_download_help(spec)
+            else:
+                print(f"Checkpoint 下载连通性检测通过：{msg}")
+                print("正在检查/下载 MLIP checkpoints（若失败会打印手动下载地址与目标路径）…")
+                download_checkpoints(checkpoint_specs, timeout=args.checkpoint_timeout, verify_after=False)
         print("MLIP checkpoint 校验：")
         verify_checkpoints(checkpoint_specs)
 

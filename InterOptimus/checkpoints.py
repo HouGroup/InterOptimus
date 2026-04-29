@@ -117,6 +117,42 @@ def print_manual_download_help(spec: CheckpointSpec) -> None:
     print(f"    page:   {spec.page_url}")
 
 
+def missing_checkpoint_specs(specs: Iterable[CheckpointSpec]) -> list[CheckpointSpec]:
+    """Return specs whose managed target file is not present."""
+    missing: list[CheckpointSpec] = []
+    for spec in specs:
+        ok, _path = checkpoint_status(spec)
+        if not ok:
+            missing.append(spec)
+    return missing
+
+
+def probe_checkpoint_download(specs: Iterable[CheckpointSpec], *, timeout: int = 5) -> tuple[bool, str]:
+    """
+    Fast network preflight before large checkpoint downloads.
+
+    Only probes the first missing checkpoint URL with a short timeout. This avoids waiting
+    through every large model URL on clusters without external network access.
+    """
+    missing = missing_checkpoint_specs(specs)
+    if not missing:
+        return True, "all selected checkpoints are already present"
+    spec = missing[0]
+    request = urllib.request.Request(
+        spec.url,
+        headers={
+            "User-Agent": "InterOptimus/checkpoints",
+            "Range": "bytes=0-0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            response.read(1)
+        return True, f"{spec.key}: download URL reachable"
+    except (OSError, urllib.error.URLError) as exc:
+        return False, f"{spec.key}: download URL not reachable within {timeout}s ({exc})"
+
+
 def download_checkpoint(spec: CheckpointSpec, *, force: bool = False, timeout: int = 60) -> Path:
     """Download one checkpoint to the InterOptimus checkpoint cache."""
     target = spec.target_path
