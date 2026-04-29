@@ -1,4 +1,5 @@
-<img width="1536" height="1024" alt="interoptimus-logo-3d-interface-titled" src="https://github.com/user-attachments/assets/d07e323b-af33-4f6f-8cc5-bf6926871605" />
+
+<img width="2752" height="1536" alt="InterOptimus" src="https://github.com/user-attachments/assets/0934d4f7-56d5-41bd-b71d-c1137920d19e" />
 
 # InterOptimus
 
@@ -33,14 +34,52 @@ pip install -e .
 
 See **[GETTING_STARTED](https://github.com/HouGroup/InterOptimus/blob/HEAD/docs/GETTING_STARTED.md)** for first-time server setup (MongoDB, jobflow-remote, POTCAR, MLIP checkpoints). Links use `HEAD` so they stay valid on the PyPI project description and on GitHub.
 
+## First-Time Server Configuration
+
+On a login node, start with the guided setup:
+
+```bash
+# 1) Check what is already configured and what is missing.
+itom doctor
+
+# 2) Fill in MongoDB / jobflow-remote / atomate2 / MLIP settings step by step.
+itom config --interactive
+
+# 3) Re-check after the wizard finishes.
+itom doctor
+```
+
+The interactive wizard writes `~/.jobflow.yaml`, `~/.atomate2.yaml`, `~/.jfremote/<project>.yaml`, and can update `~/.bashrc` with the needed `JOBFLOW_*` / `JFREMOTE_*` variables. It uses the currently activated conda installation for worker `pre_run` commands, so run it after `conda activate <your-env>`.
+
+If you want the MLIP workers, answer yes when the wizard asks about `orb/dpa/matris/sevenn` workers. The same setup can also be run non-interactively:
+
+```bash
+itom config --mongo-db <db-name> --mongo-user <user> --with-mlip-workers
+```
+
+Checkpoint handling is included. `itom config --interactive` / `itom config --with-mlip-workers` will try to download ORB, SevenNet, DPA, and MatRIS checkpoints into `~/.cache/InterOptimus/checkpoints` (or `INTEROPTIMUS_CHECKPOINT_DIR`). If a download fails, it prints the direct URL and target path so you can download manually, then verify with:
+
+```bash
+itom checkpoints verify
+itom checkpoints download sevenn        # download one missing checkpoint
+itom checkpoints download all           # download all known checkpoints
+```
+
+After configuration, start or restart jobflow-remote if needed:
+
+```bash
+jf runner start      # first time
+jf runner restart    # after changing worker config
+```
+
 ## Quick start (recommended)
 
 ```bash
-# 1) Copy and edit paths / cluster / workers
+# 1) Configure the server once (see section above), then copy and edit a workflow file.
 cp InterOptimus/agents/simple_iomaker.example.json my_run.json
 vim my_run.json
 
-# 2) On the login node, after JOBFLOW / JFREMOTE / conda are configured:
+# 2) Submit from the login node.
 interoptimus-simple -c my_run.json
 ```
 
@@ -85,7 +124,7 @@ The web UI drives the same `run_simple_iomaker` pipeline as the CLI; session dir
 
 - Python ≥ 3.10
 - Core stack: `pymatgen`, `interfacemaster`, `atomate2`, `jobflow`, `jobflow-remote`, `qtoolkit`, … (see `setup.py`)
-- MLIP stack (optional): provision conda envs and jobflow-remote workers with **`itom config --with-mlip-workers`** (see **[GETTING_STARTED](docs/GETTING_STARTED.md)**), or install `torch`, `orb-models`, `sevenn`, and `deepmd-kit` manually into the Python env that runs MLIP. **MatRIS** is not on PyPI; install from the upstream project if you use `calc=matris`.
+- MLIP stack (optional): provision conda envs, jobflow-remote workers, and checkpoints with **`itom config --interactive`** or **`itom config --with-mlip-workers`** (see **[GETTING_STARTED](docs/GETTING_STARTED.md)**), or install `torch`, `orb-models`, `sevenn`, and `deepmd-kit` manually into the Python env that runs MLIP. **MatRIS** is not on PyPI; install from the upstream project if you use `calc=matris`.
 
 ## Layout
 
