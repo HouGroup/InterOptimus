@@ -1,5 +1,4 @@
-
-<img width="2752" height="1536" alt="InterOptimus" src="https://github.com/user-attachments/assets/0934d4f7-56d5-41bd-b71d-c1137920d19e" />
+<img width="1536" height="1024" alt="interoptimus-logo-3d-interface-titled" src="https://github.com/user-attachments/assets/b0d7eb6f-458b-4dc7-b67c-6bbe9da5adf8" />
 
 # InterOptimus
 
