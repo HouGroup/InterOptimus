@@ -13,7 +13,9 @@ def main() -> None:
         print(
             "usage: itom <command> [options]\n\n"
             "commands:\n"
-            "  config    configure jobflow, jobflow-remote, atomate2, and MongoDB\n\n"
+            "  config       configure jobflow, jobflow-remote, atomate2, MongoDB, and checkpoints\n"
+            "  checkpoints  download or verify MLIP checkpoints\n"
+            "  doctor       check what is already configured and what is missing\n\n"
             "Run `itom config --help` for configuration options."
         )
         return
@@ -24,6 +26,18 @@ def main() -> None:
 
         sys.argv = [f"{sys.argv[0]} config", *argv[1:]]
         config_main()
+        return
+    if command == "checkpoints":
+        from InterOptimus.checkpoints import main as checkpoints_main
+
+        sys.argv = [f"{sys.argv[0]} checkpoints", *argv[1:]]
+        checkpoints_main()
+        return
+    if command == "doctor":
+        from InterOptimus.doctor import main as doctor_main
+
+        sys.argv = [f"{sys.argv[0]} doctor", *argv[1:]]
+        doctor_main()
         return
 
     print(f"ERROR: unknown command: {command}", file=sys.stderr)

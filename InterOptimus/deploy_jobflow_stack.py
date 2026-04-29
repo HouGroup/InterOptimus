@@ -7,7 +7,7 @@ pymatgen / POTCAR（pmg、~/.pmgrc.yaml）请自行配置，本脚本不处理�
 （便于计算节点连 Mongo）；若只有 127.0.0.1 监听则退回 localhost，此时可显式传入 --mongo-host。
 
 可选 --with-mlip-workers：在当前 conda 环境 pip install -e 安装 InterOptimus，并创建 conda 环境 orb / dpa / matris / sevenn，
-在 jobflow-remote 当前项目中增加同名 local worker（pre_run 为 module load conda + conda activate）。Runner 若已在运行需 jf runner restart。
+在 jobflow-remote 当前项目中增加同名 local worker（pre_run 使用当前 conda 命令并 conda activate）。Runner 若已在运行需 jf runner restart。
 InterOptimus / MatRIS 默认在 ~/software 下自动查找文件名分别含 InterOptimus、matris 的 .zip（不区分大小写，取修改时间最新）；也可用 --interoptimus-dir / --matris-local 等指定目录或压缩包。
 MatRIS 优先顺序：--matris-local → 环境变量 INTEROPTIMUS_MATRIS_LOCAL / MATRIS_LOCAL_PACKAGE → ~/software 中含 matris 的 .zip（自动）→ InterOptimus 同级/子目录 MatRIS；否则再从 git 安装。
 
@@ -19,8 +19,7 @@ MatRIS 优先顺序：--matris-local → 环境变量 INTEROPTIMUS_MATRIS_LOCAL 
 脚本在写入任何配置前会先检测 MongoDB：连接、ping、在目标库列举集合并做一次探针写入/删除，以确认凭据可用且具备读写权限（缺 pymongo 时会自动 pip 安装后再检测）。
 
 jobflow-remote 默认项目名为 std（写入 ~/.jfremote/std.yaml，可用 --project-name 覆盖），
-默认仅一个 local worker，pre_run 为「module load conda」+「conda activate 当前环境」
-（需在已 conda activate 的 shell 下运行本脚本；可用 --conda-module 指定 module 名）。
+默认仅一个 local worker，pre_run 会使用当前已激活 conda 环境中的 conda 命令并 activate 当前环境。
 
 仅检测（不写入）:
   export INTEROPTIMUS_MONGO_PASSWORD=htp_test
@@ -158,6 +157,9 @@ def _resolve_interoptimus_install_root(cli: Path | None) -> tuple[Path, str]:
                 _die(f"目录中未找到 setup.py / pyproject.toml: {p}")
             return p, f"指定目录: {p}"
         _die(f"--interoptimus-dir 必须是目录或 .zip 文件: {p}")
+    source_root = _SCRIPT_DIR.parent
+    if (source_root / "setup.py").is_file() or (source_root / "pyproject.toml").is_file():
+        return source_root.resolve(), f"当前 InterOptimus 源码目录: {source_root.resolve()}"
     z = discover_software_zip("interoptimus")
     if z is None:
         _die(
@@ -398,26 +400,29 @@ def _resolve_conda_env_name() -> str | None:
     return p.name
 
 
-def _conda_worker_pre_run(*, conda_module: str) -> str:
-    """与安装时相同的 conda 环境：先 module load，再 conda activate。"""
+def _conda_hook_line() -> str:
+    conda_exe = os.environ.get("CONDA_EXE") or shutil.which("conda") or "conda"
+    return f'eval "$({shlex.quote(conda_exe)} shell.bash hook)"'
+
+
+def _conda_worker_pre_run() -> str:
+    """与安装时相同的 conda 环境：使用当前可用 conda 命令再 activate。"""
     if not os.environ.get("CONDA_PREFIX"):
         return ""
     env_name = _resolve_conda_env_name()
     if not env_name:
         return ""
     lines = [
-        f"module load {shlex.quote(conda_module)}",
-        'eval "$(conda shell.bash hook)"',
+        _conda_hook_line(),
         f"conda activate {shlex.quote(env_name)}",
     ]
     return "\n".join(lines)
 
 
-def _conda_activate_pre_run(env_name: str, *, conda_module: str) -> str:
-    """指定 conda 环境：module load + conda activate（与 _conda_worker_pre_run 同结构）。"""
+def _conda_activate_pre_run(env_name: str) -> str:
+    """指定 conda 环境：使用当前可用 conda 命令再 activate。"""
     lines = [
-        f"module load {shlex.quote(conda_module)}",
-        'eval "$(conda shell.bash hook)"',
+        _conda_hook_line(),
         f"conda activate {shlex.quote(env_name)}",
     ]
     return "\n".join(lines)
@@ -545,7 +550,6 @@ def _warn_runner_restart_if_needed(project_name: str) -> None:
 def _build_jfremote_workers(
     *,
     base_work_dir: Path,
-    conda_module: str,
     default_worker_name: str,
     default_pre_run: str,
     with_mlip_workers: bool,
@@ -568,7 +572,7 @@ def _build_jfremote_workers(
                 "type": "local",
                 "scheduler_type": "slurm",
                 "work_dir": str(subdir.resolve()),
-                "pre_run": _conda_activate_pre_run(env, conda_module=conda_module),
+                "pre_run": _conda_activate_pre_run(env),
             }
     return workers
 
@@ -800,6 +804,131 @@ def verify_configuration(
     return errors
 
 
+def _prompt_text(
+    prompt: str,
+    *,
+    default: str | None = None,
+    required: bool = False,
+    secret: bool = False,
+) -> str:
+    suffix = f" [{default}]" if default not in (None, "") else ""
+    while True:
+        if secret:
+            value = getpass.getpass(f"{prompt}{suffix}: ")
+        else:
+            value = input(f"{prompt}{suffix}: ")
+        value = value.strip()
+        if not value and default is not None:
+            value = str(default)
+        if value or not required:
+            return value
+        print("此项必填。")
+
+
+def _prompt_bool(prompt: str, *, default: bool) -> bool:
+    suffix = "Y/n" if default else "y/N"
+    while True:
+        value = input(f"{prompt} [{suffix}]: ").strip().lower()
+        if not value:
+            return default
+        if value in {"y", "yes", "是", "true", "1"}:
+            return True
+        if value in {"n", "no", "否", "false", "0"}:
+            return False
+        print("请输入 y 或 n。")
+
+
+def _prompt_int(prompt: str, *, default: int) -> int:
+    while True:
+        raw = _prompt_text(prompt, default=str(default), required=True)
+        try:
+            return int(raw)
+        except ValueError:
+            print("请输入整数。")
+
+
+def _apply_interactive_config(args: argparse.Namespace) -> None:
+    print("InterOptimus 交互式配置向导")
+    print("此向导会先询问必要信息，再复用 itom config 的自动部署流程写入配置。")
+    print()
+    try:
+        from InterOptimus.doctor import run_doctor
+
+        run_doctor(project_name=args.project_name, check_runner=False, suggest_interactive=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"预检未能完整运行，继续进入配置向导: {exc}")
+    print()
+
+    print("Step 1/5: MongoDB")
+    args.mongo_host = _prompt_text("MongoDB host（auto 会尝试检测本机 mongod）", default=args.mongo_host or "auto")
+    args.mongo_port = _prompt_int("MongoDB port", default=args.mongo_port)
+    args.mongo_db = _prompt_text("MongoDB database", default=args.mongo_db, required=True)
+    args.mongo_user = _prompt_text("MongoDB user（无认证可留空）", default=args.mongo_user or "")
+    if args.mongo_user:
+        if args.mongo_password is None:
+            env_pw = os.environ.get("INTEROPTIMUS_MONGO_PASSWORD")
+            args.mongo_password = _prompt_text(
+                "MongoDB password（留空使用 INTEROPTIMUS_MONGO_PASSWORD）",
+                default=env_pw,
+                secret=True,
+            )
+        args.mongo_auth_source = _prompt_text(
+            "MongoDB authSource（用户建在 admin 时填 admin；默认同 database）",
+            default=args.mongo_auth_source or "",
+        ) or None
+
+    print("\nStep 2/5: jobflow-remote")
+    args.project_name = _prompt_text("jobflow-remote project name", default=args.project_name, required=True)
+    args.jf_worker_name = _prompt_text("default worker name", default=args.jf_worker_name, required=True)
+    args.work_dir = Path(_prompt_text("worker work dir", default=str(args.work_dir), required=True)).expanduser()
+
+    print("\nStep 3/5: atomate2 / VASP")
+    args.vasp_cmd = _prompt_text("VASP_CMD（暂不用 VASP 也可保留默认）", default=args.vasp_cmd, required=True)
+    scratch = _prompt_text("CUSTODIAN_SCRATCH_DIR（可留空）", default=str(args.custodian_scratch_dir or ""))
+    args.custodian_scratch_dir = Path(scratch).expanduser() if scratch else None
+
+    print("\nStep 4/5: MLIP workers and checkpoints")
+    args.with_mlip_workers = _prompt_bool("是否配置 orb/dpa/matris/sevenn MLIP workers", default=args.with_mlip_workers)
+    if args.with_mlip_workers:
+        install_mlip = _prompt_bool("是否创建/安装 MLIP conda 环境（会比较耗时）", default=not args.skip_mlip_conda)
+        args.skip_mlip_conda = not install_mlip
+        if not args.skip_mlip_conda:
+            src_default = str(args.interoptimus_dir) if args.interoptimus_dir else str(_SCRIPT_DIR.parent)
+            src = _prompt_text("InterOptimus 源码目录或 zip", default=src_default, required=True)
+            args.interoptimus_dir = Path(src).expanduser()
+            matris = _prompt_text("MatRIS 本地包/源码路径（可留空，找不到时从 git 安装）", default=str(args.matris_local or ""))
+            args.matris_local = Path(matris).expanduser() if matris else None
+        args.checkpoint_models = _prompt_text(
+            "需要下载/校验的 checkpoint（all 或 orb,sevenn,dpa,matris）",
+            default=args.checkpoint_models,
+            required=True,
+        )
+        args.skip_checkpoint_download = not _prompt_bool(
+            "是否自动下载/补齐 checkpoint",
+            default=not args.skip_checkpoint_download,
+        )
+
+    print("\nStep 5/5: shell integration")
+    args.skip_install = not _prompt_bool(
+        "是否安装/补齐 jobflow/jobflow-remote/atomate2 依赖（会执行 pip install）",
+        default=not args.skip_install,
+    )
+    args.skip_bashrc = not _prompt_bool("是否更新 ~/.bashrc 中的 JOBFLOW/JFREMOTE 环境变量", default=not args.skip_bashrc)
+
+    print("\n配置摘要")
+    print(f"  MongoDB: {args.mongo_host}:{args.mongo_port} / {args.mongo_db} user={args.mongo_user or '(none)'}")
+    print(f"  project: {args.project_name}, worker: {args.jf_worker_name}, work_dir: {args.work_dir}")
+    print(f"  VASP_CMD: {args.vasp_cmd}")
+    print(f"  MLIP workers: {'yes' if args.with_mlip_workers else 'no'}")
+    if args.with_mlip_workers:
+        print(f"  MLIP conda install: {'no' if args.skip_mlip_conda else 'yes'}")
+        print(f"  checkpoints: {args.checkpoint_models}, download={'no' if args.skip_checkpoint_download else 'yes'}")
+    print(f"  install Python deps: {'no' if args.skip_install else 'yes'}")
+    print(f"  update ~/.bashrc: {'no' if args.skip_bashrc else 'yes'}")
+    if not _prompt_bool("确认开始写入配置并执行安装/校验", default=True):
+        raise SystemExit("已取消。")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="在登录节点一键部署 jobflow + jobflow-remote + atomate2（不含 pymatgen/POTCAR）"
@@ -810,7 +939,7 @@ def main() -> None:
         help="MongoDB 主机名或 IP；默认 auto=在登录节点用 ss 检测本机 mongod 监听（非 127.0.0.1 优先）",
     )
     parser.add_argument("--mongo-port", type=int, default=27017)
-    parser.add_argument("--mongo-db", required=True, help="MongoDB 数据库名，例如 htp_test")
+    parser.add_argument("--mongo-db", default=None, help="MongoDB 数据库名，例如 htp_test")
     parser.add_argument("--mongo-user", default="", help="可为空（无认证）")
     parser.add_argument(
         "--mongo-password",
@@ -834,8 +963,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--conda-module",
-        default="conda",
-        help="worker pre_run 中 `module load` 的模块名（集群上 conda 的 module 名）",
+        default=None,
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--jf-worker-name",
@@ -864,10 +993,27 @@ def main() -> None:
     parser.add_argument("--upgrade-packages", action="store_true", help="pip install --upgrade")
     parser.add_argument("--skip-bashrc", action="store_true", help="不修改 ~/.bashrc（仍写入配置文件）")
     parser.add_argument("--verify-only", action="store_true", help="仅检测，不写配置")
+    parser.add_argument("--interactive", "-i", action="store_true", help="逐步检测并询问缺失配置")
     parser.add_argument(
         "--with-mlip-workers",
         action="store_true",
-        help="安装 InterOptimus（可编辑）并配置 orb/dpa/matris/sevenn 四个 MLIP conda 环境与 jfremote worker",
+        help="安装 InterOptimus（可编辑）并配置 orb/dpa/matris/sevenn 四个 MLIP conda 环境、checkpoint 与 jfremote worker",
+    )
+    parser.add_argument(
+        "--checkpoint-models",
+        default="all",
+        help="与 --with-mlip-workers 联用：下载/校验 checkpoint，all 或逗号分隔 orb,sevenn,dpa,matris",
+    )
+    parser.add_argument(
+        "--checkpoint-timeout",
+        type=int,
+        default=60,
+        help="checkpoint 下载单次请求超时秒数",
+    )
+    parser.add_argument(
+        "--skip-checkpoint-download",
+        action="store_true",
+        help="与 --with-mlip-workers 联用：不自动下载 checkpoint，只在最后提示校验状态",
     )
     parser.add_argument(
         "--interoptimus-dir",
@@ -889,8 +1035,15 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if args.interactive:
+        _apply_interactive_config(args)
+
     if args.skip_mlip_conda and not args.with_mlip_workers:
         parser.error("--skip-mlip-conda 需与 --with-mlip-workers 同时使用")
+    if args.skip_checkpoint_download and not args.with_mlip_workers:
+        parser.error("--skip-checkpoint-download 需与 --with-mlip-workers 同时使用")
+    if not args.mongo_db:
+        parser.error("--mongo-db is required unless provided through --interactive")
 
     mongo_host = args.mongo_host
     if mongo_host == "auto":
@@ -959,12 +1112,12 @@ def main() -> None:
         atomate2_cfg["CUSTODIAN_SCRATCH_DIR"] = str(args.custodian_scratch_dir.expanduser().resolve())
     _write_atomate2_yaml(atomate2_cfg)
 
-    pre_run = _conda_worker_pre_run(conda_module=args.conda_module)
+    pre_run = _conda_worker_pre_run()
     if not pre_run:
         print(
             "警告: 当前进程未检测到 conda 环境（无 CONDA_PREFIX）。"
             "worker pre_run 将回退为 venv 的 source …/activate；"
-            "若需在作业里 module load conda，请在已 conda activate 的环境中重新运行本脚本。"
+            "建议先 conda activate 目标环境后重新运行本脚本。"
         )
         pre_run = _venv_pre_run()
 
@@ -974,7 +1127,19 @@ def main() -> None:
     args.work_dir.mkdir(parents=True, exist_ok=True)
 
     with_mlip_workers = args.with_mlip_workers
+    checkpoint_specs = []
     if with_mlip_workers:
+        from InterOptimus.checkpoints import (
+            download_checkpoints,
+            parse_checkpoint_selection,
+            verify_checkpoints,
+        )
+
+        try:
+            checkpoint_specs = parse_checkpoint_selection(args.checkpoint_models)
+        except ValueError as exc:
+            parser.error(str(exc))
+
         if not _conda_exe_or_none():
             _die("--with-mlip-workers 需要 conda 在 PATH 中（登录节点先 conda activate）")
         if not args.skip_mlip_conda:
@@ -991,10 +1156,16 @@ def main() -> None:
             print(
                 "已跳过当前环境的 InterOptimus pip 与 MLIP conda（--skip-mlip-conda），仅写入 worker 配置"
             )
+        if args.skip_checkpoint_download:
+            print("已跳过 checkpoint 自动下载（--skip-checkpoint-download）；稍后将只校验现有文件。")
+        else:
+            print("正在检查/下载 MLIP checkpoints（若失败会打印手动下载地址与目标路径）…")
+            download_checkpoints(checkpoint_specs, timeout=args.checkpoint_timeout)
+        print("MLIP checkpoint 校验：")
+        verify_checkpoints(checkpoint_specs)
 
     workers = _build_jfremote_workers(
         base_work_dir=args.work_dir,
-        conda_module=args.conda_module,
         default_worker_name=args.jf_worker_name,
         default_pre_run=pre_run,
         with_mlip_workers=with_mlip_workers,
@@ -1039,6 +1210,8 @@ def main() -> None:
     )
     if with_mlip_workers:
         print("  MLIP workers: 已在 jfremote 中配置 orb, dpa, matris, sevenn（conda 环境同名）")
+        if checkpoint_specs:
+            print("  MLIP checkpoints: 已执行下载尝试与校验；可随时运行 `itom checkpoints verify` 复查")
     print("首次使用 jobflow-remote 时如需初始化数据库，请在确认无重要数据后执行: jf admin reset")
 
 
