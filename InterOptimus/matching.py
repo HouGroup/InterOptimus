@@ -6,13 +6,13 @@ between crystal structures using pymatgen's SubstrateAnalyzer. It includes
 symmetry analysis to identify equivalent matches and terminations.
 """
 
-from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
+from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer, SubstrateMatch
 from pymatgen.analysis.interfaces import CoherentInterfaceBuilder
 from InterOptimus.equi_term import get_non_identical_slab_pairs, co_point_group_operations
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces.zsl import ZSLGenerator, ZSLMatch, reduce_vectors
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-from interfacemaster.cellcalc import get_primitive_hkl
+from interfacemaster.cellcalc import get_primitive_hkl, get_pri_vec_inplane
 from interfacemaster.hetero_searching import round_int, apply_function_to_array, \
 float_to_rational, rational_to_float, get_rational_mtx, plane_set_transform, plane_set
 from numpy import *
@@ -32,12 +32,184 @@ from numpy.typing import ArrayLike
 
 from collections.abc import Sequence
 import itertools
+import warnings
 from pymatgen.core.surface import _is_in_miller_family
 
 import re
 import json
 import builtins
 from pathlib import Path
+
+
+def _match_area_value(match) -> float:
+    try:
+        return float(match.match_area)
+    except Exception:
+        return float(get_area_match(match))
+
+
+def _match_vector_distance(match_a, match_b) -> float:
+    """Small score for choosing a CIB-native ZSL match closest to a SubstrateAnalyzer match."""
+    score = 0.0
+    for attr in ("film_sl_vectors", "substrate_sl_vectors"):
+        try:
+            a = np.asarray(getattr(match_a, attr), dtype=float)
+            b = np.asarray(getattr(match_b, attr), dtype=float)
+            if a.shape == b.shape:
+                score += float(np.linalg.norm(a - b))
+            else:
+                score += 1e6
+        except Exception:
+            score += 1e6
+    try:
+        score += abs(_match_area_value(match_a) - _match_area_value(match_b))
+    except Exception:
+        pass
+    return score
+
+
+def _cib_match_can_build_interface(cib, match, *, termination=None, substrate_thickness=3, film_thickness=3) -> bool:
+    old_matches = list(getattr(cib, "zsl_matches", []))
+    try:
+        cib.zsl_matches = [match]
+        term = termination if termination is not None else cib.terminations[0]
+        next(
+            iter(
+                cib.get_interfaces(
+                    termination=term,
+                    substrate_thickness=substrate_thickness,
+                    film_thickness=film_thickness,
+                    vacuum_over_film=10,
+                    gap=1,
+                )
+            )
+        )
+        return True
+    except Exception:
+        return False
+    finally:
+        cib.zsl_matches = old_matches
+
+
+def set_cib_compatible_zsl_match(
+    cib,
+    desired_match,
+    *,
+    termination=None,
+    substrate_thickness=3,
+    film_thickness=3,
+    warn: bool = True,
+):
+    """
+    Configure ``cib.zsl_matches`` with a match compatible with this CIB's slab basis.
+
+    ``SubstrateAnalyzer`` and ``CoherentInterfaceBuilder`` build surface bases through
+    different ``SlabGenerator`` paths. Newer pymatgen-core versions can make a
+    ``SubstrateAnalyzer`` match singular when injected directly into CIB. Prefer the
+    desired match when it works; otherwise pick the closest CIB-native match.
+    """
+    if _cib_match_can_build_interface(
+        cib,
+        desired_match,
+        termination=termination,
+        substrate_thickness=substrate_thickness,
+        film_thickness=film_thickness,
+    ):
+        cib.zsl_matches = [desired_match]
+        return desired_match
+
+    native_matches = list(getattr(cib, "zsl_matches", []))
+    ranked = sorted(native_matches, key=lambda match: _match_vector_distance(desired_match, match))
+    for candidate in ranked:
+        if _cib_match_can_build_interface(
+            cib,
+            candidate,
+            termination=termination,
+            substrate_thickness=substrate_thickness,
+            film_thickness=film_thickness,
+        ):
+            cib.zsl_matches = [candidate]
+            if warn:
+                warnings.warn(
+                    "SubstrateAnalyzer ZSLMatch is not compatible with CoherentInterfaceBuilder "
+                    "in this pymatgen-core version; using the closest CIB-native ZSLMatch instead.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            return candidate
+
+    cib.zsl_matches = [desired_match]
+    return desired_match
+
+
+def get_cib_compatible_match(substrate, film, desired_match, *, termination_ftol=0.1, warn: bool = False):
+    """Return a ZSLMatch compatible with CoherentInterfaceBuilder for this Miller pair."""
+    cib = CoherentInterfaceBuilder(
+        film_structure=film,
+        substrate_structure=substrate,
+        film_miller=desired_match.film_miller,
+        substrate_miller=desired_match.substrate_miller,
+        zslgen=SubstrateAnalyzer(max_area=200),
+        termination_ftol=termination_ftol,
+        label_index=True,
+        filter_out_sym_slabs=False,
+    )
+    compatible = set_cib_compatible_zsl_match(cib, desired_match, warn=warn)
+    if compatible is desired_match:
+        return desired_match
+    return SubstrateMatch.from_zsl(
+        match=compatible,
+        film=film,
+        film_miller=desired_match.film_miller,
+        substrate_miller=desired_match.substrate_miller,
+        ground_state_energy=getattr(desired_match, "ground_state_energy", 0),
+    )
+
+
+class CIBConsistentSubstrateAnalyzer(SubstrateAnalyzer):
+    """
+    SubstrateAnalyzer variant that uses the same slab basis as CoherentInterfaceBuilder.
+
+    Pymatgen's default SubstrateAnalyzer builds matching vectors from
+    ``SlabGenerator(..., primitive=False).oriented_unit_cell``. CIB later builds
+    interfaces from ``SlabGenerator(..., primitive=True, in_unit_planes=True,
+    center_slab=True, reorient_lattice=False).get_slab()``. In newer pymatgen-core
+    versions those bases can diverge enough that a SubstrateAnalyzer match is not
+    an integer supercell of CIB's slab. Generate matching vectors from the CIB basis
+    directly so matching, reporting, and interface generation share one convention.
+    The primitive in-plane basis is computed analytically with interfacemaster
+    instead of materializing slabs for every Miller index.
+    """
+
+    def generate_surface_vectors(
+        self,
+        film: Structure,
+        substrate: Structure,
+        film_millers: ArrayLike,
+        substrate_millers: ArrayLike,
+    ):
+        vector_sets = []
+        film_lattice = film.lattice.matrix.T
+        substrate_lattice = substrate.lattice.matrix.T
+
+        def _cib_surface_vectors(structure, miller):
+            lattice = film_lattice if structure is film else substrate_lattice
+            return get_pri_vec_inplane(np.asarray(miller, dtype=int), lattice).T
+
+        film_vector_sets = [
+            (_cib_surface_vectors(film, f_miller), f_miller)
+            for f_miller in film_millers
+        ]
+        substrate_vector_sets = [
+            (_cib_surface_vectors(substrate, s_miller), s_miller)
+            for s_miller in substrate_millers
+        ]
+
+        for film_vectors, f_miller in film_vector_sets:
+            for substrate_vectors, s_miller in substrate_vector_sets:
+                vector_sets.append((film_vectors, substrate_vectors, f_miller, s_miller))
+
+        return vector_sets
 
 
 def get_symmetrically_equivalent_miller_indices(
@@ -237,18 +409,27 @@ class equi_match_identifier:
         matches = [match_1, match_2]
         its = []
         for i in range(2):
-            cib = CoherentInterfaceBuilder(film_structure=self.film,
-                                   substrate_structure=self.substrate,
-                                   film_miller=matches[i].film_miller,
-                                   substrate_miller=matches[i].substrate_miller,
-                                   zslgen=SubstrateAnalyzer(max_area=200), termination_ftol=0.1, label_index=True,\
-                                   filter_out_sym_slabs=False)
-            #print(cib.terminations)
-            cib.zsl_matches = [matches[i]]
-            its.append(list(cib.get_interfaces(termination = cib.terminations[0], substrate_thickness = 3,
-                                                           film_thickness = 3,
-                                                           vacuum_over_film=10,
-                                                           gap=1))[0])
+            try:
+                cib = CoherentInterfaceBuilder(film_structure=self.film,
+                                       substrate_structure=self.substrate,
+                                       film_miller=matches[i].film_miller,
+                                       substrate_miller=matches[i].substrate_miller,
+                                       zslgen=SubstrateAnalyzer(max_area=200), termination_ftol=0.1, label_index=True,\
+                                       filter_out_sym_slabs=False)
+                #print(cib.terminations)
+                set_cib_compatible_zsl_match(cib, matches[i], warn=False)
+                its.append(list(cib.get_interfaces(termination = cib.terminations[0], substrate_thickness = 3,
+                                                               film_thickness = 3,
+                                                               vacuum_over_film=10,
+                                                               gap=1))[0])
+            except Exception as exc:
+                warnings.warn(
+                    "Skipping structure-based match equivalence check because pymatgen failed "
+                    f"to build a temporary interface ({type(exc).__name__}: {exc}).",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                return False
         return matcher.fit(its[0], its[1])
 
 def get_cos(v1, v2):
@@ -995,7 +1176,7 @@ class EquiMatchSorter:
         ax2.bar(x_pos + width/2 + offset, array(y2)*100, width, alpha=0.6, label='strain', color ='C01')
 
         ax1.set_xlabel('Type', fontsize = 30)
-        ax1.set_ylabel('Matching area ($\mathregular{\AA}^2$)', color='C00', fontsize = 30)
+        ax1.set_ylabel(r'Matching area ($\mathregular{\AA}^2$)', color='C00', fontsize = 30)
         ax2.set_ylabel('Strain (%)', color='C01', fontsize = 30)
 
         ax1.set_xticks(x_pos)

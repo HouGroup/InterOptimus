@@ -6,7 +6,12 @@ including gradient descent algorithms, interface structure generation,
 and scoring functions for interface quality assessment.
 """
 
-from InterOptimus.matching import interface_searching, EquiMatchSorter
+from InterOptimus.matching import (
+    CIBConsistentSubstrateAnalyzer,
+    interface_searching,
+    EquiMatchSorter,
+    set_cib_compatible_zsl_match,
+)
 from pymatgen.transformations.standard_transformations import DeformStructureTransformation
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
 from pymatgen.core.structure import Structure
@@ -371,8 +376,8 @@ class InterfaceWorker:
         film_max_miller (int), substrate_max_miller (int): maximum miller index
         film_millers (None|array), substrate_millers (None|array): specified searching miller indices (optional)
         """
-        sub_analyzer = SubstrateAnalyzer(max_area = max_area, max_length_tol = max_length_tol, max_angle_tol = max_angle_tol,
-                                         film_max_miller = film_max_miller, substrate_max_miller = substrate_max_miller)
+        sub_analyzer = CIBConsistentSubstrateAnalyzer(max_area = max_area, max_length_tol = max_length_tol, max_angle_tol = max_angle_tol,
+                                                     film_max_miller = film_max_miller, substrate_max_miller = substrate_max_miller)
         self.unique_matches, \
         self.equivalent_matches, \
         self.unique_matches_indices_data,\
@@ -512,7 +517,7 @@ class InterfaceWorker:
                                        label_index=True,
                                        filter_out_sym_slabs=False,
                                        )
-        cib.zsl_matches = [self.unique_matches[id]]
+        set_cib_compatible_zsl_match(cib, self.unique_matches[id], warn=True)
         return cib
     
     def get_unique_terminations(self, id):
