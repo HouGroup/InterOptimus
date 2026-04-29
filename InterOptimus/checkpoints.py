@@ -158,6 +158,7 @@ def download_checkpoints(
     *,
     force: bool = False,
     timeout: int = 60,
+    verify_after: bool = True,
 ) -> bool:
     """Download selected checkpoints. Returns True when all are present afterward."""
     ok = True
@@ -168,7 +169,9 @@ def download_checkpoints(
             ok = False
             print(f"警告: {exc}", file=sys.stderr)
             print_manual_download_help(spec)
-    return verify_checkpoints(specs)
+    if verify_after:
+        return verify_checkpoints(specs)
+    return ok
 
 
 def verify_checkpoints(specs: Iterable[CheckpointSpec]) -> bool:

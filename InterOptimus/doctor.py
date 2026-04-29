@@ -165,11 +165,15 @@ def run_doctor(
         _line("MISSING", str(JOBFLOW_YAML), setup_hint)
 
     a2_cfg = _read_yaml(ATOMATE2_YAML)
-    if a2_cfg and a2_cfg.get("VASP_CMD"):
-        _line("OK", str(ATOMATE2_YAML), f"VASP_CMD={a2_cfg.get('VASP_CMD')}")
+    if a2_cfg and a2_cfg.get("VASP_CMD") and a2_cfg.get("VASP_GAMMA_CMD"):
+        _line(
+            "OK",
+            str(ATOMATE2_YAML),
+            f"VASP_CMD={a2_cfg.get('VASP_CMD')}, VASP_GAMMA_CMD={a2_cfg.get('VASP_GAMMA_CMD')}",
+        )
     else:
         all_ok = False
-        _line("MISSING", str(ATOMATE2_YAML), f"{setup_hint}，或手动设置 VASP_CMD")
+        _line("MISSING", str(ATOMATE2_YAML), f"{setup_hint}，或手动设置 VASP_CMD / VASP_GAMMA_CMD")
 
     project_file = JFREMOTE_DIR / f"{project_name}.yaml"
     if project_file.is_file():

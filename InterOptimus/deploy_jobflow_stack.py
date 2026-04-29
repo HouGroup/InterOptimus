@@ -759,6 +759,8 @@ def verify_configuration(
             a2 = yaml.safe_load(ATOMATE2_YAML.read_text()) or {}
             if "VASP_CMD" not in a2:
                 errors.append(f"{ATOMATE2_YAML} 缺少 VASP_CMD")
+            if "VASP_GAMMA_CMD" not in a2:
+                errors.append(f"{ATOMATE2_YAML} 缺少 VASP_GAMMA_CMD")
         except Exception as e:  # noqa: BLE001
             errors.append(f"解析 {ATOMATE2_YAML} 失败: {e}")
 
@@ -868,18 +870,49 @@ def _apply_interactive_config(args: argparse.Namespace) -> None:
     print()
 
     print("Step 1/5: MongoDB")
-    args.mongo_host = _prompt_text("MongoDB host（auto 会尝试检测本机 mongod）", default=args.mongo_host or "auto")
-    args.mongo_port = _prompt_int("MongoDB port", default=args.mongo_port)
-    args.mongo_db = _prompt_text("MongoDB database", default=args.mongo_db, required=True)
-    args.mongo_user = _prompt_text("MongoDB user（无认证可留空）", default=args.mongo_user or "")
-    if args.mongo_user:
-        if args.mongo_password is None:
-            env_pw = os.environ.get("INTEROPTIMUS_MONGO_PASSWORD")
-            args.mongo_password = _prompt_text(
-                "MongoDB password（留空使用 INTEROPTIMUS_MONGO_PASSWORD）",
-                default=env_pw,
-                secret=True,
+    _ensure_pymongo_for_mongo_check()
+    while True:
+        args.mongo_host = _prompt_text("MongoDB host（auto 会尝试检测本机 mongod）", default=args.mongo_host or "auto")
+        args.mongo_port = _prompt_int("MongoDB port", default=args.mongo_port)
+        args.mongo_db = _prompt_text("MongoDB database", default=args.mongo_db, required=True)
+        args.mongo_user = _prompt_text("MongoDB user（无认证可留空）", default=args.mongo_user or "")
+        if args.mongo_user:
+            if args.mongo_password is None:
+                env_pw = os.environ.get("INTEROPTIMUS_MONGO_PASSWORD")
+                args.mongo_password = _prompt_text(
+                    "MongoDB password（留空使用 INTEROPTIMUS_MONGO_PASSWORD）",
+                    default=env_pw,
+                    secret=True,
+                )
+        else:
+            args.mongo_password = None
+
+        test_host = args.mongo_host
+        if test_host == "auto":
+            test_host = detect_mongo_client_host(args.mongo_port)
+            print(f"Mongo host（auto）: {test_host}")
+        test_mongo = {
+            "host": test_host,
+            "port": args.mongo_port,
+            "database": args.mongo_db,
+            "username": args.mongo_user,
+            "password": args.mongo_password or "",
+        }
+        print("正在检测 MongoDB 连接、认证和读写权限…")
+        mongo_errs = verify_mongodb_access(test_mongo, auth_source=args.mongo_auth_source)
+        if not mongo_errs:
+            print(
+                f"MongoDB 检测通过：{test_mongo['host']}:{test_mongo['port']} / 库「{test_mongo['database']}」"
+                "（ping、列举集合、探针读写）"
             )
+            args.mongo_host = test_host
+            break
+        print("MongoDB 检测失败：")
+        for err in mongo_errs:
+            print(f"  - {err}")
+        if not _prompt_bool("是否重新输入 MongoDB 信息", default=True):
+            raise SystemExit("MongoDB 不可用，已取消。")
+        args.mongo_password = None
 
     print("\nStep 2/5: jobflow-remote")
     args.project_name = _prompt_text("jobflow-remote project name", default=args.project_name, required=True)
@@ -888,14 +921,15 @@ def _apply_interactive_config(args: argparse.Namespace) -> None:
 
     print("\nStep 3/5: atomate2 / VASP")
     args.vasp_cmd = _prompt_text("VASP_CMD（暂不用 VASP 也可保留默认）", default=args.vasp_cmd, required=True)
-    scratch = _prompt_text("CUSTODIAN_SCRATCH_DIR（可留空）", default=str(args.custodian_scratch_dir or ""))
-    args.custodian_scratch_dir = Path(scratch).expanduser() if scratch else None
+    args.vasp_gamma_cmd = _prompt_text(
+        "VASP_GAMMA_CMD（gamma-only 任务使用）",
+        default=args.vasp_gamma_cmd,
+        required=True,
+    )
 
     print("\nStep 4/5: MLIP workers and checkpoints")
     args.with_mlip_workers = _prompt_bool("是否配置 orb/dpa/matris/sevenn MLIP workers", default=args.with_mlip_workers)
     if args.with_mlip_workers:
-        install_mlip = _prompt_bool("是否创建/安装 MLIP conda 环境（会比较耗时）", default=not args.skip_mlip_conda)
-        args.skip_mlip_conda = not install_mlip
         if not args.skip_mlip_conda:
             src_default = str(args.interoptimus_dir) if args.interoptimus_dir else str(_SCRIPT_DIR.parent)
             src = _prompt_text("InterOptimus 源码目录或 zip", default=src_default, required=True)
@@ -913,16 +947,15 @@ def _apply_interactive_config(args: argparse.Namespace) -> None:
         )
 
     print("\nStep 5/5: shell integration")
-    args.skip_install = not _prompt_bool(
-        "是否安装/补齐 jobflow/jobflow-remote/atomate2 依赖（会执行 pip install）",
-        default=not args.skip_install,
-    )
-    args.skip_bashrc = not _prompt_bool("是否更新 ~/.bashrc 中的 JOBFLOW/JFREMOTE 环境变量", default=not args.skip_bashrc)
+    print("将自动安装/补齐 jobflow/jobflow-remote/atomate2 依赖，并更新 ~/.bashrc 中的 JOBFLOW/JFREMOTE 环境变量。")
+    args.skip_install = False
+    args.skip_bashrc = False
 
     print("\n配置摘要")
     print(f"  MongoDB: {args.mongo_host}:{args.mongo_port} / {args.mongo_db} user={args.mongo_user or '(none)'}")
     print(f"  project: {args.project_name}, worker: {args.jf_worker_name}, work_dir: {args.work_dir}")
     print(f"  VASP_CMD: {args.vasp_cmd}")
+    print(f"  VASP_GAMMA_CMD: {args.vasp_gamma_cmd}")
     print(f"  MLIP workers: {'yes' if args.with_mlip_workers else 'no'}")
     if args.with_mlip_workers:
         print(f"  MLIP conda install: {'no' if args.skip_mlip_conda else 'yes'}")
@@ -981,10 +1014,15 @@ def main() -> None:
         help="写入 ~/.atomate2.yaml 的 VASP_CMD（并行启动命令视集群自行修改）",
     )
     parser.add_argument(
+        "--vasp-gamma-cmd",
+        default="vasp_gam",
+        help="写入 ~/.atomate2.yaml 的 VASP_GAMMA_CMD（gamma-only VASP 命令）",
+    )
+    parser.add_argument(
         "--custodian-scratch-dir",
         type=Path,
         default=None,
-        help="可选：写入 atomate2 的 CUSTODIAN_SCRATCH_DIR（绝对路径为佳）",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--project-name", default=DEFAULT_PROJECT, help="jobflow-remote 项目名（~/.jfremote/<name>.yaml）")
     parser.add_argument(
@@ -1038,9 +1076,11 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+    interactive_mongo_verified = False
 
     if args.interactive:
         _apply_interactive_config(args)
+        interactive_mongo_verified = True
 
     if args.skip_mlip_conda and not args.with_mlip_workers:
         parser.error("--skip-mlip-conda 需与 --with-mlip-workers 同时使用")
@@ -1070,17 +1110,18 @@ def main() -> None:
     if args.mongo_auth_source:
         mongo["auth_source"] = args.mongo_auth_source
 
-    _ensure_pymongo_for_mongo_check()
-    mongo_errs = verify_mongodb_access(mongo, auth_source=args.mongo_auth_source)
-    if mongo_errs:
-        print("MongoDB 凭据或权限检测失败：", file=sys.stderr)
-        for e in mongo_errs:
-            print(f"  - {e}", file=sys.stderr)
-        raise SystemExit(1)
-    print(
-        f"MongoDB 检测通过：{mongo['host']}:{mongo['port']} / 库「{mongo['database']}」"
-        "（ping、列举集合、探针读写）"
-    )
+    if not interactive_mongo_verified:
+        _ensure_pymongo_for_mongo_check()
+        mongo_errs = verify_mongodb_access(mongo, auth_source=args.mongo_auth_source)
+        if mongo_errs:
+            print("MongoDB 凭据或权限检测失败：", file=sys.stderr)
+            for e in mongo_errs:
+                print(f"  - {e}", file=sys.stderr)
+            raise SystemExit(1)
+        print(
+            f"MongoDB 检测通过：{mongo['host']}:{mongo['port']} / 库「{mongo['database']}」"
+            "（ping、列举集合、探针读写）"
+        )
 
     _ensure_yaml()
 
@@ -1113,7 +1154,10 @@ def main() -> None:
     )
     _write_jobflow_yaml(jobflow_cfg)
 
-    atomate2_cfg: dict[str, Any] = {"VASP_CMD": args.vasp_cmd}
+    atomate2_cfg: dict[str, Any] = {
+        "VASP_CMD": args.vasp_cmd,
+        "VASP_GAMMA_CMD": args.vasp_gamma_cmd,
+    }
     if args.custodian_scratch_dir is not None:
         atomate2_cfg["CUSTODIAN_SCRATCH_DIR"] = str(args.custodian_scratch_dir.expanduser().resolve())
     _write_atomate2_yaml(atomate2_cfg)
@@ -1166,7 +1210,7 @@ def main() -> None:
             print("已跳过 checkpoint 自动下载（--skip-checkpoint-download）；稍后将只校验现有文件。")
         else:
             print("正在检查/下载 MLIP checkpoints（若失败会打印手动下载地址与目标路径）…")
-            download_checkpoints(checkpoint_specs, timeout=args.checkpoint_timeout)
+            download_checkpoints(checkpoint_specs, timeout=args.checkpoint_timeout, verify_after=False)
         print("MLIP checkpoint 校验：")
         verify_checkpoints(checkpoint_specs)
 
