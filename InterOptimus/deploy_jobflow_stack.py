@@ -143,8 +143,8 @@ def _extract_zip_find_pkg_root(zip_path: Path, cache_label: str) -> Path | None:
     return None
 
 
-def _resolve_interoptimus_install_root(cli: Path | None) -> tuple[Path, str]:
-    """返回 InterOptimus 源码根目录（含 setup.py|pyproject.toml）及说明。"""
+def _resolve_interoptimus_install_root(cli: Path | None) -> tuple[Path | None, str]:
+    """返回 InterOptimus 源码根目录；找不到本地源码时回退到 PyPI 包。"""
     if cli is not None:
         p = cli.expanduser().resolve()
         if p.is_file() and p.suffix.lower() == ".zip":
@@ -162,10 +162,7 @@ def _resolve_interoptimus_install_root(cli: Path | None) -> tuple[Path, str]:
         return source_root.resolve(), f"当前 InterOptimus 源码目录: {source_root.resolve()}"
     z = discover_software_zip("interoptimus")
     if z is None:
-        _die(
-            f"未在 {SOFTWARE_DIR} 中找到文件名含 InterOptimus 的 .zip（不区分大小写）；"
-            "请放入压缩包或使用 --interoptimus-dir 指定目录或 zip"
-        )
+        return None, "PyPI 包: InterOptimus（未指定本地源码/zip）"
     root = _extract_zip_find_pkg_root(z, "interoptimus_extract")
     if root is None:
         _die(f"解压 {z} 后未找到 setup.py 或 pyproject.toml")
@@ -189,7 +186,7 @@ def _is_usable_matris_local_path(p: Path) -> bool:
 
 
 def resolve_matris_install_source(
-    interoptimus_src: Path,
+    interoptimus_src: Path | None,
     matris_local_cli: Path | None,
 ) -> tuple[str, str]:
     """
@@ -211,16 +208,17 @@ def resolve_matris_install_source(
     auto_matris = discover_software_zip("matris")
     if auto_matris is not None:
         ordered.append(("~/software 中含 matris 的 .zip（自动）", auto_matris))
-    base = interoptimus_src.expanduser().resolve()
-    ordered.extend(
-        [
-            ("InterOptimus 同级目录 MatRIS", (base.parent / "MatRIS")),
-            ("InterOptimus 同级目录 matris", (base.parent / "matris")),
-            ("InterOptimus 同级目录 MatRIS-main", (base.parent / "MatRIS-main")),
-            ("InterOptimus 同级目录 matris-main", (base.parent / "matris-main")),
-            ("InterOptimus/MatRIS 子目录", (base / "MatRIS")),
-        ]
-    )
+    if interoptimus_src is not None:
+        base = interoptimus_src.expanduser().resolve()
+        ordered.extend(
+            [
+                ("InterOptimus 同级目录 MatRIS", (base.parent / "MatRIS")),
+                ("InterOptimus 同级目录 matris", (base.parent / "matris")),
+                ("InterOptimus 同级目录 MatRIS-main", (base.parent / "MatRIS-main")),
+                ("InterOptimus 同级目录 matris-main", (base.parent / "matris-main")),
+                ("InterOptimus/MatRIS 子目录", (base / "MatRIS")),
+            ]
+        )
     for label, path in ordered:
         if not _is_usable_matris_local_path(path):
             continue
@@ -474,22 +472,22 @@ def _conda_run_pip(env_name: str, pip_args: list[str], **kwargs: Any) -> None:
     subprocess.run(cmd, check=True, text=True, **kwargs)
 
 
-def _install_interoptimus_editable_in_env(env_name: str, src: Path) -> None:
-    """在各 MLIP 环境中以 --no-deps 安装 InterOptimus，避免把其它 MLIP 一并装上。"""
+def _install_interoptimus_in_env(env_name: str, src: Path | None) -> None:
+    """在 MLIP 环境中安装 InterOptimus；本地源码优先，否则从 PyPI 安装。"""
+    if src is None:
+        _conda_run_pip(env_name, ["install", "InterOptimus", "--no-deps"])
+        return
     if not src.is_dir():
         _die(f"InterOptimus 源码目录不存在: {src}")
     setup = src / "setup.py"
     pyproject = src / "pyproject.toml"
     if not setup.is_file() and not pyproject.is_file():
         _die(f"未找到 {src} 下的 setup.py / pyproject.toml")
-    _conda_run_pip(
-        env_name,
-        ["install", "-e", str(src.resolve()), "--no-deps"],
-    )
+    _conda_run_pip(env_name, ["install", "-e", str(src.resolve()), "--no-deps"])
 
 
 def _setup_mlip_conda_envs(
-    interoptimus_src: Path,
+    interoptimus_src: Path | None,
     *,
     python_tag: str,
     matris_local: Path | None,
@@ -509,12 +507,15 @@ def _setup_mlip_conda_envs(
         else:
             for pkg in spec["pip"]:
                 _conda_run_pip(env, ["install", pkg])
-        _install_interoptimus_editable_in_env(env, interoptimus_src)
+        _install_interoptimus_in_env(env, interoptimus_src)
         print(f"MLIP 环境就绪: {env} ({spec['worker']})")
 
 
-def _pip_install_interoptimus_base_env(src: Path) -> None:
-    """在当前 Python 环境安装 InterOptimus（可编辑），便于在登录节点提交/调试。"""
+def _pip_install_interoptimus_base_env(src: Path | None) -> None:
+    """在当前 Python 环境安装 InterOptimus；本地源码优先，否则从 PyPI 安装。"""
+    if src is None:
+        _run([sys.executable, "-m", "pip", "install", "InterOptimus"])
+        return
     if not src.is_dir():
         _die(f"InterOptimus 源码目录不存在: {src}")
     _run([sys.executable, "-m", "pip", "install", "-e", str(src.resolve())])
@@ -931,9 +932,6 @@ def _apply_interactive_config(args: argparse.Namespace) -> None:
     args.with_mlip_workers = _prompt_bool("是否配置 orb/dpa/matris/sevenn MLIP workers", default=args.with_mlip_workers)
     if args.with_mlip_workers:
         if not args.skip_mlip_conda:
-            src_default = str(args.interoptimus_dir) if args.interoptimus_dir else str(_SCRIPT_DIR.parent)
-            src = _prompt_text("InterOptimus 源码目录或 zip", default=src_default, required=True)
-            args.interoptimus_dir = Path(src).expanduser()
             matris = _prompt_text("MatRIS 本地包/源码路径（可留空，找不到时从 git 安装）", default=str(args.matris_local or ""))
             args.matris_local = Path(matris).expanduser() if matris else None
         args.checkpoint_models = _prompt_text(
@@ -1061,7 +1059,7 @@ def main() -> None:
         "--interoptimus-dir",
         type=Path,
         default=None,
-        help="InterOptimus：源码目录或 .zip；默认在 ~/software 中自动查找文件名含 InterOptimus 的 .zip（不区分大小写）",
+        help="高级选项：InterOptimus 源码目录或 .zip；未指定时优先当前源码/~/software zip，否则从 PyPI 安装",
     )
     parser.add_argument(
         "--skip-mlip-conda",
