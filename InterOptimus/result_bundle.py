@@ -1,8 +1,8 @@
 """
 After a successful local run / fetch, populate curated result folders:
 
-- ``mlip_results/``: MLIP-selected interface CSV, ``area_match``, stereographic JPG/HTML.
-- ``vasp_results/``: VASP-valued CSV / ``area_match`` / stereographic JPG/HTML (built elsewhere).
+- ``mlip_results/``: MLIP-selected interface CSV, ``all_match_info``, stereographic JPG/HTML.
+- ``vasp_results/``: VASP-valued CSV / ``all_match_info`` / stereographic JPG/HTML (built elsewhere).
 """
 
 from __future__ import annotations
@@ -310,7 +310,7 @@ def write_mlip_results_bundle(run_dir: os.PathLike[str]) -> Path:
 
     area_src = src / "area_strain"
     if area_src.is_file():
-        shutil.copy2(area_src, out / "area_match")
+        shutil.copy2(area_src, out / "all_match_info")
     for name in ("stereographic.jpg", "stereographic_interactive.html"):
         p = src / name
         if p.is_file():

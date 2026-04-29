@@ -38,18 +38,25 @@ def session_tree_files(workdir: Path, basename: str) -> List[Path]:
 
 
 def pick_artifact_file(workdir: Path, basename: str) -> Optional[Path]:
-    """Pick one file: prefer paths under a ``result`` directory, then newest mtime."""
+    """Pick one file: prefer curated result folders, then newest mtime."""
     cands = session_tree_files(workdir, basename)
     if not cands:
         return None
 
     def sort_key(p: Path) -> tuple:
-        in_result = 0 if "result" in p.parts else 1
+        if "mlip_results" in p.parts:
+            bucket = 0
+        elif "vasp_results" in p.parts:
+            bucket = 1
+        elif "result" in p.parts:
+            bucket = 2
+        else:
+            bucket = 3
         try:
             mt = -p.stat().st_mtime_ns
         except OSError:
             mt = 0
-        return (in_result, mt)
+        return (bucket, mt)
 
     cands.sort(key=sort_key)
     return cands[0]
@@ -105,10 +112,10 @@ def enrich_ok_payload_artifacts(workdir: Path, payload: Dict[str, Any]) -> None:
         payload["artifacts"] = art
 
     mapping = (
+        ("selected_interfaces.csv", "selected_interfaces_csv"),
+        ("all_match_info", "all_match_info"),
         ("stereographic_interactive.html", "stereographic_interactive_html"),
         ("stereographic.jpg", "stereographic_jpg"),
-        ("project.jpg", "project_jpg"),
-        ("io_report.txt", "io_report_txt"),
     )
     for fname, key in mapping:
         cur = art.get(key)
@@ -121,10 +128,10 @@ def enrich_ok_payload_artifacts(workdir: Path, payload: Dict[str, Any]) -> None:
         picked = pick_artifact_file(workdir, fname)
         if picked is not None:
             art[key] = str(picked)
-
-    pb = find_pairs_best_it_dir(workdir)
-    if pb is not None:
-        art["pairs_best_it_dir"] = str(pb)
+    if not art.get("all_match_info"):
+        picked = pick_artifact_file(workdir, "area_match")
+        if picked is not None:
+            art["all_match_info"] = str(picked)
 
     if not art.get("stereographic_interactive_html"):
         notes = payload.get("artifacts_notes")

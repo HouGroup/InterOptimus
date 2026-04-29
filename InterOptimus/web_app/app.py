@@ -435,7 +435,8 @@ async def session_job_log(session_id: str, offset: int = 0) -> JSONResponse:
 @app.get("/api/session/{session_id}/file")
 async def session_file(session_id: str, name: str) -> FileResponse:
     """
-    Serve a single artifact by basename (e.g. ``stereographic_interactive.html``, ``stereographic.jpg``).
+    Serve a single artifact by basename (e.g. ``selected_interfaces.csv``, ``all_match_info``,
+    ``stereographic_interactive.html``, ``stereographic.jpg``).
     Uses ``content_disposition_type=inline`` so HTML opens in the browser / iframe.
     """
     if ".." in session_id or "/" in session_id or "\\" in session_id:
@@ -449,6 +450,10 @@ async def session_file(session_id: str, name: str) -> FileResponse:
         media = "text/html; charset=utf-8"
     elif low.endswith(".jpg") or low.endswith(".jpeg"):
         media = "image/jpeg"
+    elif low.endswith(".csv"):
+        media = "text/csv; charset=utf-8"
+    elif low in {"all_match_info", "area_match"}:
+        media = "text/plain; charset=utf-8"
     elif low.endswith(".txt"):
         media = "text/plain; charset=utf-8"
     return FileResponse(

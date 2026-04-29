@@ -558,7 +558,8 @@ def execute_iomaker_pipeline(settings: Dict[str, Any], cfg: BaseBuildConfig, fil
             mlip_dir = write_mlip_results_bundle(run_dir)
             result['mlip_results_dir'] = str(mlip_dir)
             result['mlip_csv_path'] = str(mlip_dir / 'selected_interfaces.csv')
-            result['mlip_area_match_path'] = str(mlip_dir / 'area_match')
+            result['mlip_all_match_info_path'] = str(mlip_dir / 'all_match_info')
+            result['mlip_area_match_path'] = str(mlip_dir / 'all_match_info')
         except Exception as e:
             result['mlip_results_error'] = str(e)
     if cfg.submit_target == 'server' and local_workdir_abs:

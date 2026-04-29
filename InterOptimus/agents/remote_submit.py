@@ -3083,7 +3083,7 @@ def iomaker_build_vasp_mlip_style_results(
     Rebuild MLIP-style exported artifacts using finished VASP energies.
 
     Writes a compact ``vasp_results/`` directory under *dest_dir* containing
-    ``selected_interfaces.csv``, ``area_match``, ``stereographic.jpg``, and
+    ``selected_interfaces.csv``, ``all_match_info``, ``stereographic.jpg``, and
     ``stereographic_interactive.html``.
     """
     out = _iomaker_collect_vasp_energy_rows(
@@ -3154,6 +3154,8 @@ def iomaker_build_vasp_mlip_style_results(
     # among competing matches using the same per-plane selection as DFT (see itworker.visualize_minimization_results).
     area_src = os.path.join(dest_root, "area_strain")
     if not os.path.isfile(area_src):
+        area_src = os.path.join(dest_root, "mlip_results", "all_match_info")
+    if not os.path.isfile(area_src):
         area_src = os.path.join(dest_root, "mlip_results", "area_match")
     records = parse_area_strain_records(area_src) if os.path.isfile(area_src) else []
     vasp_area_records: List[Dict[str, Any]] = []
@@ -3174,7 +3176,7 @@ def iomaker_build_vasp_mlip_style_results(
             updated["binding_energy"] = float(record["binding_energy"])
             updated["dft_status"] = "pending"
         vasp_area_records.append(updated)
-    vasp_area_path = os.path.join(vasp_root, "area_match")
+    vasp_area_path = os.path.join(vasp_root, "all_match_info")
     lines: List[str] = []
     for record in vasp_area_records:
         p1 = tuple(int(x) for x in record["material1_plane"])
@@ -3470,6 +3472,7 @@ def iomaker_build_vasp_mlip_style_results(
             "vasp_csv_path": vasp_csv_path,
             "vasp_io_report_path": None,
             "vasp_pairs_summary_path": None,
+            "vasp_all_match_info_path": vasp_area_path,
             "vasp_area_match_path": vasp_area_path,
             "vasp_area_strain_path": vasp_area_path,
             "vasp_opt_results_summary_path": None,
@@ -3780,7 +3783,8 @@ def iomaker_fetch_results(
             mlip_dir = write_mlip_results_bundle(dest_root)
             fr["mlip_results_dir"] = str(mlip_dir)
             fr["mlip_csv_path"] = str(mlip_dir / "selected_interfaces.csv")
-            fr["mlip_area_match_path"] = str(mlip_dir / "area_match")
+            fr["mlip_all_match_info_path"] = str(mlip_dir / "all_match_info")
+            fr["mlip_area_match_path"] = str(mlip_dir / "all_match_info")
         except Exception as e:
             fr["mlip_results_error"] = str(e)
         try:
@@ -3799,6 +3803,7 @@ def iomaker_fetch_results(
                     "vasp_csv_path",
                     "vasp_io_report_path",
                     "vasp_pairs_summary_path",
+                    "vasp_all_match_info_path",
                     "vasp_area_match_path",
                     "vasp_area_strain_path",
                     "vasp_opt_results_summary_path",

@@ -1357,18 +1357,18 @@
           const name = encodeURIComponent(fname);
           return `<a href="${baseUrl()}/api/session/${encodeURIComponent(sid)}/file?name=${name}" target="_blank" rel="noopener">${label}</a>`;
         };
-        const structUrl =
-          baseUrl() + "/api/session/" + encodeURIComponent(sid) + "/structures.zip";
+        if (art.selected_interfaces_csv) {
+          links.push(fileLink("结果 CSV", "selected_interfaces.csv"));
+        }
+        if (art.all_match_info) {
+          links.push(fileLink("all_match_info", "all_match_info"));
+        }
         if (art.stereographic_interactive_html) {
           links.push(fileLink("交互极图 (HTML，推荐)", "stereographic_interactive.html"));
         }
         if (art.stereographic_jpg) {
           links.push(fileLink("静态极图 JPG", "stereographic.jpg"));
         }
-        links.push(
-          `<a href="${structUrl}" download="pairs_best_it.zip" rel="noopener">弛豫界面结构 ZIP (pairs_best_it)</a>`
-        );
-        links.push(fileLink("全文报告 io_report.txt", "io_report.txt"));
         let noteHtml = "";
         if (notes.stereographic_interactive) {
           noteHtml =

@@ -483,8 +483,10 @@ def run_iomaker_session(
     wd_display = wd
     if ex == "local":
         try:
-            wd_display = str(finalize_session_result_bundle(wd_path))
-            merged_report = Path(wd_display) / "io_report.txt"
+            result_bundle_dir = finalize_session_result_bundle(wd_path)
+            mlip_results_dir = result_bundle_dir.parent / "mlip_results"
+            wd_display = str(mlip_results_dir if mlip_results_dir.is_dir() else result_bundle_dir)
+            merged_report = result_bundle_dir / "io_report.txt"
             if merged_report.is_file():
                 report_text = merged_report.read_text(encoding="utf-8", errors="replace")
         except Exception as e:
@@ -495,13 +497,10 @@ def run_iomaker_session(
         wd_resolved = str(Path(wd_display).expanduser().resolve(strict=False))
     except OSError:
         wd_resolved = str(wd_display)
-    try:
-        job_root = str(Path(wd).expanduser().resolve(strict=False))
-    except OSError:
-        job_root = str(wd)
     stereo = os.path.join(wd_resolved, "stereographic.jpg")
     stereo_html = os.path.join(wd_resolved, "stereographic_interactive.html")
-    project_jpg = os.path.join(job_root, "project.jpg")
+    selected_csv = os.path.join(wd_resolved, "selected_interfaces.csv")
+    all_match_info = os.path.join(wd_resolved, "all_match_info")
 
     payload = {
         "ok": True,
@@ -519,9 +518,10 @@ def run_iomaker_session(
             },
         },
         "artifacts": {
+            "selected_interfaces_csv": selected_csv if os.path.isfile(selected_csv) else None,
+            "all_match_info": all_match_info if os.path.isfile(all_match_info) else None,
             "stereographic_jpg": stereo if os.path.isfile(stereo) else None,
             "stereographic_interactive_html": stereo_html if os.path.isfile(stereo_html) else None,
-            "project_jpg": project_jpg if os.path.isfile(project_jpg) else None,
             "local_workdir": wd_resolved,
             "pairs_count": n_pairs,
             "poscars_error": poscars_error,
