@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>InterOptimus · IOMaker Web</title>
+  <title>InterOptimus · IOMaker Local</title>
   <style>
     :root {
       --bg: #e8edf5;
@@ -389,34 +389,22 @@
 </head>
 <body>
   <header>
-    <h1>InterOptimus · IOMaker Web</h1>
-    <p class="sub">表单字段与本地 IOMaker 流程一致（<code>run_iomaker_session</code> / <code>run_simple_iomaker</code>）。MLIP 可选 ORB、SevenNet、MatRIS、DeepMD。任务在<strong>子进程</strong>中运行：可用「停止」结束；uvicorn <kbd>Ctrl+C</kbd> 会终止服务及在跑任务。</p>
+    <h1>InterOptimus · IOMaker Local</h1>
+    <p class="sub">原本的本地浏览器 GUI：只面向打开浏览器的节点本地运行 MLIP 任务，不负责集群工作流/数据库管理。任务在<strong>子进程</strong>中运行：可用「停止」结束；uvicorn <kbd>Ctrl+C</kbd> 会终止服务及在跑任务。</p>
+    <p class="sub" style="margin-top:0.45rem;">
+      <a href="/">← Portal</a> ·
+      <a href="/manage">任务管理（提交、查看、结构可视化）</a> ·
+      <a href="/hub">IOFlow Hub（旧版）</a>
+    </p>
     {% if default_host %}
     <p class="sub">提示：若经反向代理访问，请设置环境变量 <code>INTEROPTIMUS_WEB_PUBLIC_HOST</code> 以生成正确的下载链接。</p>
     {% endif %}
   </header>
   <main>
-    <section class="task-shell" aria-label="任务管理">
-      <div class="task-panel">
-        <h2>任务管理</h2>
-        <p class="hint" style="margin-top:0;">提交新任务后会出现在这里；刷新页面也能从任务数据库恢复。</p>
-        <div class="actions" style="margin-bottom:0.65rem;">
-          <button type="button" id="btn-refresh-tasks">刷新任务</button>
-          <span id="task-store-hint" class="hint"></span>
-        </div>
-        <div id="task-list" class="task-list">
-          <p class="hint">正在加载任务…</p>
-        </div>
-      </div>
-      <div class="task-panel">
-        <h2>任务详情</h2>
-        <div id="task-detail">
-          <p class="hint">从左侧选择任务查看结构文件、进度、事件和结果下载。</p>
-        </div>
-      </div>
-    </section>
-
     <form id="io-form" enctype="multipart/form-data">
+      <input type="hidden" name="ui_mode" value="local"/>
+      <input type="hidden" name="execution" value="local"/>
+      <input type="hidden" name="do_vasp" value="false"/>
       <fieldset>
         <legend>CIF</legend>
         <div class="row">
@@ -447,14 +435,6 @@
             <option value="matris">matris (MatRIS)</option>
             <option value="dpa">dpa (DeepMD)</option>
           </select>
-        </div>
-        <div class="field">
-          <label for="do_vasp">计算类型</label>
-          <select id="do_vasp" name="do_vasp">
-            <option value="false" selected>MLIP only</option>
-            <option value="true">MLIP + VASP</option>
-          </select>
-          <p class="hint">选择 MLIP + VASP 时请确认 jobflow-remote / VASP worker / POTCAR 已配置。</p>
         </div>
         <div id="matris-fields" class="row" style="display:none;">
           <div class="field">

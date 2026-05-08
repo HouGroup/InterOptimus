@@ -9,7 +9,6 @@ import os
 import re
 import hashlib
 import sys
-import subprocess
 from datetime import datetime
 from dataclasses import dataclass, field, replace
 from copy import deepcopy
@@ -445,127 +444,6 @@ def _print_final_settings(settings: Dict[str, Any], structures_meta: Dict[str, A
     print(json.dumps(_clean_for_json_serialization(settings), indent=2, ensure_ascii=False))
     print('=' * 80 + '\n')
 
-
-_MLIP_CALC_IMPORTS: Dict[str, Tuple[str, ...]] = {
-    "orb-models": ("orb_models.forcefield",),
-    "sevenn": ("sevenn.calculator",),
-    "dpa": ("deepmd.calculator",),
-    "matris": ("matris.applications.base",),
-}
-
-
-def _normalize_mlip_calc_for_worker_check(calc: Any) -> str:
-    if not isinstance(calc, str) or not calc.strip():
-        return "orb-models"
-    s = calc.strip().lower().replace("_", "-")
-    aliases = {
-        "orb": "orb-models",
-        "orb-model": "orb-models",
-        "orb-models": "orb-models",
-        "7net": "sevenn",
-        "sevennet": "sevenn",
-        "sevenn": "sevenn",
-        "deepmd": "dpa",
-        "deep-potential": "dpa",
-        "dpa": "dpa",
-        "matris": "matris",
-    }
-    return aliases.get(s, s)
-
-
-def _load_jfremote_worker_pre_run(project: Any, worker: Any) -> Tuple[Optional[str], Optional[str]]:
-    project_name = str(project or "std").strip() or "std"
-    worker_name = str(worker or "").strip()
-    projects_dir = os.environ.get("JFREMOTE_PROJECTS_FOLDER") or os.path.join(os.path.expanduser("~"), ".jfremote")
-    project_path = os.path.join(os.path.expanduser(projects_dir), f"{project_name}.yaml")
-    if not os.path.isfile(project_path):
-        return None, f"jobflow-remote project YAML not found: {project_path}"
-    try:
-        import yaml
-    except Exception as exc:
-        return None, f"PyYAML is required to read {project_path}: {exc}"
-    try:
-        with open(project_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        workers = data.get("workers") if isinstance(data, dict) else None
-        worker_cfg = workers.get(worker_name) if isinstance(workers, dict) else None
-        if not isinstance(worker_cfg, dict):
-            return None, f"worker {worker_name!r} not found in {project_path}"
-        return str(worker_cfg.get("pre_run") or ""), None
-    except Exception as exc:
-        return None, f"failed to read worker {worker_name!r} from {project_path}: {exc}"
-
-
-def _check_mlip_worker_consistency(settings: Dict[str, Any], cfg: BaseBuildConfig) -> Dict[str, Any]:
-    """Print and validate that the selected MLIP calc can import inside the selected worker env."""
-    gm = settings.get("global_minimization_settings") if isinstance(settings.get("global_minimization_settings"), dict) else {}
-    calc = _normalize_mlip_calc_for_worker_check((gm or {}).get("calc"))
-    if isinstance(gm, dict):
-        gm["calc"] = calc
-    worker = str(getattr(cfg, "mlip_worker", "") or "").strip()
-    project = str(getattr(cfg, "mlip_project", "std") or "std").strip()
-    import_modules = _MLIP_CALC_IMPORTS.get(calc)
-
-    print("\n🔎 MLIP worker consistency check:")
-    print(f"   requested calc: {calc}")
-    print(f"   configured MLIP worker: {worker or '(empty)'}")
-    print(f"   jobflow-remote project: {project}")
-
-    if import_modules is None:
-        supported = ", ".join(sorted(_MLIP_CALC_IMPORTS))
-        print("   result: ❌ unsupported calc for automatic import check")
-        raise ValueError(
-            f"Unsupported MLIP calc {calc!r}. Supported calc values for server submission: {supported}."
-        )
-
-    pre_run, load_error = _load_jfremote_worker_pre_run(project, worker)
-    if load_error:
-        print(f"   result: ❌ cannot inspect worker environment")
-        raise ValueError(f"Cannot verify MLIP worker before submission: {load_error}")
-
-    print(f"   import probe: {', '.join(import_modules)}")
-    if pre_run:
-        print("   worker pre_run: found; probing inside worker environment")
-    else:
-        print("   worker pre_run: empty; probing current shell environment")
-
-    imports_literal = repr(tuple(import_modules))
-    probe = (
-        "python - <<'PY'\n"
-        "import importlib\n"
-        f"mods = {imports_literal}\n"
-        "for mod in mods:\n"
-        "    importlib.import_module(mod)\n"
-        "print('OK imported ' + ', '.join(mods))\n"
-        "PY"
-    )
-    command = f"{pre_run}\n{probe}" if pre_run else probe
-    proc = subprocess.run(
-        ["bash", "-lc", command],
-        text=True,
-        capture_output=True,
-        timeout=60,
-    )
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip()
-        print("   result: ❌ import failed")
-        raise ValueError(
-            "MLIP worker import check failed before submission: "
-            f"calc={calc!r}, worker={worker!r}, project={project!r}, imports={list(import_modules)!r}. "
-            f"Please install the required MLIP package in that worker environment or choose another worker. "
-            f"Details: {detail}"
-        )
-
-    print("   result: ✅ OK")
-    return {
-        "calc": calc,
-        "mlip_worker": worker,
-        "mlip_project": project,
-        "imports": list(import_modules),
-        "stdout": (proc.stdout or "").strip(),
-    }
-
-
 def execute_iomaker_pipeline(settings: Dict[str, Any], cfg: BaseBuildConfig, film_conv: Structure, substrate_conv: Structure, meta: Dict[str, Any], structures_info: Dict[str, Any]) -> Dict[str, Any]:
     """
     Build IOMaker flow JSON, then run locally or submit on the login node per ``cfg.submit_target``.
@@ -593,9 +471,6 @@ def execute_iomaker_pipeline(settings: Dict[str, Any], cfg: BaseBuildConfig, fil
             missing.append('mlip_worker')
         if missing:
             raise ValueError("submit_target='server' requires: " + ', '.join(missing))
-        mlip_worker_check = _check_mlip_worker_consistency(settings, cfg)
-    else:
-        mlip_worker_check = {}
 
     def _cfg_or_settings(key: str) -> Any:
         if hasattr(cfg, key) and getattr(cfg, key) is not None:
@@ -671,22 +546,13 @@ def execute_iomaker_pipeline(settings: Dict[str, Any], cfg: BaseBuildConfig, fil
     if cfg.print_settings:
         _print_final_settings(settings=settings, structures_meta=meta, flow_json_path=out_path, cfg=cfg)
     submit_dir = os.path.abspath(os.path.dirname(out_path))
-    result = {'flow_json_path': out_path, 'flow_dict': flow_dict, 'settings': settings, 'structures_meta': meta, 'structures_info': structures_info, 'submit_workdir': submit_dir, 'interoptimus_task_json_path': os.path.join(submit_dir, 'io_interoptimus_task.json'), 'mlip_worker_check': mlip_worker_check}
+    result = {'flow_json_path': out_path, 'flow_dict': flow_dict, 'settings': settings, 'structures_meta': meta, 'structures_info': structures_info, 'submit_workdir': submit_dir, 'interoptimus_task_json_path': os.path.join(submit_dir, 'io_interoptimus_task.json')}
     if cfg.submit_target == 'local':
         run_dir = local_workdir or _local_run_workdir(settings.get('name', 'IOMaker'))
         _run_flow_locally(flow, run_dir)
         result['local_workdir'] = os.path.abspath(run_dir)
         result['pairs_summary_path'] = os.path.abspath(os.path.join(run_dir, 'pairs_summary.txt'))
         result['opt_results_pkl'] = os.path.abspath(os.path.join(run_dir, 'opt_results.pkl'))
-        try:
-            from InterOptimus.result_bundle import write_mlip_results_bundle
-            mlip_dir = write_mlip_results_bundle(run_dir)
-            result['mlip_results_dir'] = str(mlip_dir)
-            result['mlip_csv_path'] = str(mlip_dir / 'selected_interfaces.csv')
-            result['mlip_all_match_info_path'] = str(mlip_dir / 'all_match_info')
-            result['mlip_area_match_path'] = str(mlip_dir / 'all_match_info')
-        except Exception as e:
-            result['mlip_results_error'] = str(e)
     if cfg.submit_target == 'server' and local_workdir_abs:
         result['local_workdir'] = local_workdir_abs
     if cfg.submit_target == 'server':

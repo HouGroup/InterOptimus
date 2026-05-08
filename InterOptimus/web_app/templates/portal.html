@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>InterOptimus · GUI</title>
+  <style>
+    :root {
+      --bg: #eef2f7;
+      --panel: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --accent: #0284c7;
+      --border: #cbd5e1;
+      --shadow: 0 8px 30px rgba(15, 23, 42, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+      color: var(--text);
+      background: linear-gradient(145deg, #f8fafc, var(--bg));
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 4rem 1.4rem;
+    }
+    h1 {
+      margin: 0 0 0.5rem;
+      color: #0c4a6e;
+      letter-spacing: -0.03em;
+      font-size: 2rem;
+    }
+    .sub { color: var(--muted); margin: 0 0 1.8rem; max-width: 58rem; line-height: 1.65; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1rem;
+    }
+    @media (max-width: 1024px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+    .label.featured {
+      background: #dcfce7;
+      color: #15803d;
+    }
+    .card {
+      display: block;
+      min-height: 230px;
+      padding: 1.35rem;
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      color: inherit;
+      text-decoration: none;
+      transition: transform 0.14s ease, border-color 0.14s ease;
+    }
+    .card:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent);
+    }
+    .label {
+      display: inline-flex;
+      border-radius: 999px;
+      background: #e0f2fe;
+      color: #0369a1;
+      padding: 0.18rem 0.55rem;
+      font-size: 0.76rem;
+      font-weight: 750;
+    }
+    h2 { margin: 0.75rem 0 0.55rem; color: #0c4a6e; }
+    p { color: var(--muted); line-height: 1.6; }
+    ul { margin: 0.75rem 0 0; padding-left: 1.1rem; color: var(--muted); line-height: 1.7; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>InterOptimus GUI</h1>
+    <p class="sub">请选择使用场景。三个界面分开运行：本地交互计算、新版任务管理（推荐）、以及旧版工作流 Hub。</p>
+    <div class="grid">
+      <a class="card" href="/manage">
+        <span class="label featured">Recommended</span>
+        <h2>任务管理（Manage）</h2>
+        <p>新版界面计算数据管理中心。提交 MLIP / MLIP+VASP 任务、查看任务列表与状态，点入任意任务可看到结构 3D 可视化、CIF 下载和分阶段进度。</p>
+        <ul>
+          <li>提交新任务（MLIP only / MLIP + VASP）</li>
+          <li>统一任务库（MongoDB / 本地 JSON 自动回退）</li>
+          <li>结构 3D 可视化 + CIF 下载</li>
+          <li>分阶段进度：MLIP → 每个 match 筛选出 term → VASP</li>
+        </ul>
+      </a>
+      <a class="card" href="/local">
+        <span class="label">Local</span>
+        <h2>IOMaker Local</h2>
+        <p>原来的本地浏览器图形界面。适合在打开浏览器的节点上直接跑 MLIP 任务、看实时日志和可视化。</p>
+        <ul>
+          <li>只支持本地 MLIP 计算</li>
+          <li>不负责分配集群任务</li>
+          <li>不作为长期数据库管理入口</li>
+        </ul>
+      </a>
+      <a class="card" href="/hub">
+        <span class="label">Legacy</span>
+        <h2>IOFlow Hub（旧版）</h2>
+        <p>初版界面计算工作流 / 任务库浏览器，仅有简洁列表 + 旁边详情面板。已被「任务管理（Manage）」取代，仍保留以便回看。</p>
+        <ul>
+          <li>面向 jobflow-remote / 多节点计算</li>
+          <li>无提交表单 / 无结构可视化</li>
+          <li>仅用作迁移参考</li>
+        </ul>
+      </a>
+    </div>
+  </main>
+</body>
+</html>

@@ -81,7 +81,6 @@ def _patch_torch_jit_for_frozen_bundle() -> None:
 def _checkpoint_glob_patterns(calc: str) -> list[str]:
     if calc == "orb-models":
         return [
-            "orb-v3-conservative-inf-mpa-20250404.ckpt",
             "orb-v3-conservative-inf-omat-20250404.ckpt",
             "orb-v3-conservative-20-omat-20250404.ckpt",
             "orb-v3-*.ckpt",
@@ -89,7 +88,6 @@ def _checkpoint_glob_patterns(calc: str) -> list[str]:
         ]
     if calc == "sevenn":
         return [
-            "checkpoint_sevennet_omni_i12.pth",
             "checkpoint_sevennet_mf_ompa.pth",
             "checkpoint_sevennet*.pth",
             "*sevennet*.pth",
@@ -97,7 +95,6 @@ def _checkpoint_glob_patterns(calc: str) -> list[str]:
         ]
     if calc == "dpa":
         return [
-            "dpa-3.1-3m-ft.pth",
             "dpa*.pth",
             "dpa*.pt",
             "dpa*.pb",

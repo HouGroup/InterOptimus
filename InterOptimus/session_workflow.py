@@ -129,7 +129,16 @@ def _build_config(
     lattice_matching_settings: Dict[str, Any],
     structure_settings: Dict[str, Any],
     optimization_settings: Dict[str, Any],
+    vasp_settings: Optional[Dict[str, Any]] = None,
+    do_vasp: bool = False,
 ) -> Dict[str, Any]:
+    vsettings: Dict[str, Any] = {"do_vasp": bool(do_vasp)}
+    if vasp_settings:
+        for k, v in vasp_settings.items():
+            if v is None or v == "" or v == {} or v == []:
+                continue
+            vsettings[k] = v
+        vsettings["do_vasp"] = bool(do_vasp)
     cfg: Dict[str, Any] = {
         "workflow_name": workflow_name.strip() or "IO_web",
         "IO_workflow_config": {
@@ -141,7 +150,7 @@ def _build_config(
             "lattice_matching_settings": lattice_matching_settings,
             "structure_settings": structure_settings,
             "optimization_settings": optimization_settings,
-            "vasp_settings": {"do_vasp": False},
+            "vasp_settings": vsettings,
         },
         "execution": execution,
     }
@@ -222,6 +231,243 @@ def _run_dir_from_result(result: Dict[str, Any], session_workdir: Path) -> str:
 def _form_get(form: Dict[str, Any], key: str, default: str = "") -> str:
     v = form.get(key, default)
     return default if v is None else str(v)
+
+
+def _parse_int_opt(s: str) -> Optional[int]:
+    t = (s or "").strip()
+    if not t:
+        return None
+    try:
+        return int(float(t))
+    except ValueError:
+        return None
+
+
+def _coerce_scalar(v: str) -> Any:
+    s = v.strip()
+    if not s:
+        return ""
+    low = s.lower()
+    if low in ("true", "yes", "on"):
+        return True
+    if low in ("false", "no", "off"):
+        return False
+    if low in ("none", "null"):
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    return s
+
+
+def _parse_json_or_keyvals(text: str) -> Dict[str, Any]:
+    """
+    Accept either a JSON object or a textarea with one ``KEY = VAL`` per line.
+
+    Used for ``relax_user_incar_settings`` / ``vasp_scheduler_kwargs`` etc.
+    Returns ``{}`` if the input is empty / blank. Raises ``ValueError`` on a
+    malformed JSON object.
+    """
+    s = (text or "").strip()
+    if not s:
+        return {}
+    if s[0] in "{[":
+        out = json.loads(s)
+        if not isinstance(out, dict):
+            raise ValueError("Expected a JSON object")
+        return out
+    out: Dict[str, Any] = {}
+    for raw in s.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            k, v = line.split("=", 1)
+        elif ":" in line:
+            k, v = line.split(":", 1)
+        else:
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                raise ValueError(f"Cannot parse line as KEY=VALUE: {raw!r}")
+            k, v = parts
+        out[k.strip()] = _coerce_scalar(v)
+    return out
+
+
+def _build_cluster_from_form(form: Dict[str, Any], *, want_vasp: bool) -> Dict[str, Any]:
+    """Build a ``cluster`` dict (``mlip`` + ``vasp`` sections) from web-form keys."""
+    mlip: Dict[str, Any] = {}
+    partition = _form_get(form, "slurm_partition", "").strip()
+    if not partition:
+        partition = (os.environ.get("INTEROPTIMUS_SLURM_PARTITION") or "interactive").strip()
+    mlip["slurm_partition"] = partition
+
+    cpg = _parse_int_opt(_form_get(form, "cpus_per_gpu", ""))
+    if cpg is not None:
+        mlip["cpus_per_gpu"] = max(1, cpg)
+    mcpu = _parse_int_opt(_form_get(form, "mlip_cpus_per_task", ""))
+    if mcpu is not None:
+        mlip["mlip_cpus_per_task"] = max(1, mcpu)
+    gpj = _parse_int_opt(_form_get(form, "gpus_per_job", ""))
+    if gpj is not None:
+        mlip["gpus_per_job"] = max(1, gpj)
+
+    for k_form, k_cfg in (
+        ("server_pre_cmd", "server_pre_cmd"),
+        ("server_run_parent", "server_run_parent"),
+        ("server_python", "server_python"),
+        ("server_jf_bin", "server_jf_bin"),
+        ("mlip_worker", "mlip_worker"),
+        ("mlip_project", "mlip_project"),
+    ):
+        v = _form_get(form, k_form, "").strip()
+        if v:
+            mlip[k_cfg] = v
+
+    extra_sk_text = _form_get(form, "mlip_scheduler_kwargs", "").strip()
+    if extra_sk_text:
+        try:
+            extra_sk = _parse_json_or_keyvals(extra_sk_text)
+        except (ValueError, json.JSONDecodeError) as e:
+            raise ValueError(f"mlip_scheduler_kwargs 解析失败: {e}") from e
+        if extra_sk:
+            mlip["mlip_scheduler_kwargs"] = extra_sk
+
+    cluster: Dict[str, Any] = {"mlip": mlip}
+
+    if want_vasp:
+        vasp: Dict[str, Any] = {}
+        vpart = _form_get(form, "vasp_slurm_partition", "").strip()
+        if vpart:
+            vasp["vasp_slurm_partition"] = vpart
+        vn = _parse_int_opt(_form_get(form, "vasp_nodes", ""))
+        if vn is not None:
+            vasp["vasp_nodes"] = max(1, vn)
+        vppn = _parse_int_opt(_form_get(form, "vasp_processes_per_node", ""))
+        if vppn is not None:
+            vasp["vasp_processes_per_node"] = max(1, vppn)
+        vw = _form_get(form, "vasp_worker", "").strip()
+        if vw:
+            vasp["vasp_worker"] = vw
+        vpre = _form_get(form, "vasp_pre_run", "").strip()
+        if vpre:
+            vasp["vasp_pre_run"] = vpre
+        cluster["vasp"] = vasp
+
+    return cluster
+
+
+def _build_vasp_settings_from_form(form: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build the contents of ``IO_workflow_config.vasp_settings`` from the web form.
+    INCAR / KPOINTS / POTCAR fields accept JSON or ``KEY=VAL`` lines; pair selection
+    and dipole correction are simple strings.
+    """
+    out: Dict[str, Any] = {}
+
+    sel = _form_get(form, "vasp_pair_selection", "").strip()
+    if sel:
+        out["vasp_pair_selection"] = sel
+
+    dgd = _form_get(form, "do_vasp_gd", "").strip().lower()
+    if dgd in ("1", "true", "yes", "on"):
+        out["do_vasp_gd"] = True
+    elif dgd in ("0", "false", "no", "off"):
+        out["do_vasp_gd"] = False
+
+    dipole = _form_get(form, "vasp_dipole_correction", "").strip().lower()
+    if dipole in ("true", "1", "yes", "on"):
+        out["vasp_dipole_correction"] = True
+    elif dipole in ("false", "0", "no", "off"):
+        out["vasp_dipole_correction"] = False
+
+    funct = _form_get(form, "relax_user_potcar_functional", "").strip()
+    if funct:
+        out["relax_user_potcar_functional"] = funct
+    funct_s = _form_get(form, "static_user_potcar_functional", "").strip()
+    if funct_s:
+        out["static_user_potcar_functional"] = funct_s
+
+    object_keys = (
+        "relax_user_incar_settings",
+        "relax_user_potcar_settings",
+        "relax_user_kpoints_settings",
+        "static_user_incar_settings",
+        "static_user_potcar_settings",
+        "static_user_kpoints_settings",
+        "vasp_gd_kwargs",
+        "vasp_relax_settings",
+        "vasp_static_settings",
+    )
+    for key in object_keys:
+        text = _form_get(form, key, "").strip()
+        if not text:
+            continue
+        try:
+            parsed = _parse_json_or_keyvals(text)
+        except (ValueError, json.JSONDecodeError) as e:
+            raise ValueError(f"{key} 解析失败: {e}") from e
+        if parsed:
+            out[key] = parsed
+
+    return out
+
+
+def vasp_runtime_effective_dict(vasp_settings: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    Effective VASP inputs matching what :class:`~InterOptimus.jobflow.IOMaker` passes to
+    ``MPRelaxSet`` / ``MPStaticSet``: InterOptimus default INCAR merged with user
+    ``relax_user_incar_settings`` / ``static_user_incar_settings``. POTCAR fields are
+    user overrides only (empty dict ⇒ pymatgen chooses per species and functional).
+
+    Pass ``None`` when VASP is not used.
+    """
+    if vasp_settings is None:
+        return None
+    from InterOptimus.itworker import default_relax_incar_settings, default_static_incar_settings
+
+    def _as_dict(v: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(v, dict):
+            return dict(v)
+        return None
+
+    vs = vasp_settings
+    r_i = _as_dict(vs.get("relax_user_incar_settings"))
+    s_i = _as_dict(vs.get("static_user_incar_settings"))
+    r_p = _as_dict(vs.get("relax_user_potcar_settings")) or {}
+    s_p = _as_dict(vs.get("static_user_potcar_settings")) or {}
+    relax_fn = vs.get("relax_user_potcar_functional") or "PBE_54"
+    static_fn = vs.get("static_user_potcar_functional") or relax_fn
+    relax_incar = default_relax_incar_settings(r_i, num_atoms=None)
+    static_incar = default_static_incar_settings(s_i, num_atoms=None)
+    return {
+        "relax_incar_merged": relax_incar,
+        "static_incar_merged": static_incar,
+        "relax_potcar_overrides": r_p,
+        "static_potcar_overrides": s_p,
+        "relax_potcar_functional": str(relax_fn),
+        "static_potcar_functional": str(static_fn),
+        "potcar_note": (
+            "POTCAR 此处仅显示表单中的元素级覆盖；空字典表示不覆盖，由 "
+            "MPRelaxSet/MPStaticSet 按结构元素与上述 functional 自动选择赝势。"
+        ),
+    }
+
+
+def vasp_runtime_effective_from_form(form: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Preview merged VASP settings from raw form (when ``web_result.json`` is not written yet)."""
+    if not _parse_bool(_form_get(form, "do_vasp", "false")):
+        return None
+    try:
+        vs = _build_vasp_settings_from_form(form)
+    except ValueError:
+        return None
+    return vasp_runtime_effective_dict(vs)
 
 
 def _merge_advanced_mlip_form(optimization_settings: Dict[str, Any], form: Dict[str, Any]) -> None:
@@ -338,6 +584,7 @@ def run_iomaker_session(
     st_termination_ftol = _form_get(form, "st_termination_ftol", "0.15")
     st_vacuum_over_film = _form_get(form, "st_vacuum_over_film", "5")
     opt_device = _form_get(form, "opt_device", "cpu")
+    do_vasp = _parse_bool(_form_get(form, "do_vasp", "false"))
     adv_steps = _form_get(form, "adv_steps", "").strip()
     if not adv_steps:
         adv_steps = _form_get(form, "opt_steps", "500")
@@ -420,12 +667,15 @@ def run_iomaker_session(
 
     cluster = None
     if ex == "server":
-        cluster = {
-            "mlip": {
-                "slurm_partition": os.environ.get("INTEROPTIMUS_SLURM_PARTITION", "interactive"),
-            },
-            "vasp": {},
-        }
+        try:
+            cluster = _build_cluster_from_form(form, want_vasp=do_vasp)
+        except ValueError as e:
+            return {"ok": False, "session_id": sid, "error": str(e), "workdir": str(workdir.resolve())}
+
+    try:
+        vasp_settings = _build_vasp_settings_from_form(form)
+    except ValueError as e:
+        return {"ok": False, "session_id": sid, "error": str(e), "workdir": str(workdir.resolve())}
 
     config = _build_config(
         workflow_name=workflow_name,
@@ -436,6 +686,8 @@ def run_iomaker_session(
         lattice_matching_settings=lattice_matching_settings,
         structure_settings=structure_settings,
         optimization_settings=optimization_settings,
+        vasp_settings=vasp_settings,
+        do_vasp=do_vasp,
     )
 
     try:
@@ -483,10 +735,8 @@ def run_iomaker_session(
     wd_display = wd
     if ex == "local":
         try:
-            result_bundle_dir = finalize_session_result_bundle(wd_path)
-            mlip_results_dir = result_bundle_dir.parent / "mlip_results"
-            wd_display = str(mlip_results_dir if mlip_results_dir.is_dir() else result_bundle_dir)
-            merged_report = result_bundle_dir / "io_report.txt"
+            wd_display = str(finalize_session_result_bundle(wd_path))
+            merged_report = Path(wd_display) / "io_report.txt"
             if merged_report.is_file():
                 report_text = merged_report.read_text(encoding="utf-8", errors="replace")
         except Exception as e:
@@ -497,10 +747,13 @@ def run_iomaker_session(
         wd_resolved = str(Path(wd_display).expanduser().resolve(strict=False))
     except OSError:
         wd_resolved = str(wd_display)
+    try:
+        job_root = str(Path(wd).expanduser().resolve(strict=False))
+    except OSError:
+        job_root = str(wd)
     stereo = os.path.join(wd_resolved, "stereographic.jpg")
     stereo_html = os.path.join(wd_resolved, "stereographic_interactive.html")
-    selected_csv = os.path.join(wd_resolved, "selected_interfaces.csv")
-    all_match_info = os.path.join(wd_resolved, "all_match_info")
+    project_jpg = os.path.join(job_root, "project.jpg")
 
     payload = {
         "ok": True,
@@ -516,12 +769,14 @@ def run_iomaker_session(
                 if isinstance(optimization_settings.get("set_relax_thicknesses"), tuple)
                 else optimization_settings.get("set_relax_thicknesses"),
             },
+            "vasp_settings": vasp_settings,
+            "vasp_runtime_effective": vasp_runtime_effective_dict(vasp_settings if do_vasp else None),
+            "cluster": cluster,
         },
         "artifacts": {
-            "selected_interfaces_csv": selected_csv if os.path.isfile(selected_csv) else None,
-            "all_match_info": all_match_info if os.path.isfile(all_match_info) else None,
             "stereographic_jpg": stereo if os.path.isfile(stereo) else None,
             "stereographic_interactive_html": stereo_html if os.path.isfile(stereo_html) else None,
+            "project_jpg": project_jpg if os.path.isfile(project_jpg) else None,
             "local_workdir": wd_resolved,
             "pairs_count": n_pairs,
             "poscars_error": poscars_error,

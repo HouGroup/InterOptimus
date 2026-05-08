@@ -1,0 +1,1813 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>InterOptimus · 任务详情</title>
+  <style>
+    :root {
+      --bg: #eef2f7;
+      --bg-elev: #ffffff;
+      --panel: #ffffff;
+      --muted: #64748b;
+      --text: #0f172a;
+      --accent: #0284c7;
+      --accent-soft: #e0f2fe;
+      --border: #cbd5e1;
+      --shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+      --shadow-md: 0 6px 18px rgba(15, 23, 42, 0.07);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(165deg, #f1f5f9 0%, #e2e8f0 45%, #f8fafc 100%);
+      color: var(--text);
+      line-height: 1.55;
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.4rem 1.6rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-elev);
+      box-shadow: var(--shadow-md);
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      color: #0c4a6e;
+      letter-spacing: -0.02em;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      align-items: center;
+    }
+    h2 { margin: 0 0 0.6rem; color: #0c4a6e; font-size: 1.05rem; }
+    h3 { margin: 0 0 0.45rem; font-size: 0.92rem; color: #0c4a6e; }
+    p.sub { margin: 0.4rem 0 0; color: var(--muted); font-size: 0.9rem; max-width: 68rem; }
+    main { max-width: 1180px; margin: 0 auto; padding: 1.4rem 1.4rem 4rem; }
+    a { color: #0369a1; text-underline-offset: 2px; }
+    a:hover { color: #0c4a6e; }
+    .nav-bar {
+      display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center;
+      margin-bottom: 1.2rem; font-size: 0.88rem; color: var(--muted);
+    }
+    .nav-bar a { font-weight: 600; }
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 1rem 1.1rem;
+      margin-bottom: 1rem;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 880px) { .grid-2 { grid-template-columns: 1fr; } }
+    .kv-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.55rem;
+    }
+    @media (max-width: 720px) { .kv-grid { grid-template-columns: 1fr; } }
+    .kv {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.55rem 0.65rem;
+      background: #f8fafc;
+      font-size: 0.85rem;
+    }
+    .kv strong {
+      display: block;
+      color: var(--muted);
+      font-size: 0.74rem;
+      margin-bottom: 0.15rem;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .badge {
+      display: inline-flex; align-items: center;
+      border-radius: 999px;
+      padding: 0.1rem 0.55rem;
+      font-size: 0.74rem;
+      font-weight: 700;
+      background: #e2e8f0;
+      color: #475569;
+    }
+    .badge.queued { background: #fef9c3; color: #854d0e; }
+    .badge.running, .badge.mlip-running, .badge.vasp-running { background: #dbeafe; color: #1d4ed8; }
+    .badge.completed { background: #dcfce7; color: #15803d; }
+    .badge.failed, .badge.cancelled { background: #fee2e2; color: #b91c1c; }
+    button {
+      background: #e2e8f0;
+      color: #475569;
+      border: 1px solid var(--border);
+      padding: 0.45rem 0.9rem;
+      border-radius: 9px;
+      font-weight: 650;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:hover:not(:disabled) { background: #cbd5e1; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.primary {
+      background: linear-gradient(180deg, #0ea5e9, var(--accent));
+      color: #fff;
+      border: none;
+      padding: 0.5rem 1.05rem;
+      box-shadow: 0 2px 8px rgba(2, 132, 199, 0.35);
+    }
+    button.danger {
+      background: #fee2e2;
+      color: #b91c1c;
+      border-color: #fca5a5;
+    }
+    button.danger:hover:not(:disabled) { background: #fecaca; }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: center; margin: 0.55rem 0; }
+    .hint { font-size: 0.82rem; color: var(--muted); }
+    .viewer-wrap {
+      position: relative;
+      width: 100%;
+      height: 360px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background:
+        radial-gradient(1200px 700px at 50% 30%, #ffffff 0%, #f1f5f9 100%);
+      overflow: hidden;
+    }
+    .struct-caption {
+      margin-top: 0.4rem;
+      padding: 0.45rem 0.6rem;
+      border-radius: 8px;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .struct-caption strong { color: var(--text); }
+    .struct-caption code { font-family: ui-monospace, SFMono-Regular, monospace; }
+    .elem-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem 0.5rem;
+      margin-top: 0.4rem;
+    }
+    .elem-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.18rem 0.55rem 0.18rem 0.45rem;
+      border-radius: 999px;
+      background: #ffffff;
+      border: 1px solid var(--border);
+      font-size: 0.72rem;
+      color: var(--text);
+      font-weight: 600;
+      letter-spacing: 0.2px;
+      box-shadow: 0 1px 1px rgba(0, 0, 0, 0.03);
+    }
+    .elem-chip .dot {
+      display: inline-block;
+      width: 0.78rem;
+      height: 0.78rem;
+      border-radius: 50%;
+      border: 1px solid rgba(0, 0, 0, 0.18);
+      box-shadow: inset -2px -3px 4px rgba(0, 0, 0, 0.18);
+    }
+    .elem-chip .rad {
+      font-size: 0.66rem;
+      color: var(--muted);
+      font-weight: 500;
+      margin-left: 0.1rem;
+    }
+    pre.incar-pre {
+      margin: 0.35rem 0 0.75rem;
+      padding: 0.55rem 0.65rem;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 22rem;
+      overflow: auto;
+    }
+    .potcar-line {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.82rem;
+      margin: 0.35rem 0 0.85rem;
+    }
+    details.cluster-details {
+      margin-top: 0.45rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.35rem 0.55rem;
+      background: #ffffff;
+    }
+    details.cluster-details > summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .struct-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.6rem 1rem;
+      margin: 0.4rem 0 0.65rem;
+      padding: 0.55rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #f8fafc;
+    }
+    .struct-toolbar .ctl-group {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .struct-toolbar .ctl-label {
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-weight: 600;
+      letter-spacing: 0.2px;
+    }
+    .struct-toolbar .ctl-hint {
+      margin-left: auto;
+      font-size: 0.74rem;
+      color: var(--muted);
+    }
+    .seg {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .seg-btn {
+      appearance: none;
+      border: 0;
+      background: #ffffff;
+      padding: 0.32rem 0.7rem;
+      font-size: 0.78rem;
+      cursor: pointer;
+      color: var(--text);
+      font-weight: 500;
+      border-right: 1px solid var(--border);
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+    .seg-btn:last-child { border-right: 0; }
+    .seg-btn:hover { background: #eef2f7; }
+    .seg-btn.active {
+      background: var(--accent);
+      color: #ffffff;
+    }
+    .viewer-wrap.empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .viewer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+    .struct-card-actions {
+      display: flex; flex-wrap: wrap; gap: 0.45rem;
+      margin-top: 0.55rem;
+    }
+    .progress-card {
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: linear-gradient(145deg, #f8fafc, #e0f2fe);
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.75rem;
+    }
+    .progress-card.alert-style { background: linear-gradient(145deg, #f0fdf4, #dcfce7); }
+    .progress-card.failed-style { background: linear-gradient(145deg, #fef2f2, #fee2e2); }
+    .progress-card.warn-style   { background: linear-gradient(145deg, #fefce8, #fef9c3); }
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      overflow: hidden;
+      margin: 0.5rem 0 0.4rem;
+    }
+    .progress-bar > span {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, #0ea5e9, #0284c7);
+      transition: width 0.3s ease;
+    }
+    .term-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 0.55rem;
+      margin-top: 0.5rem;
+    }
+    .term-tile {
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 0.55rem 0.7rem;
+      background: #f8fafc;
+      font-size: 0.82rem;
+    }
+    .term-tile .term-id {
+      font-weight: 700;
+      color: #0c4a6e;
+      margin-bottom: 0.25rem;
+    }
+    .term-tile .term-status {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .term-tile.completed { background: #f0fdf4; border-color: #86efac; }
+    .term-tile.running, .term-tile.mlip-running, .term-tile.vasp-running { background: #eff6ff; border-color: #93c5fd; }
+    .term-tile.failed { background: #fef2f2; border-color: #fca5a5; }
+    .term-tile.pending { background: #f8fafc; }
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.55rem;
+      font-size: 0.85rem;
+    }
+    .table th, .table td {
+      padding: 0.45rem 0.55rem;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+    .table th {
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+    .empty {
+      padding: 1.6rem;
+      text-align: center;
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: 10px;
+      background: #f8fafc;
+    }
+    .download-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+    }
+    .download-list a {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.32rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: #f8fafc;
+      font-size: 0.84rem;
+      text-decoration: none;
+    }
+    .download-list a:hover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .events-log {
+      max-height: 280px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 0.55rem 0.7rem;
+      font-size: 0.78rem;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      color: #334155;
+    }
+    .events-log .event-row {
+      padding: 0.18rem 0;
+      border-bottom: 1px dashed #e2e8f0;
+    }
+    .events-log .event-row:last-child { border-bottom: none; }
+    .events-log .event-time { color: var(--muted); margin-right: 0.45rem; }
+    .events-log .event-name { color: var(--accent); font-weight: 700; margin-right: 0.35rem; }
+    code {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      background: #f1f5f9;
+      padding: 0 0.25rem;
+      border-radius: 4px;
+    }
+    .struct-axis-legend {
+      position: absolute;
+      top: 8px; right: 10px;
+      background: rgba(255,255,255,0.85);
+      padding: 0.2rem 0.4rem;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      color: var(--muted);
+      pointer-events: none;
+    }
+    .iface-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 0.85rem;
+      margin-top: 0.4rem;
+    }
+    .iface-card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+      padding: 0.65rem 0.8rem;
+      box-shadow: var(--shadow);
+    }
+    .iface-card-head {
+      display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+      margin-bottom: 0.45rem;
+    }
+    .iface-card-head .iface-title {
+      font-weight: 700; color: #0c4a6e; font-size: 0.92rem;
+    }
+    .iface-card .viewer-wrap {
+      height: 280px;
+    }
+    .phase-block {
+      margin-top: 0.6rem;
+      border-top: 1px solid var(--border);
+      padding-top: 0.4rem;
+    }
+    .phase-block:first-child {
+      border-top: none; padding-top: 0;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="page-title">
+      任务详情 <span id="badge-status" class="badge">…</span>
+    </h1>
+    <p class="sub" id="page-sub">
+      Task ID: <code id="page-task-id">{{ task_id }}</code>
+    </p>
+  </header>
+
+  <main>
+    <nav class="nav-bar">
+      <a href="/manage">← 返回任务列表</a>
+      <span>·</span>
+      <a href="/">Portal</a>
+      <span>·</span>
+      <button type="button" id="btn-refresh">刷新</button>
+      <button type="button" id="btn-cancel" class="danger" style="display:none;">取消任务</button>
+      <span class="hint" id="last-refreshed"></span>
+    </nav>
+
+    <section class="panel" aria-label="任务概要">
+      <h2>任务概要</h2>
+      <div id="kv-block" class="kv-grid">
+        <div class="kv"><strong>状态</strong>加载中…</div>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="集群与 VASP 输入">
+      <h2>集群与 VASP 输入</h2>
+      <div id="cluster-vasp-block">
+        <p class="hint">加载中…</p>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="计算进度">
+      <h2>计算进度</h2>
+      <div id="progress-block">
+        <p class="hint">正在加载进度…</p>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="输入晶体结构">
+      <h2>输入晶体结构</h2>
+      <p class="hint">通过 <code>3Dmol.js</code> 在浏览器内渲染上传的 CIF（鼠标拖动旋转，滚轮缩放）。点击 CIF 链接可直接下载原始文件。</p>
+      <div id="struct-toolbar" class="struct-toolbar">
+        <div class="ctl-group">
+          <span class="ctl-label">Color scheme</span>
+          <div class="seg" role="tablist">
+            <button type="button" class="seg-btn active" data-scheme="VESTA">VESTA</button>
+            <button type="button" class="seg-btn"        data-scheme="Jmol">Jmol</button>
+          </div>
+        </div>
+        <div class="ctl-group">
+          <span class="ctl-label">Radius</span>
+          <div class="seg" role="tablist">
+            <button type="button" class="seg-btn active" data-radius="uniform">Uniform 0.5 Å</button>
+            <button type="button" class="seg-btn"        data-radius="atomic">Atomic radii</button>
+          </div>
+        </div>
+        <div class="ctl-hint">默认与 Materials Project 一致：VESTA 配色 + Uniform 0.5&nbsp;Å。</div>
+      </div>
+      <div class="grid-2" style="margin-top:0.65rem;">
+        <div>
+          <h3>Film（薄膜）</h3>
+          <div id="viewer-film-wrap" class="viewer-wrap empty">
+            <span>正在加载结构…</span>
+          </div>
+          <div id="legend-film" class="elem-legend" style="display:none;"></div>
+          <div id="caption-film" class="struct-caption" style="display:none;"></div>
+          <div class="struct-card-actions">
+            <a id="dl-film" class="" href="#" download>下载 film.cif</a>
+            <button type="button" id="btn-film-reset">重置视角</button>
+            <button type="button" id="btn-film-supercell">显示 2×2×2 超胞</button>
+          </div>
+        </div>
+        <div>
+          <h3>Substrate（衬底）</h3>
+          <div id="viewer-substrate-wrap" class="viewer-wrap empty">
+            <span>正在加载结构…</span>
+          </div>
+          <div id="legend-substrate" class="elem-legend" style="display:none;"></div>
+          <div id="caption-substrate" class="struct-caption" style="display:none;"></div>
+          <div class="struct-card-actions">
+            <a id="dl-substrate" class="" href="#" download>下载 substrate.cif</a>
+            <button type="button" id="btn-substrate-reset">重置视角</button>
+            <button type="button" id="btn-substrate-supercell">显示 2×2×2 超胞</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="结果文件">
+      <h2>结果文件</h2>
+      <p class="hint" style="margin-top:0;">每个阶段目录包含：<code>all_match_info</code>、<code>stereographic_interactive</code>（HTML，无扩展名）、<code>stereographic.jpg</code>、<code>selected_interfaces.csv</code>（末列为该行的完整 CIF 文本）。MLIP 对应 <code>mlip_results/</code> 或 <code>fetched_results/mlip_results/</code>；VASP 对应 <code>vasp_results/</code>。</p>
+      <div id="fetch-results-bar" class="actions" style="margin-top:0;">
+        <button type="button" id="btn-fetch-results">拉取最终结果（mlip_results / vasp_results）</button>
+        <span class="hint" id="fetch-results-status">远程任务完成后点击拉取到会话目录；本地任务若结果在其它路径，请自行对齐到上述目录名。</span>
+      </div>
+      <div id="artifacts-block">
+        <p class="empty">暂无结果文件。请先完成计算或拉取远程结果。</p>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="界面结构 (3D)">
+      <h2>界面结构 (3D · VESTA 风格)</h2>
+      <p class="hint" id="interfaces-hint">弛豫界面 3D 视图使用遗留目录 <code>pairs_best_it/.../POSCAR</code>；新导出中界面结构在 <code>selected_interfaces.csv</code> 末列 CIF 文本中。</p>
+      <div id="interfaces-block">
+        <p class="empty">界面结构将在 MLIP 弛豫完成后，或拉取 VASP 结果后出现。</p>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="事件日志">
+      <h2>事件日志</h2>
+      <div id="events-block" class="events-log">加载中…</div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/3dmol@2.4.2/build/3Dmol-min.js"></script>
+  <script>
+    const TASK_ID = {{ task_id | tojson }};
+
+    /**
+     * Element color palettes — direct copy of Materials Project / Crystal-Toolkit's
+     *   crystal_toolkit/core/ElementColorSchemes.yaml
+     * so the rendered look matches the MP web viewer exactly. Atomic radii (VESTA-style)
+     * are also kept here for the optional element-aware radius mode.
+     */
+    const VESTA_COLORS = {
+      Ac: "#70abfa", Ag: "#c0c0c0", Al: "#81b2d6", Am: "#545cf2", Ar: "#cffec4",
+      As: "#74d057", At: "#754f45", Au: "#ffd123", B: "#1fa20f", Ba: "#00c900",
+      Be: "#5ed77b", Bh: "#e00038", Bi: "#9e4fb5", Bk: "#8a4fe3", Br: "#7e3102",
+      C: "#4c4c4c", Ca: "#5a96bd", Cd: "#ffd98f", Ce: "#ffffc7", Cf: "#a136d4",
+      Cl: "#31fc02", Cm: "#785ce3", Co: "#0000af", Cr: "#00009e", Cs: "#57178f",
+      Cu: "#2247dc", Db: "#d1004f", Dy: "#1fffc7", Er: "#00e675", Es: "#b31fd4",
+      Eu: "#61ffc7", F: "#b0b9e6", Fe: "#b57100", Fm: "#b31fba", Fr: "#420066",
+      Ga: "#9ee373", Gd: "#45ffc7", Ge: "#7e6ea6", H: "#ffcccc", He: "#fce8ce",
+      Hf: "#4dc2ff", Hg: "#b8b8d0", Ho: "#00ff9c", Hs: "#e6002e", I: "#940094",
+      In: "#a67573", Ir: "#175487", K: "#a121f6", Kr: "#fac1f3", La: "#5ac449",
+      Li: "#86df73", Lr: "#c70066", Lu: "#00ab24", Md: "#b30da6", Mg: "#fb7b15",
+      Mn: "#a7089d", Mo: "#54b5b5", Mt: "#eb0026", N: "#b0b9e6", Na: "#f9dc3c",
+      Nb: "#73c2c9", Nd: "#c7ffc7", Ne: "#fe37b5", Ni: "#b7bbbd", No: "#bd0d87",
+      Np: "#0080ff", O: "#fe0300", Os: "#266696", P: "#c09cc2", Pa: "#00a1ff",
+      Pb: "#575961", Pd: "#006985", Pm: "#a3ffc7", Po: "#ab5c00", Pr: "#d9ffc7",
+      Pt: "#d0d0e0", Pu: "#006bff", Ra: "#007d00", Rb: "#702eb0", Re: "#267dab",
+      Rf: "#cc0059", Rh: "#0a7d8c", Rn: "#428296", Ru: "#248f8f", S: "#fffa00",
+      Sb: "#9e63b5", Sc: "#b563ab", Se: "#9aef0f", Sg: "#d90045", Si: "#1b3bfa",
+      Sm: "#8fffc7", Sn: "#9a8eb9", Sr: "#00ff00", Ta: "#4da6ff", Tb: "#30ffc7",
+      Tc: "#3b9e9e", Te: "#d47a00", Th: "#00baff", Ti: "#78caff", Tl: "#a6544d",
+      Tm: "#00d452", U: "#008fff", V: "#e51900", W: "#2194d6", Xe: "#429eb0",
+      Y: "#94ffff", Yb: "#00bf38", Zn: "#8f8f81", Zr: "#00ff00",
+    };
+    const JMOL_COLORS = {
+      Ac: "#70abfa", Ag: "#c0c0c0", Al: "#bfa6a6", Am: "#545cf2", Ar: "#80d1e3",
+      As: "#bd80e3", At: "#754f45", Au: "#ffd123", B: "#ffb5b5", Ba: "#00c900",
+      Be: "#c2ff00", Bh: "#e00038", Bi: "#9e4fb5", Bk: "#8a4fe3", Br: "#a62929",
+      C: "#909090", Ca: "#3dff00", Cd: "#ffd98f", Ce: "#ffffc7", Cf: "#a136d4",
+      Cl: "#1ff01f", Cm: "#785ce3", Co: "#f090a0", Cr: "#8a99c7", Cs: "#57178f",
+      Cu: "#c88033", Db: "#d1004f", Dy: "#1fffc7", Er: "#00e675", Es: "#b31fd4",
+      Eu: "#61ffc7", F: "#90e050", Fe: "#e06633", Fm: "#b31fba", Fr: "#420066",
+      Ga: "#c28f8f", Gd: "#45ffc7", Ge: "#668f8f", H: "#ffffff", He: "#d9ffff",
+      Hf: "#4dc2ff", Hg: "#b8b8d0", Ho: "#00ff9c", Hs: "#e6002e", I: "#940094",
+      In: "#a67573", Ir: "#175487", K: "#8f40d4", Kr: "#5cb8d1", La: "#70d4ff",
+      Li: "#cc80ff", Lr: "#c70066", Lu: "#00ab24", Md: "#b30da6", Mg: "#8aff00",
+      Mn: "#9c7ac7", Mo: "#54b5b5", Mt: "#eb0026", N: "#3050f8", Na: "#ab5cf2",
+      Nb: "#73c2c9", Nd: "#c7ffc7", Ne: "#b3e3f5", Ni: "#50d050", No: "#bd0d87",
+      Np: "#0080ff", O: "#ff0d0d", Os: "#266696", P: "#ff8000", Pa: "#00a1ff",
+      Pb: "#575961", Pd: "#006985", Pm: "#a3ffc7", Po: "#ab5c00", Pr: "#d9ffc7",
+      Pt: "#d0d0e0", Pu: "#006bff", Ra: "#007d00", Rb: "#702eb0", Re: "#267dab",
+      Rf: "#cc0059", Rh: "#0a7d8c", Rn: "#428296", Ru: "#248f8f", S: "#ffff30",
+      Sb: "#9e63b5", Sc: "#e6e6e6", Se: "#ffa100", Sg: "#d90045", Si: "#f0c8a0",
+      Sm: "#8fffc7", Sn: "#668080", Sr: "#00ff00", Ta: "#4da6ff", Tb: "#30ffc7",
+      Tc: "#3b9e9e", Te: "#d47a00", Th: "#00baff", Ti: "#bfc2c7", Tl: "#a6544d",
+      Tm: "#00d452", U: "#008fff", V: "#a6a6ab", W: "#2194d6", Xe: "#429eb0",
+      Y: "#94ffff", Yb: "#00bf38", Zn: "#7d80b0", Zr: "#94e0e0",
+    };
+    const ATOMIC_RADII = {
+      H: 0.46, He: 1.22, Li: 1.57, Be: 1.12, B: 0.81, C: 0.77, N: 0.74, O: 0.74,
+      F: 0.72, Ne: 1.60, Na: 1.91, Mg: 1.60, Al: 1.43, Si: 1.18, P: 1.06, S: 1.04,
+      Cl: 0.99, Ar: 1.92, K: 2.35, Ca: 1.97, Sc: 1.62, Ti: 1.47, V: 1.34, Cr: 1.29,
+      Mn: 1.26, Fe: 1.27, Co: 1.25, Ni: 1.24, Cu: 1.28, Zn: 1.34, Ga: 1.35, Ge: 1.22,
+      As: 1.19, Se: 1.16, Br: 1.14, Kr: 1.97, Rb: 2.50, Sr: 2.15, Y: 1.80, Zr: 1.60,
+      Nb: 1.46, Mo: 1.39, Tc: 1.36, Ru: 1.34, Rh: 1.34, Pd: 1.37, Ag: 1.44, Cd: 1.51,
+      In: 1.67, Sn: 1.40, Sb: 1.40, Te: 1.36, I: 1.33, Xe: 2.18, Cs: 2.65, Ba: 2.22,
+      La: 1.87, Hf: 1.59, Ta: 1.46, W: 1.39, Re: 1.37, Os: 1.35, Ir: 1.36, Pt: 1.39,
+      Au: 1.44, Hg: 1.51, Tl: 1.70, Pb: 1.75, Bi: 1.55,
+    };
+    /** MP / Crystal-Toolkit default for ``radius_strategy="uniform"``. */
+    const UNIFORM_RADIUS = 0.5;
+    const FALLBACK_COLOR = "#cccccc";
+    const FALLBACK_ATOMIC_RADIUS = 1.20;
+
+    /** UI state shared by both viewers (viewer toolbar buttons toggle these). */
+    let colorScheme = "VESTA";   // "VESTA" | "Jmol"  (MP default = VESTA)
+    let radiusMode  = "uniform"; // "uniform" | "atomic"  (MP default = uniform)
+
+    function colorTableFor(scheme) {
+      return scheme === "Jmol" ? JMOL_COLORS : VESTA_COLORS;
+    }
+
+    function paletteFor(elem) {
+      const key = elem ? String(elem).trim() : "";
+      const tc = key ? key.charAt(0).toUpperCase() + key.slice(1).toLowerCase() : "";
+      const colors = colorTableFor(colorScheme);
+      const color = colors[key] || colors[tc] || FALLBACK_COLOR;
+      const radius = (radiusMode === "atomic")
+        ? (ATOMIC_RADII[key] || ATOMIC_RADII[tc] || FALLBACK_ATOMIC_RADIUS)
+        : UNIFORM_RADIUS;
+      return { color: color, radius: radius };
+    }
+
+    const badgeStatus = document.getElementById("badge-status");
+    const pageTitle = document.getElementById("page-title");
+    const pageSub = document.getElementById("page-sub");
+    const kvBlock = document.getElementById("kv-block");
+    const clusterVaspBlock = document.getElementById("cluster-vasp-block");
+    const progressBlock = document.getElementById("progress-block");
+    const artifactsBlock = document.getElementById("artifacts-block");
+    const interfacesBlock = document.getElementById("interfaces-block");
+    const interfacesHint = document.getElementById("interfaces-hint");
+    const btnFetchResults = document.getElementById("btn-fetch-results");
+    const fetchResultsStatus = document.getElementById("fetch-results-status");
+    const eventsBlock = document.getElementById("events-block");
+    const btnRefresh = document.getElementById("btn-refresh");
+    const btnCancel = document.getElementById("btn-cancel");
+    const lastRefreshed = document.getElementById("last-refreshed");
+
+    const dlFilm = document.getElementById("dl-film");
+    const dlSubstrate = document.getElementById("dl-substrate");
+
+    let pollTimer = null;
+    let viewerFilm = null;
+    let viewerSubstrate = null;
+    let lastFilmCif = null;
+    let lastSubstrateCif = null;
+    let supercellState = { film: false, substrate: false };
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function formatTime(s) {
+      if (!s) return "";
+      try {
+        const d = new Date(s);
+        if (Number.isNaN(d.getTime())) return s;
+        return d.toLocaleString();
+      } catch (_e) {
+        return s;
+      }
+    }
+
+    function statusBadgeClass(st) {
+      st = String(st || "");
+      if (st === "completed") return "completed";
+      if (st === "failed" || st === "cancelled") return st;
+      if (st === "queued") return "queued";
+      if (st.indexOf("vasp") >= 0) return "vasp-running";
+      if (st.indexOf("mlip") >= 0 || st.indexOf("running") >= 0) return "mlip-running";
+      return "";
+    }
+
+    function modeLabel(t) {
+      const m = String(t.mode || "mlip");
+      return m === "mlip+vasp" ? "MLIP + VASP" : "MLIP only";
+    }
+
+    function setBadge(status) {
+      badgeStatus.className = "badge " + statusBadgeClass(status);
+      badgeStatus.textContent = String(status || "unknown");
+    }
+
+    function dictRows(d) {
+      if (!d || typeof d !== "object") return "";
+      const keys = Object.keys(d).filter((k) => d[k] !== null && d[k] !== undefined && d[k] !== "");
+      if (!keys.length) return '<p class="hint">未自定义。</p>';
+      return '<table class="table"><tbody>' + keys.map((k) => {
+        let v = d[k];
+        if (typeof v === "object") {
+          try { v = JSON.stringify(v); } catch (_e) { v = String(v); }
+        }
+        return "<tr><th style=\"width:35%\">" + esc(k) + "</th><td><code>" + esc(v) + "</code></td></tr>";
+      }).join("") + "</tbody></table>";
+    }
+
+    function vaspSummaryField(t, key) {
+      const vs = t.vasp_summary || {};
+      let v = vs[key];
+      if (v !== undefined && v !== null && String(v).trim()) return v;
+      const f = t.form || {};
+      v = f[key];
+      if (v !== undefined && v !== null && String(v).trim()) return v;
+      return "";
+    }
+
+    function parseKeyedSettings(val) {
+      if (val === undefined || val === null) return null;
+      if (typeof val === "object" && !Array.isArray(val)) return val;
+      const t = String(val).trim();
+      if (!t) return null;
+      try {
+        const j = JSON.parse(t);
+        if (j && typeof j === "object" && !Array.isArray(j)) return j;
+      } catch (_e) {}
+      const o = {};
+      for (const line of t.split(/\r?\n/)) {
+        const L = line.trim();
+        if (!L || L.startsWith("#")) continue;
+        const eq = L.indexOf("=");
+        if (eq > 0) {
+          const k = L.slice(0, eq).trim();
+          const v = L.slice(eq + 1).trim();
+          if (k) o[k] = v;
+        }
+      }
+      return Object.keys(o).length ? o : null;
+    }
+
+    function formatIncarObj(o) {
+      if (!o) return "";
+      return Object.keys(o).sort().map((k) => k + " = " + String(o[k])).join("\n");
+    }
+
+    /**
+     * Pretty POTCAR labels: dict ``{Li: "_sv", S: ""}`` → ``Li_sv, S``;
+     * full string ``Li_sv`` is kept as-is.
+     */
+    function formatPotcarSymbols(o) {
+      if (!o) return "";
+      const keys = Object.keys(o).sort();
+      return keys.map((el) => {
+        const raw = o[el];
+        const v = raw === undefined || raw === null ? "" : String(raw).trim();
+        if (!v) return el;
+        if (/^[A-Za-z][A-Za-z0-9_.]*$/.test(v) && v.indexOf("_") >= 0) return v;
+        const suf = v.replace(/^_/, "");
+        return suf ? el + "_" + suf : el;
+      }).join(", ");
+    }
+
+    function renderClusterVasp(t) {
+      const cluster = t.cluster_summary || {};
+      const mlipCluster = {};
+      const vaspCluster = {};
+      const mlipKeys = ["slurm_partition", "cpus_per_gpu", "gpus_per_job", "mlip_cpus_per_task",
+        "mlip_worker", "mlip_project", "server_pre_cmd", "server_run_parent", "server_python",
+        "server_jf_bin", "mlip_scheduler_kwargs"];
+      const vaspClusterKeys = ["vasp_slurm_partition", "vasp_nodes", "vasp_processes_per_node",
+        "vasp_worker", "vasp_pre_run"];
+      for (const k of mlipKeys) if (cluster[k]) mlipCluster[k] = cluster[k];
+      for (const k of vaspClusterKeys) if (cluster[k]) vaspCluster[k] = cluster[k];
+
+      const isVasp = String(t.mode || "") === "mlip+vasp";
+      let html = "";
+
+      const execServer = String(t.execution || "").toLowerCase() === "server";
+      const hasCluster =
+        Object.keys(mlipCluster).length || (isVasp && Object.keys(vaspCluster).length);
+      if (execServer && hasCluster) {
+        html += '<details class="cluster-details"><summary>集群提交参数（展开）</summary>';
+        html += '<h4 style="margin-top:0.65rem;">MLIP</h4>' + dictRows(mlipCluster);
+        if (isVasp) {
+          html += '<h4 style="margin-top:0.65rem;">VASP</h4>' + dictRows(vaspCluster);
+        }
+        html += "</details>";
+      } else if (!execServer) {
+        html += '<p class="hint">本地执行（local）：未使用 SLURM。</p>';
+      }
+
+      if (!isVasp) {
+        html += '<p class="hint" style="margin-top:0.55rem;">仅 MLIP 模式，未启用 VASP。</p>';
+        clusterVaspBlock.innerHTML = html;
+        return;
+      }
+
+      const ce = t.config_effective || {};
+      const vre = ce.vasp_runtime_effective || null;
+
+      html += '<h3 style="margin-top:0.75rem;">VASP 输入（实际用于 MPRelaxSet / MPStaticSet）</h3>';
+
+      if (vre && typeof vre === "object") {
+        const ri = vre.relax_incar_merged && typeof vre.relax_incar_merged === "object"
+          ? vre.relax_incar_merged : null;
+        const si = vre.static_incar_merged && typeof vre.static_incar_merged === "object"
+          ? vre.static_incar_merged : null;
+        const rp = vre.relax_potcar_overrides && typeof vre.relax_potcar_overrides === "object"
+          ? vre.relax_potcar_overrides : null;
+        const sp = vre.static_potcar_overrides && typeof vre.static_potcar_overrides === "object"
+          ? vre.static_potcar_overrides : null;
+
+        html += '<p class="hint" style="margin-top:0;">以下为 InterOptimus 默认 INCAR 与表单覆盖合并后的结果；'
+          + "与未填写表单时实际提交的计算设置一致。</p>";
+
+        html += '<h4 style="margin-top:0.55rem;margin-bottom:0.25rem;">Relax · INCAR（合并后）</h4>';
+        html += ri && Object.keys(ri).length
+          ? '<pre class="incar-pre">' + esc(formatIncarObj(ri)) + "</pre>"
+          : '<p class="hint">（无）</p>';
+
+        html += '<h4 style="margin-top:0.35rem;margin-bottom:0.25rem;">Static · INCAR（合并后）</h4>';
+        html += si && Object.keys(si).length
+          ? '<pre class="incar-pre">' + esc(formatIncarObj(si)) + "</pre>"
+          : '<p class="hint">（无）</p>';
+
+        html += '<h4 style="margin-top:0.35rem;margin-bottom:0.25rem;">Relax · POTCAR</h4>';
+        if (vre.relax_potcar_functional) {
+          html += '<p class="hint" style="margin-bottom:0.25rem;">functional：<code>' +
+            esc(String(vre.relax_potcar_functional)) + "</code></p>";
+        }
+        if (rp && Object.keys(rp).length) {
+          html += '<div class="potcar-line">' + esc(formatPotcarSymbols(rp)) + "</div>";
+        } else {
+          html += '<p class="hint">未指定元素级覆盖（由 pymatgen 按结构自动选赝势）。</p>';
+        }
+
+        html += '<h4 style="margin-top:0.55rem;margin-bottom:0.25rem;">Static · POTCAR</h4>';
+        if (vre.static_potcar_functional) {
+          html += '<p class="hint" style="margin-bottom:0.25rem;">functional：<code>' +
+            esc(String(vre.static_potcar_functional)) + "</code></p>";
+        }
+        if (sp && Object.keys(sp).length) {
+          html += '<div class="potcar-line">' + esc(formatPotcarSymbols(sp)) + "</div>";
+        } else {
+          html += '<p class="hint">未指定元素级覆盖（由 pymatgen 按结构自动选赝势）。</p>';
+        }
+        if (vre.potcar_note) {
+          html += '<p class="hint" style="margin-top:0.4rem;">' + esc(vre.potcar_note) + "</p>";
+        }
+      } else {
+        html += '<p class="hint">暂无法解析有效 VASP 配置（任务可能仍在排队或缺少表单）。</p>';
+      }
+
+      const relaxIncarForm = parseKeyedSettings(vaspSummaryField(t, "relax_user_incar_settings"));
+      const staticIncarForm = parseKeyedSettings(vaspSummaryField(t, "static_user_incar_settings"));
+      const relaxPotForm = parseKeyedSettings(vaspSummaryField(t, "relax_user_potcar_settings"));
+      const staticPotForm = parseKeyedSettings(vaspSummaryField(t, "static_user_potcar_settings"));
+      const relaxFnForm = String(vaspSummaryField(t, "relax_user_potcar_functional") || "").trim();
+      const staticFnForm = String(vaspSummaryField(t, "static_user_potcar_functional") || "").trim();
+      const pairSel = String(vaspSummaryField(t, "vasp_pair_selection") || "").trim();
+      const dipole = String(vaspSummaryField(t, "vasp_dipole_correction") || "").trim();
+
+      const formHasVaspOverride = !!(relaxIncarForm || staticIncarForm || relaxPotForm || staticPotForm
+        || relaxFnForm || staticFnForm);
+      if (formHasVaspOverride) {
+        html += '<details style="margin-top:0.75rem;"><summary class="hint">表单中的用户覆盖（原始，未合并默认）</summary>';
+        html += '<h4 style="margin-top:0.45rem;margin-bottom:0.25rem;">Relax · INCAR（仅表单）</h4>';
+        html += relaxIncarForm
+          ? '<pre class="incar-pre">' + esc(formatIncarObj(relaxIncarForm)) + "</pre>"
+          : '<p class="hint">未填写</p>';
+        html += '<h4 style="margin-top:0.35rem;margin-bottom:0.25rem;">Static · INCAR（仅表单）</h4>';
+        html += staticIncarForm
+          ? '<pre class="incar-pre">' + esc(formatIncarObj(staticIncarForm)) + "</pre>"
+          : '<p class="hint">未填写</p>';
+        html += '<h4 style="margin-top:0.35rem;margin-bottom:0.25rem;">Relax · POTCAR（仅表单）</h4>';
+        html += relaxPotForm
+          ? '<div class="potcar-line">' + esc(formatPotcarSymbols(relaxPotForm)) + "</div>"
+          : '<p class="hint">未填写</p>';
+        if (relaxFnForm) {
+          html += '<p class="hint" style="margin-top:0;">functional：<code>' + esc(relaxFnForm) + "</code></p>";
+        }
+        html += '<h4 style="margin-top:0.55rem;margin-bottom:0.25rem;">Static · POTCAR（仅表单）</h4>';
+        html += staticPotForm
+          ? '<div class="potcar-line">' + esc(formatPotcarSymbols(staticPotForm)) + "</div>"
+          : '<p class="hint">未填写</p>';
+        if (staticFnForm) {
+          html += '<p class="hint" style="margin-top:0;">functional：<code>' + esc(staticFnForm) + "</code></p>";
+        }
+        html += "</details>";
+      }
+
+      if (pairSel) {
+        html += '<p class="hint" style="margin-top:0.65rem;"><strong>(match, term) 筛选</strong>：<code>' +
+          esc(pairSel) + "</code></p>";
+      }
+      if (dipole) {
+        html += '<p class="hint">偶极校正：<code>' + esc(dipole) + "</code></p>";
+      }
+
+      clusterVaspBlock.innerHTML = html;
+    }
+
+    function renderKV(t) {
+      const rp = t.remote_progress || {};
+      const cells = [
+        ["任务名", esc(t.name || "(unnamed)")],
+        ["状态", '<span class="badge ' + statusBadgeClass(t.status) + '">' + esc(t.status || "unknown") + "</span>" +
+          (t.phase ? " · " + esc(t.phase) : "")],
+        ["计算模式", esc(modeLabel(t))],
+        ["MLIP 后端 / 设备", esc(t.mlip_calc || "") + (t.form && t.form.opt_device ? " · " + esc(t.form.opt_device) : "")],
+        ["执行位置", esc(t.execution || "local")],
+        ["输入结构", "film: " + esc(t.film_name || "film.cif") + "<br/>substrate: " + esc(t.substrate_name || "substrate.cif")],
+        ["提交时间", esc(formatTime(t.created_at))],
+        ["最近更新", esc(formatTime(t.updated_at))],
+      ];
+      if (t.completed_at) cells.push(["完成时间", esc(formatTime(t.completed_at))]);
+      if (t.flow_uuid) cells.push(["Flow UUID", "<code>" + esc(t.flow_uuid) + "</code>"]);
+      if (t.mlip_job_uuid) cells.push(["MLIP UUID", "<code>" + esc(t.mlip_job_uuid) + "</code>"]);
+      if (t.submit_workdir) cells.push(["远程工作目录", "<code>" + esc(t.submit_workdir) + "</code>"]);
+      if (t.error) cells.push(["错误信息", '<span style="color:#b91c1c">' + esc(t.error) + "</span>"]);
+      kvBlock.innerHTML = cells.map(([k, v]) =>
+        '<div class="kv"><strong>' + k + "</strong>" + v + "</div>"
+      ).join("");
+    }
+
+    function renderProgress(t, terms) {
+      const status = String(t.status || "");
+      const rp = t.remote_progress || {};
+      const phaseRaw = String(
+        (rp && rp.current_phase != null && String(rp.current_phase).trim() !== "")
+          ? rp.current_phase
+          : (t.phase || "")
+      );
+      const phaseNorm = phaseRaw.toLowerCase().trim();
+      const isUnknown = status === "remote_unknown" || status === "unknown" || status === "remote_error";
+      const isMlipPhase = !isUnknown && !(phaseNorm === "vasp" || phaseNorm === "done" || status === "vasp_running" ||
+                            status === "completed" || status === "failed" || status === "cancelled");
+      const isVaspPhase = phaseNorm === "vasp" || phaseNorm === "done" || status === "vasp_running" ||
+                          (status === "completed" && (t.mode === "mlip+vasp"));
+      const isFailed = status === "failed" || status === "cancelled";
+
+      let html = "";
+
+      if (isFailed) {
+        html += '<div class="progress-card failed-style">' +
+          '<strong>任务未完成（' + esc(status) + '）</strong><br/>' +
+          '<span class="hint">' + esc(t.error || t.stage_summary || "查看下方事件日志获取更多信息") + "</span></div>";
+      } else if (isUnknown) {
+        html += '<div class="progress-card warn-style">' +
+          '<strong>无法获取远程状态（' + esc(status) + '）</strong><br/>' +
+          '<span class="hint">' + esc(t.error || t.stage_summary || "jobflow-remote / Mongo 暂时不可达；可重试 “强制刷新远程状态” 或检查 ~/.jfremote/ 配置。") + "</span></div>";
+      } else if (status === "completed") {
+        html += '<div class="progress-card alert-style">' +
+          "<strong>所有阶段已完成 ✓</strong><br/>" +
+          '<span class="hint">' + esc(t.stage_summary || "MLIP / VASP 全部完成。下方为筛选出的 (match, term) 列表。") + "</span></div>";
+      } else if (isMlipPhase && t.mode !== "mlip+vasp" && status === "queued") {
+        html += '<div class="progress-card"><strong>排队中</strong><br/><span class="hint">等待 worker 接管。</span></div>';
+      } else if (isMlipPhase) {
+        const p = t.progress || {};
+        const total = Number(p.match_terms_total || 0);
+        const done = Number(p.match_terms_done || 0);
+        const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+        html += '<div class="progress-card"><strong>MLIP 阶段进行中…</strong>' +
+          '<div class="progress-bar"><span style="width:' + (total > 0 ? pct : 8) + '%;"></span></div>' +
+          (total > 0
+            ? '<span class="hint">已弛豫 ' + done + " / " + total + " 个 (match, term) 对（部分尚未筛选完成）</span>"
+            : '<span class="hint">MLIP 优化进行中：等待第一批 (match, term) 弛豫结果。</span>') +
+          (t.stage_summary ? "<br/><span class=\"hint\">" + esc(t.stage_summary) + "</span>" : "") +
+          "</div>";
+      }
+
+      // VASP phase: only show screened (match, term) progress
+      const vaspTerms = (terms || []).filter((x) => x.role === "vasp");
+      const mlipTerms = (terms || []).filter((x) => x.role !== "vasp");
+      if (status === "completed" || isVaspPhase) {
+        const vp = t.vasp_progress || (t.remote_progress && t.remote_progress.expanded_vasp_job_counts) || {};
+        const vTotal = Number(vp.total || 0);
+        const vDone = Number(vp.finished || 0);
+        const vPct = vTotal > 0 ? Math.min(100, Math.round((vDone / vTotal) * 100)) : 0;
+        if (t.mode === "mlip+vasp") {
+          html += '<div class="progress-card">' +
+            "<strong>VASP 阶段（每个 match 筛选出的 term）</strong>";
+          if (vTotal > 0) {
+            html += '<div class="progress-bar"><span style="width:' + vPct + '%;"></span></div>' +
+              '<span class="hint">已完成 ' + vDone + " / " + vTotal +
+              "（运行中 " + (vp.running || 0) + " · 待启动 " + (vp.pending || 0) +
+              (vp.failed ? " · 失败 " + vp.failed : "") + "）</span>";
+          } else {
+            html += '<span class="hint">' +
+              (status === "completed"
+                ? "完成总览未携带 VASP 计数；详细 (match, term) 状态见下方。"
+                : "等待 VASP worker 上报…") +
+              "</span>";
+          }
+          if (vaspTerms.length) {
+            html += '<div class="term-grid">' + vaspTerms.map((x) => {
+              const isLabeled = (x.match_id !== undefined && x.match_id >= 0);
+              const head = isLabeled
+                ? "match " + esc(x.match_id) + " / term " + esc(x.term_id)
+                : esc(x.label || x.name || "VASP job");
+              const cls = statusBadgeClass(x.status || x.state);
+              const stTxt = esc(x.status || x.state || "unknown");
+              const sub = x.uuid
+                ? '<div class="hint"><code>' + esc(x.uuid).slice(0, 8) + "…</code></div>"
+                : "";
+              return '<div class="term-tile ' + cls + '">' +
+                '<div class="term-id">' + head + "</div>" +
+                '<div class="term-status">' + stTxt + "</div>" +
+                sub +
+                "</div>";
+            }).join("") + "</div>";
+          } else if (status === "completed") {
+            html += '<p class="hint" style="margin-top:0.45rem;">未在远端进度中找到 VASP 子作业；可能是仅做了 MLIP 预筛选。</p>';
+          }
+          html += "</div>";
+        }
+      }
+
+      // MLIP per-(match, term) details — only show when MLIP done or task completed/failed
+      if (mlipTerms.length && (status === "completed" || phaseNorm === "vasp" || phaseNorm === "done" || isVaspPhase)) {
+        html += '<div class="progress-card alert-style">' +
+          "<strong>MLIP 已弛豫的 (match, term)</strong>" +
+          '<div class="term-grid">' + mlipTerms.map((x) => {
+            const cls = statusBadgeClass(x.status);
+            const head = "match " + esc(x.match_id) + " / term " + esc(x.term_id);
+            const energyTxt = (x.interface_gamma_J_m2 != null)
+              ? "γ = " + Number(x.interface_gamma_J_m2).toFixed(3) + " J/m²"
+              : (x.energy != null ? "E = " + esc(x.energy) : "");
+            return '<div class="term-tile ' + cls + '">' +
+              '<div class="term-id">' + head + "</div>" +
+              '<div class="term-status">' + esc(x.status || "mlip_done") + "</div>" +
+              (energyTxt ? '<div class="hint">' + esc(energyTxt) + "</div>" : "") +
+              "</div>";
+          }).join("") + "</div></div>";
+      } else if (mlipTerms.length && isMlipPhase) {
+        // During MLIP, only summarize counts, do not show per-term detail
+        // (per the requested UX: just say "MLIP running" and overall progress)
+      }
+
+      progressBlock.innerHTML = html || '<p class="empty">暂无进度信息。</p>';
+    }
+
+    let lastInterfaceArts = [];
+
+    function structuresZipHref(relPath) {
+      return "/api/session/" + encodeURIComponent(TASK_ID) + "/structures.zip?under=" +
+        encodeURIComponent(relPath || "");
+    }
+
+    function artifactHref(a) {
+      return "/api/tasks/" + encodeURIComponent(TASK_ID) +
+        "/artifact?path=" + encodeURIComponent(a.relative_path || "");
+    }
+
+    /**
+     * Files surfaced under the unified "结果文件" panel. Kept in lockstep
+     * across MLIP and VASP so the two phases display the same four entries.
+     * Auxiliary outputs (legacy ``pairs_best_it/`` zip, the VASP markdown
+     * energy report, the energy comparison plot) are intentionally excluded
+     * here — the 3D viewer panel below already consumes ``pairs_best_it/``,
+     * and the energy report/plot live elsewhere in the page.
+     */
+    const RESULT_FILE_KINDS = [
+      "stereo_table",
+      "stereo_plot_jpg",
+      "stereo_interactive_html",
+      "selected_interfaces_csv",
+    ];
+    const RESULT_KIND_ORDER = {
+      stereo_table: 0,
+      stereo_plot_jpg: 1,
+      stereo_interactive_html: 2,
+      selected_interfaces_csv: 3,
+    };
+
+    function renderArtifacts(arts) {
+      arts = arts || [];
+      if (!arts.length) {
+        artifactsBlock.innerHTML =
+          '<p class="empty">暂无文件。请将 MLIP 结果放在 <code>mlip_results/</code> 或远程拉取后的 <code>fetched_results/</code>；VASP 结果在 <code>vasp_results/</code>（如 <code>fetched_results/vasp_results/</code>）。</p>';
+        renderInterfaceStructures([]);
+        return;
+      }
+
+      const byPhase = { mlip: [], vasp: [] };
+      for (const a of arts) {
+        const phase = a.phase === "vasp" ? "vasp" : "mlip";
+        byPhase[phase].push(a);
+      }
+
+      function pickResultDownloads(items) {
+        return items
+          .filter((a) => RESULT_FILE_KINDS.indexOf(a.kind) >= 0)
+          .sort((a, b) => (RESULT_KIND_ORDER[a.kind] ?? 9) - (RESULT_KIND_ORDER[b.kind] ?? 9));
+      }
+
+      const sections = [];
+      const phases = [
+        {
+          key: "mlip",
+          title: "MLIP 结果",
+          subtitle: "all_match_info · stereographic.jpg · stereographic_interactive · selected_interfaces.csv",
+        },
+        {
+          key: "vasp",
+          title: "VASP 结果",
+          subtitle: "vasp_results/（同上）",
+        },
+      ];
+      for (const ph of phases) {
+        const items = pickResultDownloads(byPhase[ph.key] || []);
+        if (!items.length) continue;
+        sections.push('<div class="phase-block"><h3 style="margin-top:0.6rem;color:#0c4a6e;">' +
+          esc(ph.title) +
+          (ph.subtitle ? ' <span class="hint" style="font-weight:500;">· ' + esc(ph.subtitle) + "</span>" : "") +
+          "</h3>");
+        sections.push('<div class="download-list">' + items.map((a) => {
+          return '<a href="' + artifactHref(a) + '" target="_blank">' + esc(a.name) + "</a>";
+        }).join("") + "</div></div>");
+      }
+      artifactsBlock.innerHTML = sections.join("") || '<p class="empty">暂无结果文件。</p>';
+
+      const interfacePoscars = arts.filter((a) => a.kind === "interface_poscar");
+      renderInterfaceStructures(interfacePoscars);
+    }
+
+    /**
+     * Render relaxed-interface structures (one card per (match, term, phase))
+     * using the same VESTA-style 3Dmol pipeline as the bulk CIFs. POSCARs are
+     * converted to P1 CIF server-side so face / edge / corner image atoms are
+     * visible (avoids 3Dmol doAssembly's out-of-cell artefacts).
+     */
+    const interfaceViewers = new Map();
+
+    function _interfaceCardKey(art) {
+      return (art.phase || "mlip") + ":" + art.relative_path;
+    }
+
+    // Stable signature of the artifact list so periodic polls of /api/tasks
+    // don't tear down already-rendered 3Dmol viewers (which previously made
+    // the structures "disappear after a few seconds").
+    function _interfaceArtsSignature(arts) {
+      if (!arts || !arts.length) return "";
+      return arts
+        .map((a) => (a.phase || "mlip") + "|" + (a.relative_path || "") + "|" + (a.updated_at || ""))
+        .sort()
+        .join(";;");
+    }
+    let lastInterfaceArtsSig = "";
+
+    function renderInterfaceStructures(arts) {
+      lastInterfaceArts = arts || [];
+      if (!arts || !arts.length) {
+        interfacesBlock.innerHTML =
+          '<p class="empty">界面结构将在 MLIP 弛豫完成后，或拉取 VASP 结果后出现。</p>';
+        interfaceViewers.clear();
+        lastInterfaceArtsSig = "";
+        return;
+      }
+      const sig = _interfaceArtsSignature(arts);
+      if (sig && sig === lastInterfaceArtsSig && interfaceViewers.size > 0) {
+        // Same set of structures already rendered — skip rebuild so the
+        // existing 3Dmol viewers (and the user's view state) survive polling.
+        return;
+      }
+      // Sort: MLIP first, then VASP; within each, by (match_id, term_id)
+      const order = arts.slice().sort((a, b) => {
+        const ap = (a.phase === "vasp") ? 1 : 0;
+        const bp = (b.phase === "vasp") ? 1 : 0;
+        if (ap !== bp) return ap - bp;
+        const am = (a.match_id || 0), bm = (b.match_id || 0);
+        if (am !== bm) return am - bm;
+        return (a.term_id || 0) - (b.term_id || 0);
+      });
+      const html = order.map((art) => {
+        const key = _interfaceCardKey(art);
+        const viewerId = "iface-viewer-" + Math.abs(_hashStr(key));
+        const phaseTag = art.phase === "vasp"
+          ? '<span class="badge vasp-running">VASP</span>'
+          : '<span class="badge mlip-running">MLIP</span>';
+        const kindLabel = art.structure_kind === "cif" ? "CIF" : (art.poscar_kind || "POSCAR");
+        const dlHref = "/api/tasks/" + encodeURIComponent(TASK_ID) +
+          "/artifact?path=" + encodeURIComponent(art.relative_path);
+        return (
+          '<div class="iface-card" data-key="' + esc(key) + '" data-viewer-id="' + viewerId + '"' +
+          ' data-relpath="' + esc(art.relative_path) + '">' +
+            '<div class="iface-card-head">' + phaseTag +
+              '<span class="iface-title">match ' + esc(art.match_id) + ' · term ' + esc(art.term_id) +
+              '</span>' +
+              '<span class="hint">' + esc(kindLabel) + "</span>" +
+            "</div>" +
+            '<div class="viewer-wrap empty" data-host="1" id="' + viewerId + '-wrap">' +
+              "<span>正在加载 3D 视图…</span>" +
+            "</div>" +
+            '<div id="' + viewerId + '-legend" class="elem-legend" style="display:none;"></div>' +
+            '<div class="struct-card-actions">' +
+              '<button type="button" class="iface-reset" disabled>重置视角</button>' +
+              '<button type="button" class="iface-reload" disabled>重新渲染</button>' +
+              '<a href="' + dlHref + '" target="_blank" download>下载结构</a>' +
+            "</div>" +
+          "</div>"
+        );
+      }).join("");
+      interfacesBlock.innerHTML =
+        '<div class="iface-grid">' + html + "</div>";
+      interfaceViewers.clear();
+      const cards = Array.from(interfacesBlock.querySelectorAll(".iface-card"));
+      cards.forEach((card) => {
+        const resetBtn = card.querySelector(".iface-reset");
+        const reloadBtn = card.querySelector(".iface-reload");
+        if (resetBtn) {
+          resetBtn.addEventListener("click", () => {
+            const v = interfaceViewers.get(card.getAttribute("data-key"));
+            if (!v) return;
+            try { v.zoomTo(); v.zoom(0.95); v.render(); } catch (_e) {}
+          });
+        }
+        if (reloadBtn) {
+          reloadBtn.addEventListener("click", async () => {
+            reloadBtn.disabled = true;
+            reloadBtn.textContent = "渲染中…";
+            const ok = await loadInterfaceViewer(card);
+            reloadBtn.textContent = ok ? "重新渲染" : "渲染失败 · 重试";
+            reloadBtn.disabled = false;
+            if (ok && resetBtn) resetBtn.disabled = false;
+          });
+        }
+      });
+      // Auto-load every viewer in sequence so the user does not have to click.
+      // Sequential loading avoids saturating the browser GPU when many cards
+      // exist (each $3Dmol viewer creates its own WebGL context).
+      (async () => {
+        for (const card of cards) {
+          const ok = await loadInterfaceViewer(card);
+          const resetBtn = card.querySelector(".iface-reset");
+          const reloadBtn = card.querySelector(".iface-reload");
+          if (resetBtn) resetBtn.disabled = !ok;
+          if (reloadBtn) reloadBtn.disabled = false;
+        }
+        lastInterfaceArtsSig = sig;
+      })();
+    }
+
+    function _hashStr(s) {
+      let h = 0;
+      for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+      return h;
+    }
+
+    async function loadInterfaceViewer(card) {
+      const relpath = card.getAttribute("data-relpath");
+      const viewerId = card.getAttribute("data-viewer-id");
+      const wrap = document.getElementById(viewerId + "-wrap");
+      const legendHost = document.getElementById(viewerId + "-legend");
+      if (!relpath || !wrap) return false;
+      try {
+        const url = "/api/tasks/" + encodeURIComponent(TASK_ID) +
+          "/poscar_view?path=" + encodeURIComponent(relpath);
+        const res = await fetch(url);
+        if (!res.ok) {
+          wrap.classList.add("empty");
+          wrap.innerHTML = "<span>结构转换失败 (HTTP " + res.status + ")</span>";
+          return false;
+        }
+        const cifText = await res.text();
+        if (typeof window.$3Dmol === "undefined") {
+          wrap.classList.add("empty");
+          wrap.innerHTML = "<span>3Dmol.js 未能加载（请检查 CDN 或网络）。POSCAR 仍可下载。</span>";
+          return false;
+        }
+        wrap.classList.remove("empty");
+        wrap.innerHTML = '<div class="viewer" id="' + viewerId + '"></div>';
+        const el = document.getElementById(viewerId);
+        const viewer = window.$3Dmol.createViewer(el, {
+          backgroundColor: "#ffffff",
+          antialias: true,
+        });
+        viewer.addModel(cifText, "cif");
+        const presentElements = new Set();
+        try {
+          const model = viewer.getModel();
+          const atoms = (model && model.selectedAtoms)
+            ? model.selectedAtoms({})
+            : (viewer.selectedAtoms ? viewer.selectedAtoms({}) : []);
+          (atoms || []).forEach((a) => { if (a && a.elem) presentElements.add(a.elem); });
+        } catch (_e) {}
+        viewer.setStyle({}, { stick: { radius: 0.13, opacity: 0.95, color: "#cfcfcf" } });
+        presentElements.forEach((elem) => {
+          const p = paletteFor(elem);
+          viewer.setStyle({ elem: elem }, {
+            sphere: { color: p.color, radius: p.radius },
+            stick: { radius: 0.13, opacity: 0.95, color: "#cfcfcf" },
+          });
+        });
+        try {
+          viewer.addUnitCell(viewer.getModel(), {
+            box: { color: "#374151", linewidth: 1.5 },
+            astyle: { hidden: true },
+            bstyle: { hidden: true },
+            cstyle: { hidden: true },
+          });
+        } catch (_e) {
+          try { viewer.addUnitCell(); } catch (_e2) {}
+        }
+        viewer.zoomTo();
+        viewer.zoom(0.95);
+        viewer.render();
+        if (legendHost) {
+          const elems = Array.from(presentElements);
+          if (elems.length) {
+            legendHost.style.display = "";
+            legendHost.innerHTML = elems.map((e) => {
+              const p = paletteFor(e);
+              return '<span class="elem-chip"><span class="dot" style="background:' +
+                esc(p.color) + ';"></span>' + esc(e) + "</span>";
+            }).join("");
+          }
+        }
+        interfaceViewers.set(card.getAttribute("data-key"), viewer);
+        return true;
+      } catch (e) {
+        wrap.classList.add("empty");
+        wrap.innerHTML = "<span>渲染失败：" + esc(e && e.message || e) + "</span>";
+        return false;
+      }
+    }
+
+    // ---- Final-results fetch (mlip_results / vasp_results) ----
+    let fetchInFlight = false;
+    let fetchTriggeredOnce = false;
+
+    async function triggerFetchResults(opts) {
+      if (fetchInFlight) return null;
+      fetchInFlight = true;
+      const silent = !!(opts && opts.silent);
+      if (!silent) {
+        btnFetchResults.disabled = true;
+        btnFetchResults.textContent = "正在拉取…";
+        fetchResultsStatus.textContent =
+          "正在通过 jobflow-remote 拉取 mlip_results / vasp_results（可能需要数十秒）…";
+      }
+      try {
+        const r = await fetch(
+          "/api/tasks/" + encodeURIComponent(TASK_ID) + "/fetch_results",
+          { method: "POST" }
+        );
+        const j = await r.json();
+        if (j.skipped_reason) {
+          fetchResultsStatus.textContent = "本地任务无需拉取（" + j.skipped_reason + "）。";
+        } else if (j.ok) {
+          const fr = j.fetch_summary || {};
+          fetchResultsStatus.textContent = "已拉取至 " + (j.fetched_results_dir || "(unknown)") +
+            (fr.vasp_results_dir ? "（含 VASP 结果）" : "");
+        } else {
+          fetchResultsStatus.innerHTML = '<span style="color:#b91c1c;">拉取失败：' +
+            esc(j.error || (j.fetch_summary && j.fetch_summary.error) || "unknown") + "</span>";
+        }
+        // refresh artifacts after fetch
+        await loadDetail({ silent: true });
+        return j;
+      } catch (e) {
+        fetchResultsStatus.innerHTML = '<span style="color:#b91c1c;">拉取请求失败：' + esc(e) + "</span>";
+        return null;
+      } finally {
+        fetchInFlight = false;
+        if (!silent) {
+          btnFetchResults.disabled = false;
+          btnFetchResults.textContent = "拉取最终结果（mlip_results / vasp_results）";
+        }
+      }
+    }
+
+    if (btnFetchResults) {
+      btnFetchResults.addEventListener("click", () => {
+        fetchTriggeredOnce = true;
+        triggerFetchResults({ silent: false });
+      });
+    }
+
+    function maybeAutoFetchResults(task, arts) {
+      if (fetchTriggeredOnce || fetchInFlight) return;
+      const status = String((task || {}).status || "");
+      if (status !== "completed") return;
+      const isRemote = !!(task && (task.flow_uuid || task.mlip_job_uuid || task.submit_jf_job_id ||
+        (Array.isArray(task.vasp_job_uuids) && task.vasp_job_uuids.length)));
+      if (!isRemote) return;
+      // Already have something fetched? skip auto-fetch.
+      const haveFetched = (arts || []).some((a) => {
+        const p = a.relative_path || "";
+        return p.startsWith("fetched_results/") || p.startsWith("mlip_results/") ||
+               p.startsWith("vasp_results/");
+      });
+      if (haveFetched) return;
+      fetchTriggeredOnce = true;
+      fetchResultsStatus.textContent = "任务已完成 — 自动拉取 mlip_results / vasp_results …";
+      triggerFetchResults({ silent: true }).catch(() => {});
+    }
+
+    function renderEvents(events) {
+      events = events || [];
+      if (!events.length) {
+        eventsBlock.innerHTML = '<span class="hint">暂无事件。</span>';
+        return;
+      }
+      const rows = events.slice(-200).reverse().map((e) => {
+        return '<div class="event-row">' +
+          '<span class="event-time">' + esc(formatTime(e.created_at)) + "</span>" +
+          '<span class="event-name">' + esc(e.event || "") + "</span>" +
+          esc(e.message || "") + "</div>";
+      }).join("");
+      eventsBlock.innerHTML = rows;
+    }
+
+    async function fetchViewerCif(which) {
+      // Prefer the server-pre-processed P1 CIF (conventional cell + image atoms).
+      // Fall back to the raw artifact if the helper endpoint is unavailable.
+      try {
+        const url = "/api/tasks/" + encodeURIComponent(TASK_ID) +
+                    "/cif_view?which=" + encodeURIComponent(which);
+        const res = await fetch(url);
+        if (res.ok) {
+          const txt = await res.text();
+          if (txt && txt.length > 0) return txt;
+        }
+      } catch (_e) {}
+      try {
+        const res = await fetch("/api/tasks/" + encodeURIComponent(TASK_ID) +
+                                "/artifact?path=" + encodeURIComponent(which + ".cif"));
+        if (!res.ok) return null;
+        const txt = await res.text();
+        return txt && txt.length > 0 ? txt : null;
+      } catch (_e) {
+        return null;
+      }
+    }
+
+    async function fetchCifMeta(which) {
+      try {
+        const url = "/api/tasks/" + encodeURIComponent(TASK_ID) +
+                    "/cif_meta?which=" + encodeURIComponent(which);
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (_e) {
+        return null;
+      }
+    }
+
+    function renderCaption(which, meta) {
+      const cap = document.getElementById("caption-" + which);
+      if (!cap) return;
+      if (!meta || !Object.keys(meta).length) {
+        cap.style.display = "none";
+        return;
+      }
+      const a = meta.a, b = meta.b, c = meta.c;
+      const ang = "α " + (meta.alpha || "—") + "° · β " + (meta.beta || "—") +
+                  "° · γ " + (meta.gamma || "—") + "°";
+      const sg = meta.spacegroup_symbol
+        ? "<strong>" + esc(meta.spacegroup_symbol) + "</strong>" +
+          (meta.spacegroup_number ? " <span class=\"hint\">(#" + esc(meta.spacegroup_number) + ")</span>" : "")
+        : "";
+      const sys = meta.crystal_system ? " · " + esc(meta.crystal_system) : "";
+      const formula = meta.formula
+        ? "<strong>" + esc(meta.formula) + "</strong>" +
+          (meta.formula_full && meta.formula_full !== meta.formula
+            ? ' <span class="hint">' + esc(meta.formula_full) + "</span>"
+            : "")
+        : "";
+      cap.style.display = "";
+      cap.innerHTML =
+        formula + (sg ? " · " + sg + sys : "") + "<br/>" +
+        "a = " + esc(a) + " Å · b = " + esc(b) + " Å · c = " + esc(c) + " Å · " + ang +
+        " · V = " + esc(meta.volume) + " Å³ · ρ = " + esc(meta.density) + " g/cm³ · " +
+        esc(meta.num_sites) + " sites";
+    }
+
+    /**
+     * Materials-Project-style render:
+     *   - Server-side P1 CIF (atoms wrapped + image copies on faces/edges/corners).
+     *   - 3Dmol with no symmetry assembly: addModel(cif, "cif") only.
+     *   - Sphere + stick combo (jmol coloring is the 3Dmol default).
+     *   - Crisp unit-cell box with axis labels.
+     *   - Optional 2x2x2 supercell via replicateUnitCell.
+     */
+    function renderStructure(which, cifText, opts) {
+      const wrap = document.getElementById("viewer-" + which + "-wrap");
+      if (!wrap) return null;
+      try {
+        if (!cifText) {
+          wrap.classList.add("empty");
+          wrap.innerHTML = "<span>未找到 " + which + ".cif</span>";
+          return null;
+        }
+        if (typeof window.$3Dmol === "undefined") {
+          wrap.classList.add("empty");
+          wrap.innerHTML = "<span>3Dmol.js 未能加载（请检查 CDN 或网络）。CIF 仍可下载。</span>";
+          return null;
+        }
+        wrap.classList.remove("empty");
+        wrap.innerHTML = '<div class="viewer" id="viewer-' + which + '"></div>';
+        const el = document.getElementById("viewer-" + which);
+        const viewer = window.$3Dmol.createViewer(el, {
+          backgroundColor: "#ffffff",
+          antialias: true,
+        });
+        let added = false;
+        try {
+          viewer.addModel(cifText, "cif");
+          added = true;
+        } catch (_err) {
+          added = false;
+        }
+        if (!added) {
+          wrap.classList.add("empty");
+          wrap.innerHTML = "<span>解析 " + which + ".cif 失败。请直接下载 CIF 检查。</span>";
+          return null;
+        }
+        try {
+          if (opts && opts.supercell) {
+            viewer.replicateUnitCell(2, 2, 2);
+          }
+        } catch (_e) {}
+        // Materials-Project per-element styling: every element keeps its VESTA (or Jmol)
+        // color, sized by either uniform 0.5 Å (MP default) or VESTA atomic radii.
+        // Bond cylinders use a neutral light gray that doesn't compete with element colors.
+        const presentElements = new Set();
+        try {
+          const model = viewer.getModel();
+          const atoms = (model && model.selectedAtoms)
+            ? model.selectedAtoms({})
+            : (viewer.selectedAtoms ? viewer.selectedAtoms({}) : []);
+          (atoms || []).forEach((a) => { if (a && a.elem) presentElements.add(a.elem); });
+        } catch (_e) {}
+        if (presentElements.size === 0) {
+          ["H","Li","Be","B","C","N","O","F","Na","Mg","Al","Si","P","S","Cl","K","Ca",
+           "Ti","V","Cr","Mn","Fe","Co","Ni","Cu","Zn","Ga","Ge","As","Se","Br",
+           "Sr","Y","Zr","Nb","Mo","Ru","Rh","Pd","Ag","Cd","In","Sn","Sb","Te","I",
+           "Ba","La","Hf","Ta","W","Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi"
+          ].forEach((e) => presentElements.add(e));
+        }
+        try {
+          viewer.setStyle({}, { stick: { radius: 0.13, opacity: 0.95, color: "#cfcfcf" } });
+        } catch (_e) {}
+        presentElements.forEach((elem) => {
+          const p = paletteFor(elem);
+          try {
+            viewer.setStyle({ elem: elem }, {
+              sphere: { color: p.color, radius: p.radius },
+              stick:  { radius: 0.13, opacity: 0.95, color: "#cfcfcf" },
+            });
+          } catch (_e) {}
+        });
+        // MP shows a thin dark-gray cell box without colored axis markers — match that.
+        try {
+          viewer.addUnitCell(viewer.getModel(), {
+            box: { color: "#374151", linewidth: 1.5 },
+            astyle: { hidden: true },
+            bstyle: { hidden: true },
+            cstyle: { hidden: true },
+          });
+        } catch (_e) {
+          try { viewer.addUnitCell(); } catch (_e2) {}
+        }
+        try { viewer.zoomTo(); } catch (_e) {}
+        try { viewer.zoom(0.95); } catch (_e) {}
+        try { viewer.render(); } catch (_e) {}
+        try { renderElementLegend(which, presentElements); } catch (_e) {}
+        return viewer;
+      } catch (err) {
+        try {
+          wrap.classList.add("empty");
+          wrap.innerHTML = "<span>渲染 " + which + " 结构失败：" + esc(err && err.message || err) + "</span>";
+        } catch (_e) {}
+        if (window.console && console.error) console.error("renderStructure(" + which + ")", err);
+        return null;
+      }
+    }
+
+    /**
+     * Render an element-color legend (VESTA-style chips) underneath a viewer.
+     * Only draws the elements that actually appear in this structure so the
+     * film and substrate legends each show their own composition.
+     */
+    function renderElementLegend(which, elementSet) {
+      const host = document.getElementById("legend-" + which);
+      if (!host) return;
+      const elems = [];
+      (elementSet || []).forEach((e) => { if (e) elems.push(e); });
+      // Sort by current color-scheme key order (alphabetical fallback if not in palette)
+      const ORDER = Object.keys(colorTableFor(colorScheme));
+      elems.sort((a, b) => {
+        const ia = ORDER.indexOf(a);
+        const ib = ORDER.indexOf(b);
+        if (ia === -1 && ib === -1) return a.localeCompare(b);
+        if (ia === -1) return 1;
+        if (ib === -1) return -1;
+        return ia - ib;
+      });
+      if (!elems.length) {
+        host.style.display = "none";
+        host.innerHTML = "";
+        return;
+      }
+      host.style.display = "";
+      host.innerHTML = elems.map((e) => {
+        const p = paletteFor(e);
+        return '<span class="elem-chip" title="' + esc(e) + ' · r = ' + esc(p.radius) + ' Å">' +
+                 '<span class="dot" style="background:' + esc(p.color) + ';"></span>' +
+                 esc(e) +
+                 ' <span class="rad">' + esc(p.radius) + ' Å</span>' +
+               '</span>';
+      }).join("");
+    }
+
+    async function reloadStructures() {
+      try {
+        const [filmCif, subCif, filmMeta, subMeta] = await Promise.all([
+          fetchViewerCif("film"),
+          fetchViewerCif("substrate"),
+          fetchCifMeta("film"),
+          fetchCifMeta("substrate"),
+        ]);
+        if (filmCif !== lastFilmCif) {
+          lastFilmCif = filmCif;
+          viewerFilm = renderStructure("film", filmCif, { supercell: supercellState.film });
+        }
+        if (subCif !== lastSubstrateCif) {
+          lastSubstrateCif = subCif;
+          viewerSubstrate = renderStructure("substrate", subCif, { supercell: supercellState.substrate });
+        }
+        renderCaption("film", filmMeta);
+        renderCaption("substrate", subMeta);
+        if (dlFilm) {
+          dlFilm.style.display = filmCif ? "" : "none";
+          dlFilm.href = "/api/tasks/" + encodeURIComponent(TASK_ID) + "/cif?which=film";
+        }
+        if (dlSubstrate) {
+          dlSubstrate.style.display = subCif ? "" : "none";
+          dlSubstrate.href = "/api/tasks/" + encodeURIComponent(TASK_ID) + "/cif?which=substrate";
+        }
+      } catch (err) {
+        if (window.console && console.error) console.error("reloadStructures", err);
+      }
+    }
+
+    function rerenderStructure(which) {
+      const cifText = which === "film" ? lastFilmCif : lastSubstrateCif;
+      const v = renderStructure(which, cifText, { supercell: supercellState[which] });
+      if (which === "film") viewerFilm = v;
+      else viewerSubstrate = v;
+    }
+
+    function safeRender(name, fn) {
+      try { fn(); } catch (err) {
+        if (window.console && console.error) console.error("renderer " + name + " failed:", err);
+      }
+    }
+
+    function showLoadError(msg) {
+      const e = '<p class="empty" style="color:#b91c1c;">' + esc(msg) + "</p>";
+      progressBlock.innerHTML = e;
+      kvBlock.innerHTML = e;
+      clusterVaspBlock.innerHTML = e;
+      eventsBlock.innerHTML = e;
+    }
+
+    async function loadDetail(opts) {
+      let j;
+      try {
+        const res = await fetch("/api/tasks/" + encodeURIComponent(TASK_ID));
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody.detail || ("HTTP " + res.status));
+        }
+        j = await res.json();
+      } catch (e) {
+        if (!(opts && opts.silent)) {
+          showLoadError("加载任务详情失败：" + (e.message || e));
+        }
+        return;
+      }
+      const t = (j && j.task) || {};
+      const arts = (j && j.artifacts) || [];
+      const terms = (j && j.match_terms) || [];
+      const events = (j && j.events) || [];
+      safeRender("badge", () => setBadge(t.status));
+      safeRender("kv", () => renderKV(t));
+      safeRender("cluster_vasp", () => renderClusterVasp(t));
+      safeRender("progress", () => renderProgress(t, terms));
+      safeRender("artifacts", () => renderArtifacts(arts));
+      safeRender("events", () => renderEvents(events));
+      try {
+        const isRunning = ["queued", "mlip_running", "vasp_running", "remote_running", "running"].indexOf(String(t.status)) >= 0;
+        btnCancel.style.display = isRunning ? "" : "none";
+        lastRefreshed.textContent = "最近刷新 " + new Date().toLocaleTimeString();
+      } catch (_e) {}
+      try { maybeAutoFetchResults(t, arts); } catch (_e) {}
+    }
+
+    async function refreshAll() {
+      try {
+        await fetch("/api/tasks/" + encodeURIComponent(TASK_ID) + "/refresh", { method: "POST" });
+      } catch (_e) {}
+      await Promise.allSettled([loadDetail(), reloadStructures()]);
+    }
+
+    function startPolling() {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(() => loadDetail().catch(() => {}), 6000);
+    }
+
+    btnRefresh.addEventListener("click", refreshAll);
+    btnCancel.addEventListener("click", async () => {
+      if (!confirm("确认取消该任务？正在运行的 worker 会被强制终止。")) return;
+      btnCancel.disabled = true;
+      try {
+        await fetch("/api/cancel/" + encodeURIComponent(TASK_ID), { method: "POST" });
+      } finally {
+        btnCancel.disabled = false;
+      }
+      await loadDetail();
+    });
+
+    document.getElementById("btn-film-reset").addEventListener("click", () => {
+      if (viewerFilm) { try { viewerFilm.zoomTo(); viewerFilm.zoom(0.95); viewerFilm.render(); } catch (_e) {} }
+    });
+    document.getElementById("btn-substrate-reset").addEventListener("click", () => {
+      if (viewerSubstrate) { try { viewerSubstrate.zoomTo(); viewerSubstrate.zoom(0.95); viewerSubstrate.render(); } catch (_e) {} }
+    });
+    function bindSupercellToggle(which, btnId) {
+      const btn = document.getElementById(btnId);
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        supercellState[which] = !supercellState[which];
+        btn.textContent = supercellState[which] ? "显示 1×1×1 单胞" : "显示 2×2×2 超胞";
+        rerenderStructure(which);
+      });
+    }
+    bindSupercellToggle("film", "btn-film-supercell");
+    bindSupercellToggle("substrate", "btn-substrate-supercell");
+
+    // Color-scheme & radius-mode segmented toggles, shared by film + substrate viewers.
+    document.querySelectorAll('#struct-toolbar [data-scheme]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const next = btn.getAttribute("data-scheme");
+        if (next === colorScheme) return;
+        colorScheme = next;
+        document.querySelectorAll('#struct-toolbar [data-scheme]').forEach((b) => {
+          b.classList.toggle("active", b.getAttribute("data-scheme") === colorScheme);
+        });
+        rerenderStructure("film");
+        rerenderStructure("substrate");
+      });
+    });
+    document.querySelectorAll('#struct-toolbar [data-radius]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const next = btn.getAttribute("data-radius");
+        if (next === radiusMode) return;
+        radiusMode = next;
+        document.querySelectorAll('#struct-toolbar [data-radius]').forEach((b) => {
+          b.classList.toggle("active", b.getAttribute("data-radius") === radiusMode);
+        });
+        rerenderStructure("film");
+        rerenderStructure("substrate");
+      });
+    });
+
+    (async () => {
+      const detailP = loadDetail().catch((err) => {
+        if (window.console && console.error) console.error("loadDetail failed:", err);
+        showLoadError("加载任务详情失败：" + (err && err.message || err));
+      });
+      const structP = reloadStructures().catch((err) => {
+        if (window.console && console.error) console.error("reloadStructures failed:", err);
+      });
+      await Promise.allSettled([detailP, structP]);
+      startPolling();
+    })();
+  </script>
+</body>
+</html>

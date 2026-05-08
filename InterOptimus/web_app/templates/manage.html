@@ -1,0 +1,1827 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>InterOptimus · 任务管理</title>
+  <style>
+    :root {
+      --bg: #eef2f7;
+      --bg-elev: #ffffff;
+      --panel: #ffffff;
+      --muted: #64748b;
+      --text: #0f172a;
+      --accent: #0284c7;
+      --accent-soft: #e0f2fe;
+      --border: #cbd5e1;
+      --shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+      --shadow-md: 0 6px 18px rgba(15, 23, 42, 0.07);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(165deg, #f1f5f9 0%, #e2e8f0 45%, #f8fafc 100%);
+      color: var(--text);
+      line-height: 1.55;
+      min-height: 100vh;
+    }
+    header {
+      padding: 1.4rem 1.6rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-elev);
+      box-shadow: var(--shadow-md);
+    }
+    h1 { margin: 0; font-size: 1.5rem; color: #0c4a6e; letter-spacing: -0.02em; }
+    p.sub { margin: 0.4rem 0 0; color: var(--muted); font-size: 0.92rem; max-width: 68rem; }
+    main { max-width: 1180px; margin: 0 auto; padding: 1.4rem 1.4rem 4rem; }
+    a { color: #0369a1; text-underline-offset: 2px; }
+    a:hover { color: #0c4a6e; }
+    h2 { margin: 0 0 0.7rem; color: #0c4a6e; font-size: 1.05rem; }
+    .nav-bar {
+      display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center;
+      margin-bottom: 1.2rem; font-size: 0.88rem; color: var(--muted);
+    }
+    .nav-bar a { font-weight: 600; }
+    fieldset {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.15rem;
+      margin: 0 0 1rem;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    legend { padding: 0 0.5rem; color: var(--accent); font-weight: 650; font-size: 0.92rem; }
+    label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 0.22rem; }
+    .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 1rem; }
+    .row-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem 1rem; }
+    @media (max-width: 720px) {
+      .row, .row-3 { grid-template-columns: 1fr; }
+    }
+    .field { margin-bottom: 0.5rem; }
+    input[type="text"], input[type="number"], input[type="file"], select, textarea {
+      width: 100%;
+      padding: 0.46rem 0.6rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #f8fafc;
+      color: var(--text);
+      font-size: 0.9rem;
+      transition: border-color 0.12s ease, box-shadow 0.12s ease;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: center; margin: 0.55rem 0 0; }
+    button {
+      background: #e2e8f0;
+      color: #475569;
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.95rem;
+      border-radius: 9px;
+      font-weight: 650;
+      cursor: pointer;
+      font-size: 0.92rem;
+    }
+    button:hover:not(:disabled) { background: #cbd5e1; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.primary {
+      background: linear-gradient(180deg, #0ea5e9, var(--accent));
+      color: #fff;
+      border: none;
+      padding: 0.55rem 1.15rem;
+      box-shadow: 0 2px 10px rgba(2, 132, 199, 0.35);
+    }
+    .hint { font-size: 0.82rem; color: var(--muted); margin-top: 0.35rem; }
+    .pill {
+      display: inline-flex; align-items: center;
+      border-radius: 999px;
+      padding: 0.18rem 0.55rem;
+      background: var(--accent-soft);
+      color: #0369a1;
+      font-size: 0.78rem;
+      font-weight: 650;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      align-items: center;
+      margin-bottom: 0.6rem;
+    }
+    .search-input {
+      flex: 1 1 220px;
+      padding: 0.45rem 0.6rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #f8fafc;
+      font-size: 0.88rem;
+    }
+    .filter-select {
+      padding: 0.45rem 0.55rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #f8fafc;
+      font-size: 0.88rem;
+    }
+    .task-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 0.85rem;
+    }
+    .task-card {
+      display: block;
+      text-decoration: none;
+      color: inherit;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 12px;
+      padding: 0.85rem 1rem;
+      box-shadow: var(--shadow);
+      transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+    }
+    .task-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent);
+      box-shadow: var(--shadow-md);
+    }
+    .task-card-title {
+      display: flex; align-items: center; gap: 0.45rem;
+      font-weight: 700; font-size: 0.97rem;
+      color: #0c4a6e;
+    }
+    .task-card-meta { color: var(--muted); font-size: 0.78rem; margin-top: 0.25rem; line-height: 1.55; }
+    .task-card-mono { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.74rem; color: #64748b; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 0.08rem 0.55rem;
+      font-size: 0.74rem;
+      font-weight: 700;
+      background: #e2e8f0;
+      color: #475569;
+    }
+    .badge.queued { background: #fef9c3; color: #854d0e; }
+    .badge.running, .badge.mlip-running, .badge.vasp-running { background: #dbeafe; color: #1d4ed8; }
+    .badge.completed { background: #dcfce7; color: #15803d; }
+    .badge.failed, .badge.cancelled { background: #fee2e2; color: #b91c1c; }
+    .progress-line {
+      margin-top: 0.4rem;
+      padding: 0.35rem 0.5rem;
+      border-radius: 7px;
+      background: #f1f5f9;
+      color: #334155;
+      font-size: 0.78rem;
+    }
+    .alert {
+      margin: 0.4rem 0 0;
+      padding: 0.6rem 0.8rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      border: 1px solid var(--border);
+      background: #f8fafc;
+    }
+    .alert.ok { border-color: #86efac; background: #f0fdf4; color: #15803d; }
+    .alert.err { border-color: #fca5a5; background: #fef2f2; color: #b91c1c; }
+    .empty {
+      padding: 2rem 1.4rem;
+      text-align: center;
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      background: #f8fafc;
+    }
+    .collapsible-trigger {
+      cursor: pointer;
+      user-select: none;
+      color: var(--accent);
+      font-weight: 600;
+      font-size: 0.86rem;
+    }
+    .collapsible-body {
+      margin-top: 0.4rem;
+      padding-top: 0.6rem;
+      border-top: 1px dashed var(--border);
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      background: #f1f5f9;
+      padding: 0 0.25rem;
+      border-radius: 4px;
+    }
+    .mode-toggle {
+      display: flex; gap: 0.35rem; flex-wrap: wrap;
+    }
+    .mode-toggle label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.35rem 0.75rem;
+      cursor: pointer;
+      background: #f8fafc;
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.85rem;
+      margin-bottom: 0;
+    }
+    .mode-toggle input { width: auto; margin-right: 0.15rem; }
+    .mode-toggle input:checked + span { color: var(--accent); }
+    .mode-toggle label:has(input:checked) {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+    textarea {
+      min-height: 90px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.82rem;
+      resize: vertical;
+    }
+    .vasp-only { display: none; }
+    .vasp-only.show { display: block; }
+    .server-only { display: none; }
+    .server-only.show { display: block; }
+    .cluster-panel {
+      margin-top: 0.6rem;
+      padding: 0.8rem 0.95rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #f8fafc;
+    }
+    .cluster-panel .cluster-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+      margin-top: 0.4rem;
+    }
+    .cluster-panel th, .cluster-panel td {
+      padding: 0.32rem 0.45rem;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+    .cluster-panel th {
+      color: var(--muted);
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+    .cluster-panel tr.idle-row td.idle-cell { color: #15803d; font-weight: 700; }
+    .cluster-panel .pchip {
+      display: inline-block;
+      margin: 0.1rem 0.18rem 0.1rem 0;
+      padding: 0.06rem 0.45rem;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: #0369a1;
+      font-size: 0.74rem;
+      font-weight: 650;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+    .cluster-panel .pchip:hover { border-color: var(--accent); }
+    .cluster-panel .pchip.default { background: #dcfce7; color: #15803d; }
+    .cluster-panel .err {
+      color: #b91c1c;
+      font-size: 0.82rem;
+      margin: 0.35rem 0 0;
+    }
+    .cluster-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin: 0.45rem 0 0.55rem;
+    }
+    .cluster-tab {
+      border: 1px solid var(--border);
+      background: #f8fafc;
+      color: var(--muted);
+      padding: 0.28rem 0.7rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .cluster-tab.active {
+      background: var(--accent-soft);
+      color: #0369a1;
+      border-color: var(--accent);
+    }
+    .cluster-search {
+      flex: 1 1 200px;
+      padding: 0.34rem 0.55rem;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: #ffffff;
+      font-size: 0.82rem;
+      min-width: 160px;
+    }
+    .cluster-panel .node-row.full td.cpu-cell { color: #b91c1c; }
+    .cluster-panel .node-row.idle td.cpu-cell { color: #15803d; font-weight: 700; }
+    .cluster-panel .node-row.mixed td.cpu-cell { color: #1d4ed8; font-weight: 600; }
+    .cluster-panel .node-row.down td { color: var(--muted); font-style: italic; }
+    .cluster-panel .pchip.node-pick {
+      background: #f1f5f9;
+      color: #475569;
+    }
+    .cluster-panel .pchip.node-pick:hover { background: var(--accent-soft); color: #0369a1; }
+    .vasp-textareas .field { margin-bottom: 0.55rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>InterOptimus · 任务管理</h1>
+    <p class="sub">提交新的界面计算任务（MLIP / MLIP+VASP），查看任务运行状态。点击任意任务进入「任务详情」可看到结构可视化、CIF 下载、计算进度与最终结果。所有数据写入统一的 <code>InterOptimus</code> 任务库（默认使用 <code>jobflow</code> 同源 MongoDB；不可用时回退到本地 JSON）。</p>
+  </header>
+
+  <main>
+    <nav class="nav-bar">
+      <a href="/">← 返回 Portal</a>
+      <span>·</span>
+      <a href="/local">IOMaker Local（本地交互）</a>
+      <span>·</span>
+      <a href="/hub">IOFlow Hub（旧版）</a>
+      <span class="pill" id="store-pill" style="margin-left:auto;">store: …</span>
+    </nav>
+
+    <section aria-label="新建任务">
+      <h2>提交新任务</h2>
+      <form id="submit-form" enctype="multipart/form-data">
+        <input type="hidden" name="ui_mode" value="manage"/>
+
+        <fieldset>
+          <legend>计算模式</legend>
+          <div class="row">
+            <div class="field">
+              <label>运行模式（决定是否触发 VASP）</label>
+              <div class="mode-toggle">
+                <label><input type="radio" name="do_vasp" value="false" checked/><span>MLIP only</span></label>
+                <label><input type="radio" name="do_vasp" value="true"/><span>MLIP + VASP</span></label>
+              </div>
+              <p class="hint">MLIP+VASP 通常需要在 server / jobflow-remote 集群上运行，并且本地或服务器一侧已经配置好 jobflow worker。</p>
+            </div>
+            <div class="field">
+              <label for="execution">执行位置</label>
+              <select id="execution" name="execution">
+                <option value="local">local（本机直接跑，仅 MLIP）</option>
+                <option value="server" selected>server（提交到 jobflow-remote 集群）</option>
+              </select>
+              <p class="hint">本机模式只支持 MLIP。要做 VASP 必须选择 server 并配置 jobflow-remote。</p>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset class="server-only" id="fs-cluster">
+          <legend>SLURM 资源（仅 server 模式）</legend>
+          <div class="actions" style="margin-top:0;">
+            <button type="button" id="btn-cluster-info">刷新资源概况</button>
+            <button type="button" id="btn-cluster-refresh" disabled>强制刷新</button>
+            <span class="hint" id="cluster-status">分区 CPU/GRES 占用与队列汇总（sinfo / squeue），不含节点逐台列表。</span>
+          </div>
+          <div id="cluster-panel" class="cluster-panel" style="display:none;"></div>
+        </fieldset>
+
+        <fieldset>
+          <legend>结构与名称</legend>
+          <div class="row">
+            <div class="field">
+              <label for="film_cif">film.cif（薄膜）</label>
+              <input id="film_cif" name="film_cif" type="file" accept=".cif,.CIF" required/>
+            </div>
+            <div class="field">
+              <label for="substrate_cif">substrate.cif（衬底）</label>
+              <input id="substrate_cif" name="substrate_cif" type="file" accept=".cif,.CIF" required/>
+            </div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="workflow_name">workflow_name</label>
+              <input id="workflow_name" name="workflow_name" type="text" value="IO_manage"/>
+            </div>
+            <div class="field">
+              <label for="mlip_calc">MLIP 后端</label>
+              <select id="mlip_calc" name="mlip_calc">
+                <option value="orb-models" selected>orb-models</option>
+                <option value="sevenn">sevenn (SevenNet)</option>
+                <option value="matris">matris (MatRIS)</option>
+                <option value="dpa">dpa (DeepMD)</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="opt_device">device（与 MLIP 探针一致）</label>
+              <select id="opt_device" name="opt_device">
+                <option value="cpu" selected>cpu</option>
+                <option value="cuda">cuda</option>
+                <option value="gpu">gpu</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>双界面 / 单界面</label>
+              <label style="display:flex;align-items:flex-start;gap:0.45rem;color:var(--text);font-size:0.88rem;">
+                <input type="checkbox" id="chk-double" name="double_interface" value="true" checked style="width:auto;margin-top:0.15rem;"/>
+                <span>双界面（取消勾选 = 单界面）</span>
+              </label>
+            </div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label>分区列表（仅分区名）</label>
+              <div class="actions" style="margin-top:0;">
+                <button type="button" id="btn-partition-detect">检测分区</button>
+                <span class="hint" id="partition-detect-hint">从 sinfo 拉取分区名并填入 MLIP / VASP / Si 探针的下拉菜单（不含节点）。</span>
+              </div>
+            </div>
+            <div class="field">
+              <label for="mlip-probe-partition">Si 探针分区（可选）</label>
+              <select id="mlip-probe-partition" name="mlip_probe_partition">
+                <option value="">（留空 = 不在计算节点上跑 Si 全量探针）</option>
+              </select>
+              <p class="hint"><code>srun -p</code>；需与上面 device 一致用于 MLIP 探针。</p>
+            </div>
+          </div>
+          <div class="actions" style="margin-top:0.35rem;gap:0.5rem;">
+            <button type="button" id="btn-mlip-probe">检测 MLIP worker</button>
+            <span class="hint" id="mlip-probe-hint">可选：验证环境与 Si 静态能；探针 device 与上方一致。不检测时也可直接在下拉里选 worker 提交。</span>
+          </div>
+          <div id="mlip-worker-pick-row" class="field" style="display:none;margin-top:0.55rem;">
+            <label for="mlip-worker-pick">用于运行 MLIP 的 worker</label>
+            <select id="mlip-worker-pick"></select>
+            <p class="hint" id="mlip-worker-pick-hint">server 模式下会列出当前 project 中的全部 worker；点击「检测」后可看到 import / Si 状态。</p>
+          </div>
+          <div id="mlip-probe-panel" class="cluster-panel" style="display:none;"></div>
+        </fieldset>
+
+        <fieldset class="server-only" id="fs-mlip-resources">
+          <legend>MLIP 作业资源（仅 server 模式）</legend>
+          <div class="row-3">
+            <div class="field">
+              <label for="slurm_partition">slurm_partition</label>
+              <select id="slurm_partition" name="slurm_partition">
+                <option value="">（在上方「结构与名称」中点击「检测分区」加载）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="cpus_per_gpu">cpus_per_gpu（仅 GPU）</label>
+              <input id="cpus_per_gpu" name="cpus_per_gpu" type="number" min="1" placeholder="1"/>
+            </div>
+            <div class="field">
+              <label for="gpus_per_job">gpus_per_job（仅 GPU）</label>
+              <input id="gpus_per_job" name="gpus_per_job" type="number" min="1" placeholder="1"/>
+            </div>
+            <div class="field">
+              <label for="mlip_cpus_per_task">mlip_cpus_per_task（仅 CPU）</label>
+              <input id="mlip_cpus_per_task" name="mlip_cpus_per_task" type="number" min="1" placeholder="1"/>
+            </div>
+            <div class="field">
+              <label for="mlip_project">mlip_project</label>
+              <input id="mlip_project" name="mlip_project" placeholder="std"/>
+              <p class="hint">jobflow-remote 项目名（默认 <code>JFREMOTE_PROJECT</code> / <code>std</code>）。改动后请重新「检测 MLIP worker」。</p>
+            </div>
+            <input type="hidden" id="mlip_worker" name="mlip_worker"/>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="server_pre_cmd">server_pre_cmd（提交前 shell）</label>
+              <input id="server_pre_cmd" name="server_pre_cmd" placeholder="conda activate interoptimus"/>
+            </div>
+            <div class="field">
+              <label for="server_run_parent">server_run_parent</label>
+              <input id="server_run_parent" name="server_run_parent" placeholder="留空 = 当前工作目录"/>
+            </div>
+          </div>
+          <div class="field">
+            <label for="mlip_scheduler_kwargs">mlip_scheduler_kwargs（JSON 或 KEY=VALUE 多行）</label>
+            <textarea id="mlip_scheduler_kwargs" name="mlip_scheduler_kwargs" placeholder='{"qos": "high"} 或者: qos=high'></textarea>
+            <p class="hint">将合并到 MLIP 作业 <code>scheduler_kwargs</code>。常见键如 <code>qos</code>、<code>mem</code>、<code>account</code>、<code>time</code>、<code>nodelist</code>。</p>
+          </div>
+        </fieldset>
+
+        <fieldset class="server-only vasp-only" id="fs-vasp-cluster">
+          <legend>VASP 资源（仅 MLIP+VASP）</legend>
+          <div class="row-3">
+            <div class="field">
+              <label for="vasp_slurm_partition">vasp_slurm_partition</label>
+              <select id="vasp_slurm_partition" name="vasp_slurm_partition">
+                <option value="" selected>（留空 = 沿用 MLIP slurm_partition；可先「检测分区」）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="vasp_nodes">vasp_nodes</label>
+              <input id="vasp_nodes" name="vasp_nodes" type="number" min="1" placeholder="1"/>
+            </div>
+            <div class="field">
+              <label for="vasp_processes_per_node">vasp_processes_per_node</label>
+              <input id="vasp_processes_per_node" name="vasp_processes_per_node" type="number" min="1" placeholder="4"/>
+            </div>
+            <div class="field">
+              <label for="vasp_worker">vasp_worker</label>
+              <select id="vasp_worker" name="vasp_worker">
+                <option value="" selected>（自动选用 MLIP project 默认 worker）</option>
+              </select>
+              <div class="actions" style="margin-top:0.4rem;gap:0.5rem;">
+                <button type="button" id="btn-vasp-workers-refresh">刷新 worker 列表</button>
+                <span class="hint" id="vasp-workers-hint">从 <code>~/.jfremote/&lt;project&gt;.yaml</code> 读取 workers。</span>
+              </div>
+              <div id="vasp-worker-info" class="cluster-panel" style="display:none;"></div>
+            </div>
+          </div>
+          <div class="field">
+            <label for="vasp_module_pick">VASP module（来自 <code>module avail VASP</code>，可多选）</label>
+            <select id="vasp_module_pick" multiple size="4" style="min-height:5.2rem;">
+              <option value="" disabled>点击右侧按钮加载…</option>
+            </select>
+            <div class="actions" style="margin-top:0.4rem;gap:0.5rem;">
+              <button type="button" id="btn-vasp-modules-refresh">查询 module avail VASP</button>
+              <span class="hint" id="vasp-modules-hint">选中后自动写入下方 <code>vasp_pre_run</code>（按选择顺序拼接 <code>module load …</code>）。</span>
+            </div>
+          </div>
+          <div class="field">
+            <label for="vasp_pre_run">vasp_pre_run（生成 exec_config.pre_run，例如 module load …）</label>
+            <input id="vasp_pre_run" name="vasp_pre_run" placeholder="module load VASP/6.4 && source /opt/intel/setvars.sh"/>
+            <p class="hint">可手动编辑；若上方 module 选择发生变化，将整段覆盖为 <code>module load … &amp;&amp; …</code>。</p>
+          </div>
+        </fieldset>
+
+        <fieldset class="vasp-only" id="fs-vasp-input">
+          <legend>VASP 输入（INCAR / KPOINTS / POTCAR；仅 MLIP+VASP）</legend>
+          <div class="row-3">
+            <div class="field">
+              <label for="vasp_pair_selection">vasp_pair_selection</label>
+              <select id="vasp_pair_selection" name="vasp_pair_selection">
+                <option value="">默认（each_match_lowest）</option>
+                <option value="each_match_lowest">each_match_lowest</option>
+                <option value="each_plane_lowest">each_plane_lowest</option>
+                <option value="all_optimized">all_optimized</option>
+              </select>
+              <p class="hint">决定提交多少套界面 VASP 弛豫。</p>
+            </div>
+            <div class="field">
+              <label for="do_vasp_gd">do_vasp_gd（VASP 全局梯度下降）</label>
+              <select id="do_vasp_gd" name="do_vasp_gd">
+                <option value="">默认（false）</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="vasp_dipole_correction">vasp_dipole_correction</label>
+              <select id="vasp_dipole_correction" name="vasp_dipole_correction">
+                <option value="">默认</option>
+                <option value="true">true</option>
+                <option value="false">false</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="relax_user_potcar_functional">relax_user_potcar_functional</label>
+              <input id="relax_user_potcar_functional" name="relax_user_potcar_functional" placeholder="PBE_64 / PBE_54 / PBE …"/>
+            </div>
+            <div class="field">
+              <label for="static_user_potcar_functional">static_user_potcar_functional</label>
+              <input id="static_user_potcar_functional" name="static_user_potcar_functional" placeholder="留空 = 同 relax"/>
+            </div>
+          </div>
+          <div class="vasp-textareas">
+            <div class="field">
+              <label for="relax_user_incar_settings">relax_user_incar_settings（JSON / INCAR-style）</label>
+              <textarea id="relax_user_incar_settings" name="relax_user_incar_settings" placeholder='{"ENCUT": 520, "EDIFFG": -0.02, "ISIF": 2}&#10;或:&#10;ENCUT=520&#10;EDIFFG=-0.02&#10;ISIF=2'></textarea>
+            </div>
+            <div class="field">
+              <label for="relax_user_kpoints_settings">relax_user_kpoints_settings（pymatgen DictSet 风格）</label>
+              <textarea id="relax_user_kpoints_settings" name="relax_user_kpoints_settings" placeholder='{"reciprocal_density": 64} 或: reciprocal_density=64'></textarea>
+              <p class="hint">使用 pymatgen <code>DictSet</code> 支持的键（<code>reciprocal_density</code>、<code>grid_density</code> 等），不要直接写 <code>kpoints</code> 网格列表。</p>
+            </div>
+            <div class="field">
+              <label for="relax_user_potcar_settings">relax_user_potcar_settings</label>
+              <textarea id="relax_user_potcar_settings" name="relax_user_potcar_settings" placeholder='{"Fe": "Fe_pv", "O": "O"}'></textarea>
+            </div>
+            <div class="field">
+              <label for="static_user_incar_settings">static_user_incar_settings</label>
+              <textarea id="static_user_incar_settings" name="static_user_incar_settings" placeholder="可选：留空 = 同 relax"></textarea>
+            </div>
+            <div class="field">
+              <label for="static_user_kpoints_settings">static_user_kpoints_settings</label>
+              <textarea id="static_user_kpoints_settings" name="static_user_kpoints_settings"></textarea>
+            </div>
+            <div class="field">
+              <label for="static_user_potcar_settings">static_user_potcar_settings</label>
+              <textarea id="static_user_potcar_settings" name="static_user_potcar_settings"></textarea>
+            </div>
+            <div class="field">
+              <label for="vasp_relax_settings">vasp_relax_settings（额外 IOMaker 关键字）</label>
+              <textarea id="vasp_relax_settings" name="vasp_relax_settings"></textarea>
+            </div>
+            <div class="field">
+              <label for="vasp_static_settings">vasp_static_settings（额外 IOMaker 关键字）</label>
+              <textarea id="vasp_static_settings" name="vasp_static_settings"></textarea>
+            </div>
+            <div class="field">
+              <label for="vasp_gd_kwargs">vasp_gd_kwargs（仅 do_vasp_gd=true 时）</label>
+              <textarea id="vasp_gd_kwargs" name="vasp_gd_kwargs"></textarea>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend class="collapsible-trigger" id="adv-toggle">高级参数（点击展开）▾</legend>
+          <div class="collapsible-body" id="adv-body" style="display:none;">
+            <div class="row-3">
+              <div class="field"><label>max_area</label><input name="lm_max_area" value="25"/></div>
+              <div class="field"><label>max_length_tol</label><input name="lm_max_length_tol" value="0.03"/></div>
+              <div class="field"><label>max_angle_tol</label><input name="lm_max_angle_tol" value="0.03"/></div>
+              <div class="field"><label>film_max_miller</label><input name="lm_film_max_miller" value="3"/></div>
+              <div class="field"><label>substrate_max_miller</label><input name="lm_substrate_max_miller" value="3"/></div>
+              <div class="field"><label>film_thickness</label><input name="st_film_thickness" value="10"/></div>
+              <div class="field"><label>substrate_thickness</label><input name="st_substrate_thickness" value="10"/></div>
+              <div class="field"><label>termination_ftol</label><input name="st_termination_ftol" value="0.15"/></div>
+              <div class="field"><label>vacuum_over_film</label><input name="st_vacuum_over_film" value="5"/></div>
+              <div class="field"><label>fmax</label><input name="adv_fmax"/></div>
+              <div class="field"><label>steps</label><input name="adv_steps" value="500"/></div>
+              <div class="field"><label>n_calls_density</label><input name="adv_n_calls_density"/></div>
+              <div class="field"><label>term_screen_tol</label><input name="adv_term_screen_tol"/></div>
+              <div class="field"><label>z_range 下限</label><input name="adv_z_range_lo"/></div>
+              <div class="field"><label>z_range 上限</label><input name="adv_z_range_hi"/></div>
+            </div>
+            <p class="hint">未填项均使用 <code>cost_preset=medium</code> 默认值（<code>InterOptimus.agents.simple_iomaker</code>）。</p>
+          </div>
+        </fieldset>
+
+        <div class="actions">
+          <button type="submit" class="primary" id="btn-submit">提交任务</button>
+          <button type="button" id="btn-reset">重置</button>
+          <span class="hint" id="submit-hint">提交后，任务会出现在下方任务列表，并写入统一任务库。</span>
+        </div>
+        <div id="submit-alert" class="alert" style="display:none;"></div>
+      </form>
+    </section>
+
+    <section aria-label="任务列表" style="margin-top:1.6rem;">
+      <h2>已提交任务</h2>
+      <div class="toolbar">
+        <input type="text" id="search-input" class="search-input" placeholder="按任务名 / ID / 输入结构文件名筛选…"/>
+        <select id="status-filter" class="filter-select">
+          <option value="all">所有状态</option>
+          <option value="running">运行中</option>
+          <option value="completed">已完成</option>
+          <option value="failed">失败</option>
+          <option value="queued">排队</option>
+        </select>
+        <select id="mode-filter" class="filter-select">
+          <option value="all">所有模式</option>
+          <option value="mlip">MLIP only</option>
+          <option value="mlip+vasp">MLIP + VASP</option>
+        </select>
+        <button type="button" id="btn-refresh">刷新列表</button>
+        <span class="hint" id="list-summary"></span>
+      </div>
+      <div id="task-list">
+        <p class="empty">正在加载任务列表…</p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById("submit-form");
+    const btnSubmit = document.getElementById("btn-submit");
+    const btnReset = document.getElementById("btn-reset");
+    const submitAlert = document.getElementById("submit-alert");
+    const advToggle = document.getElementById("adv-toggle");
+    const advBody = document.getElementById("adv-body");
+    const taskList = document.getElementById("task-list");
+    const btnRefresh = document.getElementById("btn-refresh");
+    const searchInput = document.getElementById("search-input");
+    const statusFilter = document.getElementById("status-filter");
+    const modeFilter = document.getElementById("mode-filter");
+    const listSummary = document.getElementById("list-summary");
+    const storePill = document.getElementById("store-pill");
+    const executionSel = document.getElementById("execution");
+    const radioVaspNo = form.querySelector('input[name="do_vasp"][value="false"]');
+    const radioVaspYes = form.querySelector('input[name="do_vasp"][value="true"]');
+
+    let allTasks = [];
+    let pollTimer = null;
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function statusBadge(t) {
+      const st = String(t.status || "unknown");
+      let cls = "";
+      if (st === "completed") cls = "completed";
+      else if (st === "failed" || st === "cancelled") cls = st;
+      else if (st === "queued") cls = "queued";
+      else if (st.indexOf("vasp") >= 0) cls = "vasp-running";
+      else if (st.indexOf("mlip") >= 0 || st.indexOf("running") >= 0) cls = "mlip-running";
+      return '<span class="badge ' + cls + '">' + esc(st) + "</span>";
+    }
+
+    function progressLine(t) {
+      const status = String(t.status || "");
+      if (status === "completed") {
+        return "MLIP / VASP 已完成。点击查看结构与结果。";
+      }
+      if (status === "failed" || status === "cancelled") {
+        return esc(t.error || t.stage_summary || "任务未完成");
+      }
+      const rp = t.remote_progress || {};
+      const phaseRaw = String(
+        (rp && rp.current_phase != null && String(rp.current_phase).trim() !== "")
+          ? rp.current_phase
+          : (t.phase || "")
+      );
+      const phaseNorm = phaseRaw.toLowerCase().trim();
+      if (phaseNorm === "vasp" || phaseNorm === "done" || status === "vasp_running") {
+        const v = t.vasp_progress || (t.remote_progress?.expanded_vasp_job_counts) || {};
+        if (v.total) {
+          return "VASP 阶段 · 已完成 " + (v.finished || 0) + "/" + (v.total || 0) +
+                 "（运行中 " + (v.running || 0) + " · 待启动 " + (v.pending || 0) +
+                 (v.failed ? " · 失败 " + v.failed : "") + "）";
+        }
+        return "VASP 阶段 · 等待 worker 上报…";
+      }
+      if (phaseNorm === "mlip" || status === "mlip_running") {
+        const p = t.progress || {};
+        if (p.match_terms_total) {
+          return "MLIP 阶段 · 已弛豫 " + (p.match_terms_done || 0) + "/" + p.match_terms_total + " 个 (match, term)";
+        }
+        return "MLIP 阶段 · 正在进行…";
+      }
+      if (status === "queued") return "排队中，等待 worker 接管。";
+      return esc(t.stage_summary || "等待状态更新…");
+    }
+
+    function modeLabel(t) {
+      const m = String(t.mode || "mlip");
+      return m === "mlip+vasp" ? "MLIP + VASP" : "MLIP";
+    }
+
+    function formatTime(s) {
+      if (!s) return "";
+      try {
+        const d = new Date(s);
+        if (Number.isNaN(d.getTime())) return s;
+        return d.toLocaleString();
+      } catch (_e) {
+        return s;
+      }
+    }
+
+    function renderTasks() {
+      const q = (searchInput.value || "").trim().toLowerCase();
+      const sf = statusFilter.value;
+      const mf = modeFilter.value;
+      const filtered = allTasks.filter((t) => {
+        if (q) {
+          const hay = [t.task_id, t.name, t.film_name, t.substrate_name, t.mlip_calc]
+            .map((v) => String(v || "").toLowerCase()).join(" ");
+          if (hay.indexOf(q) < 0) return false;
+        }
+        const st = String(t.status || "");
+        if (sf === "running" && !(st.indexOf("running") >= 0 || st === "queued" || st === "remote_running")) return false;
+        if (sf === "completed" && st !== "completed") return false;
+        if (sf === "failed" && !(st === "failed" || st === "cancelled")) return false;
+        if (sf === "queued" && st !== "queued") return false;
+        if (mf === "mlip" && t.mode !== "mlip") return false;
+        if (mf === "mlip+vasp" && t.mode !== "mlip+vasp") return false;
+        return true;
+      });
+      listSummary.textContent = "共 " + allTasks.length + " 条 · 显示 " + filtered.length + " 条";
+      if (!filtered.length) {
+        taskList.innerHTML = '<p class="empty">没有匹配的任务。提交新任务后将在此显示，或调整筛选条件。</p>';
+        return;
+      }
+      taskList.innerHTML = '<div class="task-grid">' + filtered.map((t) => {
+        const id = t.task_id;
+        const url = "/manage/" + encodeURIComponent(id);
+        return (
+          '<a class="task-card" href="' + url + '">' +
+          '<div class="task-card-title">' + esc(t.name || "(unnamed)") + statusBadge(t) + "</div>" +
+          '<div class="task-card-meta">' + esc(modeLabel(t)) + " · " + esc(t.mlip_calc || "") +
+            " · " + esc(t.execution || "local") +
+            "<br/>film: " + esc(t.film_name || "film.cif") + " · substrate: " + esc(t.substrate_name || "substrate.cif") +
+          "</div>" +
+          '<div class="task-card-meta task-card-mono">' + esc(id) + "</div>" +
+          '<div class="task-card-meta">提交时间: ' + esc(formatTime(t.created_at)) + "</div>" +
+          '<div class="progress-line">' + progressLine(t) + "</div>" +
+          "</a>"
+        );
+      }).join("") + "</div>";
+    }
+
+    async function loadTasks(opts) {
+      try {
+        const res = await fetch("/api/tasks?limit=200");
+        const j = await res.json();
+        if (storePill && j.backend) storePill.textContent = "store: " + j.backend;
+        allTasks = j.tasks || [];
+        renderTasks();
+      } catch (e) {
+        if (!opts || !opts.silent) {
+          taskList.innerHTML = '<p class="empty" style="color:#b91c1c;">加载任务失败：' + esc(e) + "</p>";
+        }
+      }
+    }
+
+    function startPolling() {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(() => loadTasks({ silent: true }), 5000);
+    }
+
+    advToggle.addEventListener("click", () => {
+      const open = advBody.style.display !== "none";
+      advBody.style.display = open ? "none" : "";
+      advToggle.textContent = open ? "高级参数（点击展开）▾" : "高级参数（点击收起）▴";
+    });
+
+    const fsCluster = document.getElementById("fs-cluster");
+    const fsMlipResources = document.getElementById("fs-mlip-resources");
+    const fsVaspCluster = document.getElementById("fs-vasp-cluster");
+    const fsVaspInput = document.getElementById("fs-vasp-input");
+    const partitionInput = document.getElementById("slurm_partition");
+    const vaspPartitionInput = document.getElementById("vasp_slurm_partition");
+    const clusterPanel = document.getElementById("cluster-panel");
+    const clusterStatus = document.getElementById("cluster-status");
+    const btnClusterInfo = document.getElementById("btn-cluster-info");
+    const btnClusterRefresh = document.getElementById("btn-cluster-refresh");
+
+    function syncFieldsetVisibility() {
+      const wantsVasp = radioVaspYes.checked;
+      const isServer = executionSel.value === "server";
+      fsCluster.classList.toggle("show", isServer);
+      fsMlipResources.classList.toggle("show", isServer);
+      fsVaspCluster.classList.toggle("show", isServer && wantsVasp);
+      fsVaspInput.classList.toggle("show", wantsVasp);
+      if (!isServer) {
+        hideMlipWorkerPick();
+        mlipWorkerHidden.value = "";
+      }
+    }
+
+    function syncVaspExecution() {
+      const wantsVasp = radioVaspYes.checked;
+      if (wantsVasp && executionSel.value === "local") {
+        executionSel.value = "server";
+      }
+      syncFieldsetVisibility();
+    }
+    radioVaspYes.addEventListener("change", syncVaspExecution);
+    radioVaspNo.addEventListener("change", syncVaspExecution);
+
+    // ------------------------------------------------------------------
+    // MLIP worker auto-detect + VASP worker / module dropdowns
+    // ------------------------------------------------------------------
+    const mlipCalcSel = document.getElementById("mlip_calc");
+    const optDeviceSel = document.getElementById("opt_device");
+    const mlipProbePartitionInput = document.getElementById("mlip-probe-partition");
+    const mlipProjectInput = document.getElementById("mlip_project");
+    const mlipWorkerHidden = document.getElementById("mlip_worker");
+    const mlipProbePanel = document.getElementById("mlip-probe-panel");
+    const mlipProbeHint = document.getElementById("mlip-probe-hint");
+    const btnMlipProbe = document.getElementById("btn-mlip-probe");
+    const mlipWorkerPickRow = document.getElementById("mlip-worker-pick-row");
+    const mlipWorkerPickSel = document.getElementById("mlip-worker-pick");
+    const mlipWorkerPickHint = document.getElementById("mlip-worker-pick-hint");
+    const vaspWorkerSel = document.getElementById("vasp_worker");
+    const vaspWorkerInfo = document.getElementById("vasp-worker-info");
+    const vaspWorkersHint = document.getElementById("vasp-workers-hint");
+    const btnVaspWorkersRefresh = document.getElementById("btn-vasp-workers-refresh");
+    const vaspModulePick = document.getElementById("vasp_module_pick");
+    const vaspModulesHint = document.getElementById("vasp-modules-hint");
+    const btnVaspModulesRefresh = document.getElementById("btn-vasp-modules-refresh");
+    const vaspPreRunInput = document.getElementById("vasp_pre_run");
+    const btnPartitionDetect = document.getElementById("btn-partition-detect");
+    const partitionDetectHint = document.getElementById("partition-detect-hint");
+    const fsVaspClusterEl = document.getElementById("fs-vasp-cluster");
+    const fsVaspInputEl = document.getElementById("fs-vasp-input");
+
+    let workersCache = { project: null, workers: [], errors: [] };
+    let mlipProbeAbort = null;
+    let vaspPreRunUserEdited = false;
+
+    function nonemptyPartitionNames(j) {
+      const parts = (j && j.partitions) ? j.partitions : [];
+      const names = [];
+      const seen = new Set();
+      for (const p of parts) {
+        const n = String((p && p.partition) || "").trim();
+        if (!n || seen.has(n)) continue;
+        seen.add(n);
+        names.push(n);
+      }
+      names.sort();
+      return names;
+    }
+
+    function refillOnePartitionSelect(sel, names, defPart, emptyOptLabel) {
+      if (!sel) return;
+      const cur = sel.value;
+      sel.innerHTML = "";
+      const o0 = document.createElement("option");
+      o0.value = "";
+      o0.textContent = emptyOptLabel;
+      sel.appendChild(o0);
+      for (const n of names) {
+        const o = document.createElement("option");
+        o.value = n;
+        o.textContent = n;
+        sel.appendChild(o);
+      }
+      if (cur && names.includes(cur)) sel.value = cur;
+      else if (defPart && names.includes(defPart)) sel.value = defPart;
+    }
+
+    function applyPartitionPayload(j) {
+      const names = nonemptyPartitionNames(j);
+      const defP = (j && j.default_partition) ? String(j.default_partition).trim() : "";
+      refillOnePartitionSelect(
+        partitionInput,
+        names,
+        defP,
+        names.length ? "（选择分区）" : "（先点击「检测分区」或刷新 SLURM 概况）"
+      );
+      refillOnePartitionSelect(
+        vaspPartitionInput,
+        names,
+        "",
+        "（留空 = 沿用 MLIP；可先检测分区）"
+      );
+      refillOnePartitionSelect(
+        mlipProbePartitionInput,
+        names,
+        "",
+        "（留空 = 不在计算节点上跑 Si 全量探针）"
+      );
+    }
+
+    async function detectPartitionsOnly() {
+      partitionDetectHint.textContent = "正在查询 sinfo …";
+      try {
+        const res = await fetch("/api/cluster/info?refresh=true");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const j = await res.json();
+        applyPartitionPayload(j);
+        const n = nonemptyPartitionNames(j).length;
+        partitionDetectHint.textContent = j.available
+          ? ("已加载 " + n + " 个分区" + (j.default_partition ? " · 默认 " + j.default_partition : ""))
+          : ("未获取分区：" + ((j.errors || []).join("；") || "未知错误"));
+      } catch (e) {
+        partitionDetectHint.textContent = "失败：" + (e.message || e);
+      }
+    }
+    btnPartitionDetect.addEventListener("click", detectPartitionsOnly);
+
+    function projectQS() {
+      const p = (mlipProjectInput.value || "").trim();
+      return p ? "?project=" + encodeURIComponent(p) : "";
+    }
+
+    function setMlipProbeStatus(html, kind) {
+      mlipProbePanel.style.display = "";
+      const cls = kind === "error" ? "err" : kind === "ok" ? "" : "";
+      mlipProbePanel.innerHTML = (cls ? '<div class="' + cls + '">' : "<div>") + html + "</div>";
+    }
+
+    let mlipValidatedWorkers = [];
+
+    function fillMlipWorkerPickFromRegistry(workers, selectedName) {
+      const list = (workers || []).map((w) => ({
+        worker: w,
+        probe: {},
+        registry_only: true,
+      }));
+      const pick = selectedName && (workers || []).some((w) => w.name === selectedName)
+        ? selectedName
+        : ((workers && workers[0] && workers[0].name) || "");
+      renderMlipWorkerPick(list, pick);
+    }
+
+    function repopulateMlipWorkersFromCachePreferred() {
+      if (workersCache.workers && workersCache.workers.length) {
+        fillMlipWorkerPickFromRegistry(
+          workersCache.workers,
+          mlipWorkerPickSel.value || mlipWorkerHidden.value || null
+        );
+        return;
+      }
+      hideMlipWorkerPick();
+      loadWorkers().catch(() => {});
+    }
+
+    function hideMlipWorkerPick() {
+      mlipValidatedWorkers = [];
+      mlipWorkerPickRow.style.display = "none";
+      mlipWorkerPickSel.innerHTML = "";
+    }
+
+    function renderMlipWorkerPick(validated, selectedName) {
+      mlipValidatedWorkers = Array.isArray(validated) ? validated.slice() : [];
+      mlipWorkerPickSel.innerHTML = "";
+      if (!mlipValidatedWorkers.length) {
+        mlipWorkerPickRow.style.display = "none";
+        return;
+      }
+      for (const v of mlipValidatedWorkers) {
+        const w = v.worker || {};
+        const p = v.probe || {};
+        const regOnly = v.registry_only === true;
+        const siOk = regOnly
+          ? false
+          : (typeof v.si_ok === "boolean"
+            ? v.si_ok
+            : (typeof p.energy === "number" && p.ok !== false));
+        const o = document.createElement("option");
+        o.value = w.name;
+        const eTag = (siOk && typeof p.energy === "number") ? p.energy.toFixed(4) + " eV" : "—";
+        const dur = regOnly ? "—" : ((p.duration_s != null) ? p.duration_s + "s" : "?");
+        const statusLab = regOnly ? "未检测" : (siOk ? "Si OK" : "import OK·Si未过");
+        o.textContent = w.name + "  ·  " + statusLab + "  ·  Si E=" + eTag + "  ·  " + dur +
+          (w.mlip_hint ? "  ·  hint=" + w.mlip_hint : "");
+        mlipWorkerPickSel.appendChild(o);
+      }
+      const want = selectedName || mlipValidatedWorkers[0].worker.name;
+      mlipWorkerPickSel.value = want;
+      if (mlipWorkerPickSel.value !== want && mlipValidatedWorkers.length) {
+        mlipWorkerPickSel.value = mlipValidatedWorkers[0].worker.name;
+      }
+      mlipWorkerPickRow.style.display = "";
+      const n = mlipValidatedWorkers.length;
+      const nReg = mlipValidatedWorkers.filter((v) => v.registry_only).length;
+      const nSi = mlipValidatedWorkers.filter((v) => {
+        if (v.registry_only) return false;
+        if (typeof v.si_ok === "boolean") return v.si_ok;
+        const p = v.probe || {};
+        return typeof p.energy === "number" && p.ok !== false;
+      }).length;
+      if (nReg === n && n > 0) {
+        mlipWorkerPickHint.textContent =
+          "共 " + n + " 个 worker（来自 jfremote 配置）。未检测 Si；可直接提交或点击「检测 MLIP worker」验证。";
+      } else if (nSi === n && n > 1) {
+        mlipWorkerPickHint.textContent =
+          "共 " + n + " 个 worker 已通过 Si 静态能验证，可在此切换；提交任务将使用当前选中的名称。";
+      } else if (nSi < n) {
+        mlipWorkerPickHint.textContent =
+          "共 " + n + " 个环境通过快速 import（含 " + nSi + " 个 Si 全量通过）。可选任一项；标注「import OK·Si未过」的建议排查 checkpoint / 日志后再用于正式计算。";
+      } else {
+        mlipWorkerPickHint.textContent =
+          "该 worker 已通过验证；若配置多个 MLIP 环境，检测完成后可在此切换。";
+      }
+      if (mlipValidatedWorkers.length && mlipValidatedWorkers.every((v) => v.registry_only)) {
+        mlipProbeHint.textContent = "已加载 worker 列表，可直接选择或点击「检测 MLIP worker」做 Si 验证。";
+      }
+      if (mlipWorkerPickSel.value) {
+        mlipWorkerHidden.value = mlipWorkerPickSel.value;
+      }
+    }
+
+    function renderProbeResult(res) {
+      const ok = !!res.ok;
+      const probe = res.probe || {};
+      const sel = res.selected || (ok ? probe.worker_obj : null) || {};
+      const worker = ok ? (sel.name || probe.worker || "") : (probe.worker || "");
+      const lines = [];
+      const tag = ok
+        ? '<span class="badge completed">PASS</span>'
+        : '<span class="badge failed">FAIL</span>';
+      lines.push("<div>" + tag + " · MLIP=" + esc(res.mlip || mlipCalcSel.value) +
+        " · device=" + esc(res.probe_device || (optDeviceSel && optDeviceSel.value) || "cpu") +
+        " · project=" + esc(res.project || mlipProjectInput.value || "std") + "</div>");
+      if ((res.probe_partition || "").trim()) {
+        lines.push('<div class="hint">Si 探针分区: <code>' + esc(res.probe_partition.trim()) + "</code></div>");
+      }
+      const validated = Array.isArray(res.validated_workers) ? res.validated_workers : [];
+      const ready = Array.isArray(res.mlip_ready_workers) ? res.mlip_ready_workers : [];
+      if (ok && validated.length) {
+        lines.push("<div>Si 静态能通过: " +
+          validated.map((v) => "<code>" + esc((v.worker || {}).name || "") + "</code>").join(", ") +
+          (validated.length > 1
+            ? '<span class="hint" style="margin-left:0.4rem;">（默认首选其一，其余可在下拉中选择）</span>'
+            : "") +
+          "</div>");
+      }
+      const importOnly = ready
+        .filter((r) => r.si_ok === false)
+        .map((r) => (r.worker || {}).name)
+        .filter(Boolean);
+      if (importOnly.length) {
+        lines.push('<div class="hint">以下 worker 仅快速 import 通过，Si 全量未通过（仍可在下方下拉里选用）: ' +
+          importOnly.map((n) => "<code>" + esc(n) + "</code>").join(", ") + "</div>");
+      }
+      const siFailedDetails = ready.filter((r) => r.si_ok === false && r.probe);
+      if (siFailedDetails.length) {
+        const blocks = siFailedDetails.map((r) => {
+          const wn = esc((r.worker || {}).name || "?");
+          const p = r.probe || {};
+          const err = (p.error_type && p.error
+            ? p.error_type + ": " + p.error
+            : (p.error || "(无 error 字段，见 traceback / 日志)"));
+          const tb = (p.traceback || "").trim();
+          const tail = ((p.stderr || "").trim() || (p.stdout || "").trim()).slice(-1800);
+          let inner = '<div class="err" style="margin-top:0.25rem;white-space:pre-wrap;">' + esc(err) + "</div>";
+          if (tb) {
+            inner += '<pre style="font-size:0.78rem;white-space:pre-wrap;background:#fef2f2;padding:0.45rem;border-radius:6px;max-height:16rem;overflow:auto;">' +
+              esc(tb.slice(-4500)) + "</pre>";
+          } else if (tail) {
+            inner += '<pre style="font-size:0.78rem;white-space:pre-wrap;background:#f1f5f9;padding:0.45rem;border-radius:6px;max-height:12rem;overflow:auto;">' +
+              esc(tail) + "</pre>";
+          }
+          return '<details style="margin-top:0.35rem;"><summary class="hint">Si 未过: <code>' + wn + "</code>（展开查看原因）</summary>" + inner + "</details>";
+        }).join("");
+        lines.push('<div style="margin-top:0.45rem;"><strong class="hint">Si 全量失败详情</strong>' + blocks + "</div>");
+      }
+      if (!validated.length && worker) {
+        lines.push("<div>worker = <code>" + esc(worker) + "</code></div>");
+      }
+      if (validated.length && typeof (validated[0].probe || {}).energy === "number") {
+        const v0 = validated[0];
+        const p0 = v0.probe || {};
+        lines.push("<div><code>" + esc((v0.worker || {}).name || "") + "</code> 的 Si 静态能 (" +
+          (p0.n_atoms || 2) + " 原子) = <code>" +
+          p0.energy.toFixed(6) + " eV</code> · 用时 " + (p0.duration_s || 0) + " s</div>");
+        lines.push('<div class="hint">（上列为<strong>首个 Si 通过</strong>的 worker，与下方下拉里当前勾选项可能不同）</div>');
+      } else if (typeof probe.energy === "number") {
+        lines.push("<div>Si 静态能 (" + (probe.n_atoms || 2) + " 原子) = <code>" +
+          probe.energy.toFixed(6) + " eV</code> · 用时 " + (probe.duration_s || 0) + " s</div>");
+      }
+      if (probe.interoptimus_version) {
+        lines.push('<div class="hint">InterOptimus = ' + esc(probe.interoptimus_version) + "</div>");
+      }
+      if (Array.isArray(res.candidates_tried) && res.candidates_tried.length) {
+        lines.push('<div class="hint">尝试过的 worker: ' + res.candidates_tried.map(esc).join(", ") + "</div>");
+      }
+      const qrs = res.quick_results || [];
+      if (qrs.length) {
+        const items = qrs.map((qr) => {
+          const tag = qr.ok ? '<span class="badge completed">import OK</span>'
+                            : '<span class="badge failed">import FAIL</span>';
+          const t = qr.duration_s != null ? " · " + qr.duration_s + "s" : "";
+          const why = qr.ok ? "" :
+            (qr.error ? ' <span class="hint">— ' + esc(String(qr.error).slice(0, 160)) + "</span>" : "");
+          return "<div>" + tag + " <code>" + esc(qr.worker) + "</code>" + t + why + "</div>";
+        }).join("");
+        lines.push('<details style="margin-top:0.35rem;"><summary class="hint">快速 import 检测明细（' +
+          qrs.length + " 个 worker）</summary>" + items + "</details>");
+      }
+      if (!ok) {
+        const errs = (res.errors || []).filter(Boolean);
+        if (probe.error) errs.unshift((probe.error_type ? probe.error_type + ": " : "") + probe.error);
+        if (errs.length) {
+          lines.push('<div class="err" style="margin-top:0.35rem;white-space:pre-wrap;">' +
+            errs.map(esc).join("\n") + "</div>");
+        }
+        if (probe.stderr || probe.stdout) {
+          const tail = (probe.stderr || "").trim() || (probe.stdout || "").trim();
+          if (tail) {
+            lines.push('<details style="margin-top:0.35rem;"><summary class="hint">日志 (尾部)</summary>' +
+              '<pre style="font-size:0.78rem;white-space:pre-wrap;background:#f1f5f9;padding:0.45rem;border-radius:6px;">' +
+              esc(tail.slice(-2000)) + "</pre></details>");
+          }
+        }
+      }
+      setMlipProbeStatus(lines.join(""), ok ? "ok" : "error");
+      return ok;
+    }
+
+    function applySelectedMlipWorker(name) {
+      const found = mlipValidatedWorkers.find((v) => (v.worker || {}).name === name);
+      if (!found) return false;
+      mlipWorkerHidden.value = name;
+      const p = found.probe || {};
+      const regOnly = found.registry_only === true;
+      const siOk = regOnly
+        ? false
+        : (typeof found.si_ok === "boolean"
+          ? found.si_ok
+          : (typeof p.energy === "number" && p.ok !== false));
+      let eTag;
+      if (regOnly) {
+        eTag = " · （未运行检测，将按所选 worker 提交）";
+      } else if (siOk && typeof p.energy === "number") {
+        eTag = " · Si E=" + p.energy.toFixed(6) + " eV";
+      } else {
+        eTag = " · （Si 全量验证未通过，仍可尝试提交）";
+      }
+      mlipWorkerPickHint.textContent = "已选用 worker = " + name + eTag;
+      mlipProbeHint.textContent = "MLIP 将通过 worker = " + name + " 提交。";
+      return true;
+    }
+
+    async function probeMlipWorker() {
+      const mlip = mlipCalcSel.value;
+      const project = (mlipProjectInput.value || "").trim();
+      btnMlipProbe.disabled = true;
+      mlipProbeHint.textContent = "正在检测可用 MLIP worker（首次需载入模型可能需要 10–60 秒）…";
+      setMlipProbeStatus("<em>正在 ssh 进入候选 worker 跑一次 Si 静态能…</em>", "info");
+      mlipWorkerHidden.value = "";
+      hideMlipWorkerPick();
+      try {
+        if (mlipProbeAbort) mlipProbeAbort.abort();
+        mlipProbeAbort = ("AbortController" in window) ? new AbortController() : null;
+        const r = await fetch("/api/jfremote/probe_mlip", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mlip: mlip,
+            project: project || undefined,
+            stop_at_first: false,
+            device: (optDeviceSel && optDeviceSel.value) || "cpu",
+            probe_partition: (mlipProbePartitionInput && mlipProbePartitionInput.value || "").trim() || undefined,
+          }),
+          signal: mlipProbeAbort ? mlipProbeAbort.signal : undefined,
+        });
+        const j = await r.json();
+        const pickList =
+          (Array.isArray(j.mlip_ready_workers) && j.mlip_ready_workers.length)
+            ? j.mlip_ready_workers
+            : (j.validated_workers || []);
+        const ok = renderProbeResult(j);
+        if (pickList.length) {
+          const auto = (j.selected || {}).name || (pickList[0].worker || {}).name;
+          renderMlipWorkerPick(pickList, auto);
+          applySelectedMlipWorker(auto);
+        } else if (ok && j.selected) {
+          renderMlipWorkerPick([{ worker: j.selected, probe: j.probe || {}, si_ok: true }], j.selected.name);
+          applySelectedMlipWorker(j.selected.name);
+        } else {
+          mlipProbeHint.textContent = "未找到可用 worker；请确认对应 conda 环境已安装 InterOptimus + 该 MLIP，并放置 checkpoint 到 ~/.cache/InterOptimus/checkpoints。";
+        }
+      } catch (e) {
+        if (e && e.name === "AbortError") return;
+        setMlipProbeStatus('<div class="err">probe 请求失败：' + esc(e) + "</div>", "error");
+        mlipProbeHint.textContent = "probe 请求失败，详情见上。";
+      } finally {
+        btnMlipProbe.disabled = false;
+        if (executionSel.value === "server" && workersCache.workers && workersCache.workers.length) {
+          if (!mlipWorkerPickSel.options.length) {
+            fillMlipWorkerPickFromRegistry(workersCache.workers, null);
+          }
+        }
+      }
+    }
+
+    btnMlipProbe.addEventListener("click", probeMlipWorker);
+    mlipWorkerPickSel.addEventListener("change", () => {
+      applySelectedMlipWorker(mlipWorkerPickSel.value);
+    });
+    mlipCalcSel.addEventListener("change", () => {
+      mlipWorkerHidden.value = "";
+      mlipProbePanel.style.display = "none";
+      mlipProbePanel.innerHTML = "";
+      mlipProbeHint.textContent = "MLIP 已变更。可直接选 worker 提交，或点击「检测 MLIP worker」验证环境。";
+      repopulateMlipWorkersFromCachePreferred();
+    });
+    if (optDeviceSel) {
+      optDeviceSel.addEventListener("change", () => {
+        mlipWorkerHidden.value = "";
+        mlipProbePanel.style.display = "none";
+        mlipProbePanel.innerHTML = "";
+        mlipProbeHint.textContent = "device 已变更。可直接选 worker，或重新「检测 MLIP worker」验证。";
+        repopulateMlipWorkersFromCachePreferred();
+      });
+    }
+    if (mlipProbePartitionInput) {
+      mlipProbePartitionInput.addEventListener("change", () => {
+        mlipWorkerHidden.value = "";
+        mlipProbePanel.style.display = "none";
+        mlipProbePanel.innerHTML = "";
+        mlipProbeHint.textContent = "Si 探针分区已变更。可直接选 worker，或重新「检测 MLIP worker」。";
+        repopulateMlipWorkersFromCachePreferred();
+      });
+    }
+    mlipProjectInput.addEventListener("change", () => {
+      mlipWorkerHidden.value = "";
+      hideMlipWorkerPick();
+      workersCache = { project: null, workers: [], errors: [] };
+      mlipProbePanel.style.display = "none";
+      mlipProbePanel.innerHTML = "";
+      mlipProbeHint.textContent = "project 已变更；正在加载 worker 列表…";
+      loadWorkers().catch(() => {});
+    });
+
+    function renderVaspWorkerInfo(name) {
+      const w = (workersCache.workers || []).find((x) => x.name === name);
+      if (!w) {
+        vaspWorkerInfo.style.display = "none";
+        vaspWorkerInfo.innerHTML = "";
+        return;
+      }
+      vaspWorkerInfo.style.display = "";
+      const lines = [
+        "<div><strong>" + esc(w.name) + "</strong> · type=<code>" +
+          esc(w.type || "?") + "</code> · scheduler=<code>" + esc(w.scheduler_type || "?") +
+          "</code></div>",
+        '<div class="hint">work_dir = <code>' + esc(w.work_dir || "—") + "</code></div>",
+        '<div class="hint" style="margin-top:0.2rem;">pre_run:</div>',
+        '<pre style="font-size:0.78rem;white-space:pre-wrap;background:#f1f5f9;padding:0.45rem;border-radius:6px;margin:0.15rem 0 0;">' +
+          esc(w.pre_run || "(空)") + "</pre>",
+      ];
+      if (w.mlip_hint) {
+        lines.push('<div class="hint">该 worker 看起来是为 MLIP <code>' + esc(w.mlip_hint) +
+          "</code> 准备的（MLIP+VASP 通常该选 VASP 专用 worker，比如 std_worker / vasp_worker）。</div>");
+      }
+      vaspWorkerInfo.innerHTML = lines.join("");
+    }
+
+    function fillVaspWorkerOptions(workers) {
+      const prev = vaspWorkerSel.value;
+      const current = vaspWorkerSel.querySelector("option");
+      vaspWorkerSel.innerHTML = "";
+      const opt0 = document.createElement("option");
+      opt0.value = "";
+      opt0.textContent = "（自动选用 MLIP project 默认 worker）";
+      vaspWorkerSel.appendChild(opt0);
+      for (const w of workers || []) {
+        const o = document.createElement("option");
+        o.value = w.name;
+        const tail = w.mlip_hint ? "  · MLIP=" + w.mlip_hint : "";
+        o.textContent = w.name + (w.scheduler_type ? "  (" + w.scheduler_type + ")" : "") + tail;
+        vaspWorkerSel.appendChild(o);
+      }
+      if (prev && (workers || []).some((w) => w.name === prev)) vaspWorkerSel.value = prev;
+      renderVaspWorkerInfo(vaspWorkerSel.value);
+      void current;
+    }
+
+    async function loadWorkers() {
+      const url = "/api/jfremote/workers" + projectQS();
+      try {
+        const r = await fetch(url);
+        const j = await r.json();
+        workersCache = {
+          project: j.project || "",
+          workers: j.workers || [],
+          errors: j.errors || [],
+        };
+        fillVaspWorkerOptions(j.workers || []);
+        if (executionSel.value === "server" && (j.workers || []).length) {
+          const hadProbeDetails = mlipValidatedWorkers.some((v) => !v.registry_only);
+          if (!hadProbeDetails) {
+            fillMlipWorkerPickFromRegistry(
+              j.workers,
+              mlipWorkerPickSel.value || mlipWorkerHidden.value || null
+            );
+          }
+        }
+        if ((j.errors || []).length) {
+          vaspWorkersHint.innerHTML = '<span style="color:#b91c1c;">' + esc((j.errors || []).join("；")) + "</span>";
+        } else {
+          vaspWorkersHint.textContent =
+            "project=" + (j.project || "?") + " · 共 " + ((j.workers || []).length) + " 个 worker";
+        }
+      } catch (e) {
+        vaspWorkersHint.innerHTML = '<span style="color:#b91c1c;">workers 加载失败：' + esc(e) + "</span>";
+      }
+    }
+
+    btnVaspWorkersRefresh.addEventListener("click", () => loadWorkers());
+    vaspWorkerSel.addEventListener("change", () => renderVaspWorkerInfo(vaspWorkerSel.value));
+
+    // -------- VASP module-load dropdown --------
+    function rebuildVaspPreRunFromPicks() {
+      if (vaspPreRunUserEdited) return;
+      const opts = Array.from(vaspModulePick.selectedOptions || []);
+      const picks = opts.map((o) => (o.value || "").trim()).filter(Boolean);
+      if (!picks.length) return;
+      vaspPreRunInput.value = picks.map((m) => "module load " + m).join(" && ");
+    }
+
+    async function loadVaspModules() {
+      vaspModulesHint.textContent = "正在查询 module avail VASP …";
+      try {
+        const r = await fetch("/api/modules/avail?pattern=VASP");
+        const j = await r.json();
+        const prev = new Set(Array.from(vaspModulePick.selectedOptions || []).map((o) => o.value));
+        vaspModulePick.innerHTML = "";
+        for (const m of j.modules || []) {
+          const o = document.createElement("option");
+          o.value = m;
+          o.textContent = m;
+          if (prev.has(m)) o.selected = true;
+          vaspModulePick.appendChild(o);
+        }
+        if ((j.modules || []).length === 0) {
+          vaspModulesHint.innerHTML = '<span style="color:#b91c1c;">' +
+            esc(((j.errors || []).join("；")) || "未找到匹配的 module；请手填 vasp_pre_run。") + "</span>";
+        } else {
+          vaspModulesHint.textContent = "共 " + (j.modules || []).length + " 个候选 module（按住 Ctrl/Shift 多选）";
+        }
+        rebuildVaspPreRunFromPicks();
+      } catch (e) {
+        vaspModulesHint.innerHTML = '<span style="color:#b91c1c;">module avail 失败：' + esc(e) + "</span>";
+      }
+    }
+
+    btnVaspModulesRefresh.addEventListener("click", loadVaspModules);
+    vaspModulePick.addEventListener("change", rebuildVaspPreRunFromPicks);
+    vaspPreRunInput.addEventListener("input", () => {
+      vaspPreRunUserEdited = !!vaspPreRunInput.value.trim();
+    });
+
+    // Lazy-load workers + modules when the VASP fieldset becomes visible.
+    const _origSyncVisibility = syncFieldsetVisibility;
+    function syncFieldsetVisibilityWithLazy() {
+      _origSyncVisibility();
+      if (executionSel.value === "server") {
+        if (
+          workersCache.workers && workersCache.workers.length &&
+          !mlipWorkerPickSel.options.length &&
+          !mlipValidatedWorkers.some((v) => !v.registry_only)
+        ) {
+          fillMlipWorkerPickFromRegistry(workersCache.workers, null);
+        }
+        if (!workersCache.workers.length) {
+          loadWorkers().catch(() => {});
+        }
+      }
+      if (fsVaspInputEl.classList.contains("show") && vaspModulePick.options.length <= 1) {
+        loadVaspModules().catch(() => {});
+      }
+    }
+    radioVaspYes.removeEventListener("change", syncVaspExecution);
+    radioVaspNo.removeEventListener("change", syncVaspExecution);
+    executionSel.removeEventListener("change", syncFieldsetVisibility);
+    function syncVaspExecution2() {
+      const wantsVasp = radioVaspYes.checked;
+      if (wantsVasp && executionSel.value === "local") {
+        executionSel.value = "server";
+      }
+      syncFieldsetVisibilityWithLazy();
+    }
+    radioVaspYes.addEventListener("change", syncVaspExecution2);
+    radioVaspNo.addEventListener("change", syncVaspExecution2);
+    executionSel.addEventListener("change", syncFieldsetVisibilityWithLazy);
+    syncFieldsetVisibilityWithLazy();
+
+    function fmtCpu(p) {
+      const t = p.cpus_total || 0;
+      const i = p.cpus_idle || 0;
+      const a = p.cpus_alloc || 0;
+      const o = p.cpus_other || 0;
+      return i + " idle / " + a + " alloc / " + o + " other / " + t + " total";
+    }
+
+    function gresLabel(arr) {
+      if (!arr || !arr.length) return "—";
+      return arr.filter((g) => g && g !== "(null)").join(", ") || "—";
+    }
+
+    function aggregateNodes(rawNodes) {
+      const map = new Map();
+      for (const n of rawNodes || []) {
+        const key = n.node || "";
+        if (!key) continue;
+        if (!map.has(key)) {
+          map.set(key, {
+            node: n.node,
+            partitions: new Set(),
+            states: new Set(),
+            cpu_alloc: n.cpu_alloc || 0,
+            cpu_idle: n.cpu_idle || 0,
+            cpu_other: n.cpu_other || 0,
+            cpu_total: n.cpu_total || 0,
+            mem_mb: n.mem_mb || 0,
+            gres_set: new Set(),
+          });
+        }
+        const row = map.get(key);
+        if (n.partition) row.partitions.add(n.partition);
+        if (n.state) row.states.add(n.state);
+        if (n.gres && n.gres !== "(null)") row.gres_set.add(n.gres);
+        row.cpu_alloc = Math.max(row.cpu_alloc, n.cpu_alloc || 0);
+        row.cpu_idle = Math.max(row.cpu_idle, n.cpu_idle || 0);
+        row.cpu_other = Math.max(row.cpu_other, n.cpu_other || 0);
+        row.cpu_total = Math.max(row.cpu_total, n.cpu_total || 0);
+        row.mem_mb = Math.max(row.mem_mb, n.mem_mb || 0);
+      }
+      const arr = [];
+      for (const r of map.values()) {
+        arr.push({
+          node: r.node,
+          partitions: Array.from(r.partitions).sort(),
+          states: Array.from(r.states),
+          cpu_alloc: r.cpu_alloc,
+          cpu_idle: r.cpu_idle,
+          cpu_other: r.cpu_other,
+          cpu_total: r.cpu_total,
+          mem_mb: r.mem_mb,
+          gres: Array.from(r.gres_set).sort(),
+        });
+      }
+      arr.sort((a, b) => {
+        if ((b.cpu_idle || 0) !== (a.cpu_idle || 0)) return (b.cpu_idle || 0) - (a.cpu_idle || 0);
+        return String(a.node).localeCompare(String(b.node), undefined, { numeric: true });
+      });
+      return arr;
+    }
+
+    function nodeStateClass(states) {
+      const all = (states || []).map((s) => String(s).toLowerCase()).join(",");
+      if (/(down|drain|fail|err|unknown|maint)/.test(all)) return "down";
+      if (/(idle)/.test(all)) return "idle";
+      if (/(alloc|completing|reserved)/.test(all)) return "full";
+      if (/(mix|plnd|powering)/.test(all)) return "mixed";
+      return "";
+    }
+
+    function fmtMemMB(mb) {
+      if (!mb) return "—";
+      if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
+      return mb + " MB";
+    }
+
+    let clusterTab = "partitions";
+    let clusterRaw = null;
+    let clusterPartitionFilter = "";
+    let clusterNodeFilter = "";
+
+    function renderClusterPartitions(partitions) {
+      const q = clusterPartitionFilter.trim().toLowerCase();
+      const filtered = (partitions || []).filter((p) =>
+        !q || (p.partition || "").toLowerCase().includes(q) ||
+              (p.gres || []).some((g) => String(g).toLowerCase().includes(q))
+      );
+      if (!filtered.length) return '<p class="hint">没有匹配的分区。</p>';
+      let html = '<table class="cluster-table"><thead><tr>' +
+        "<th>分区</th><th>状态</th><th>限时</th><th>节点</th><th>CPU (idle / alloc / other / total)</th><th>GRES</th>" +
+        "</tr></thead><tbody>";
+      for (const p of filtered) {
+        const totalIdle = (p.cpus_idle || 0);
+        html += '<tr class="' + (totalIdle > 0 ? "idle-row" : "") + '">' +
+          "<td><strong>" + esc(p.partition) + "</strong>" +
+            (p.is_default ? ' <span class="pchip default">default</span>' : "") +
+            ' <button type="button" class="pchip" data-partition="' + esc(p.partition) +
+            '" data-target="mlip">→ MLIP</button>' +
+            ' <button type="button" class="pchip" data-partition="' + esc(p.partition) +
+            '" data-target="vasp">→ VASP</button>' +
+          "</td>" +
+          "<td>" + esc(p.avail) + "</td>" +
+          "<td>" + esc(p.timelimit) + "</td>" +
+          "<td>" + esc(p.nodes_total) + "</td>" +
+          '<td class="' + (totalIdle > 0 ? "idle-cell" : "") + '">' + esc(fmtCpu(p)) + "</td>" +
+          "<td>" + esc(gresLabel(p.gres)) + "</td>" +
+          "</tr>";
+      }
+      html += "</tbody></table>";
+      return html;
+    }
+
+    function renderClusterNodes(rawNodes) {
+      const nodes = aggregateNodes(rawNodes);
+      const q = clusterNodeFilter.trim().toLowerCase();
+      const filtered = q
+        ? nodes.filter((n) =>
+            String(n.node).toLowerCase().includes(q) ||
+            (n.partitions || []).some((p) => p.toLowerCase().includes(q)) ||
+            (n.states || []).some((s) => s.toLowerCase().includes(q)) ||
+            (n.gres || []).some((g) => g.toLowerCase().includes(q))
+          )
+        : nodes;
+      if (!nodes.length) return '<p class="hint">未列出节点（可能是 sinfo 调用失败或没有 -N 数据）。</p>';
+      let totalCpu = 0, totalIdle = 0;
+      let html = '<table class="cluster-table"><thead><tr>' +
+        "<th>节点</th><th>状态</th><th>分区</th><th>核数 (alloc / idle / total)</th><th>内存</th><th>GRES</th>" +
+        "</tr></thead><tbody>";
+      for (const n of filtered) {
+        const cls = nodeStateClass(n.states);
+        const cpuTxt = (n.cpu_alloc || 0) + " / " + (n.cpu_idle || 0) + " / " + (n.cpu_total || 0);
+        totalCpu += n.cpu_total || 0;
+        totalIdle += n.cpu_idle || 0;
+        const partsHtml = (n.partitions || []).map((p) =>
+          '<button type="button" class="pchip node-pick" data-partition="' + esc(p) +
+          '" data-target="mlip" title="把分区填入 MLIP slurm_partition">' + esc(p) + "</button>"
+        ).join(" ");
+        html += '<tr class="node-row ' + cls + '">' +
+          '<td><strong>' + esc(n.node) + "</strong></td>" +
+          "<td>" + esc((n.states || []).join(", ")) + "</td>" +
+          "<td>" + (partsHtml || "—") + "</td>" +
+          '<td class="cpu-cell">' + esc(cpuTxt) + "</td>" +
+          "<td>" + esc(fmtMemMB(n.mem_mb)) + "</td>" +
+          "<td>" + esc(gresLabel(n.gres)) + "</td>" +
+          "</tr>";
+      }
+      html += "</tbody></table>";
+      html += '<p class="hint" style="margin-top:0.45rem;">显示 ' + filtered.length +
+        " / " + nodes.length + " 个节点 · 总核数 " + totalCpu + " · 当前空闲 " + totalIdle + " 核</p>";
+      return html;
+    }
+
+    function renderClusterQueue(j) {
+      const q = j.queue || {};
+      if (q.total === undefined) {
+        return '<p class="hint">无 squeue 数据（可能未安装 squeue 或被禁用）。</p>';
+      }
+      const states = Object.entries(q.by_state || {})
+        .map(([k, v]) => "<tr><th>" + esc(k) + "</th><td>" + esc(v) + "</td></tr>")
+        .join("");
+      return '<p class="hint">总作业数: <strong>' + esc(q.total) +
+        "</strong></p>" +
+        '<table class="cluster-table"><thead><tr><th>状态</th><th>数量</th></tr></thead><tbody>' +
+        (states || '<tr><td colspan="2" class="hint">空</td></tr>') +
+        "</tbody></table>";
+    }
+
+    function attachPartitionPickHandlers() {
+      clusterPanel.querySelectorAll("button[data-partition]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const p = btn.getAttribute("data-partition");
+          const target = btn.getAttribute("data-target");
+          if (target === "vasp") {
+            vaspPartitionInput.value = p;
+          } else {
+            partitionInput.value = p;
+          }
+        });
+      });
+    }
+
+    function renderClusterInfo(j) {
+      if (!j) return;
+      clusterRaw = j;
+      if (clusterTab === "nodes") clusterTab = "partitions";
+      let html = "";
+      if (!j.available) {
+        html += '<p class="err">' + (j.errors || ["sinfo 不可用"]).map(esc).join("<br/>") + "</p>";
+      }
+      const meta = [];
+      if (j.host) meta.push("host: <code>" + esc(j.host) + "</code>");
+      if (j.sinfo_path) meta.push("sinfo: <code>" + esc(j.sinfo_path) + "</code>");
+      if (j.default_partition) meta.push("默认分区: <code>" + esc(j.default_partition) + "</code>");
+      if (j.fetched_at) meta.push("时间: " + esc(j.fetched_at) + (j.cached ? " (cached " + j.age_seconds + "s)" : ""));
+      if (meta.length) html += '<div class="hint">' + meta.join(" · ") + "</div>";
+
+      const partitionCount = (j.partitions || []).length;
+      const queueCount = j.queue && j.queue.total !== undefined ? j.queue.total : "?";
+      const tabs = [
+        { id: "partitions", label: "分区 (" + partitionCount + ")" },
+        { id: "queue", label: "队列 (" + queueCount + ")" },
+      ];
+      html += '<div class="cluster-tabs">' +
+        tabs.map((t) =>
+          '<button type="button" class="cluster-tab ' + (clusterTab === t.id ? "active" : "") +
+          '" data-tab="' + t.id + '">' + esc(t.label) + "</button>"
+        ).join("") +
+        (clusterTab === "partitions"
+          ? '<input type="text" class="cluster-search" id="cluster-part-search" placeholder="按分区名/GRES 过滤…" value="' + esc(clusterPartitionFilter) + '"/>'
+          : "") +
+        "</div>";
+
+      if (clusterTab === "partitions") {
+        html += renderClusterPartitions(j.partitions || []);
+      } else {
+        html += renderClusterQueue(j);
+      }
+
+      clusterPanel.innerHTML = html;
+      attachPartitionPickHandlers();
+      clusterPanel.querySelectorAll("button[data-tab]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          clusterTab = btn.getAttribute("data-tab");
+          renderClusterInfo(clusterRaw);
+        });
+      });
+      const ps = document.getElementById("cluster-part-search");
+      if (ps) {
+        ps.addEventListener("input", (ev) => {
+          clusterPartitionFilter = ev.target.value || "";
+          renderClusterInfo(clusterRaw);
+          const fresh = document.getElementById("cluster-part-search");
+          if (fresh) { fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
+        });
+      }
+    }
+
+    async function loadClusterInfo(force) {
+      clusterPanel.style.display = "";
+      btnClusterRefresh.disabled = false;
+      clusterStatus.textContent = "正在查询 sinfo …";
+      try {
+        const url = "/api/cluster/info" + (force ? "?refresh=true" : "");
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const j = await res.json();
+        renderClusterInfo(j);
+        applyPartitionPayload(j);
+        clusterStatus.textContent = j.available
+          ? "Slurm 已识别（" + (j.partitions ? j.partitions.length : 0) + " 个分区）"
+          : "无法识别 Slurm（详见下方错误）";
+      } catch (e) {
+        clusterStatus.textContent = "查询失败: " + (e.message || e);
+        clusterPanel.innerHTML = '<p class="err">' + esc(e.message || e) + "</p>";
+      }
+    }
+    btnClusterInfo.addEventListener("click", () => loadClusterInfo(false));
+    btnClusterRefresh.addEventListener("click", () => loadClusterInfo(true));
+
+    btnRefresh.addEventListener("click", () => loadTasks());
+    searchInput.addEventListener("input", renderTasks);
+    statusFilter.addEventListener("change", renderTasks);
+    modeFilter.addEventListener("change", renderTasks);
+    btnReset.addEventListener("click", () => {
+      form.reset();
+      submitAlert.style.display = "none";
+      mlipWorkerHidden.value = "";
+      hideMlipWorkerPick();
+      mlipProbePanel.style.display = "none";
+      mlipProbePanel.innerHTML = "";
+      mlipProbeHint.textContent =
+        "可选：验证环境与 Si 静态能；探针 device 与上方一致。不检测时也可直接在下拉里选 worker 提交。";
+      vaspPreRunUserEdited = false;
+      vaspWorkerInfo.style.display = "none";
+      vaspWorkerInfo.innerHTML = "";
+      workersCache = { project: null, workers: [], errors: [] };
+      if (executionSel.value === "server") {
+        loadWorkers().catch(() => {});
+      }
+    });
+
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      submitAlert.style.display = "none";
+      submitAlert.classList.remove("ok", "err");
+      const isServer = executionSel.value === "server";
+      if (isServer) {
+        const pick = (mlipWorkerPickSel.value || "").trim();
+        if (pick && !mlipWorkerHidden.value.trim()) {
+          mlipWorkerHidden.value = pick;
+        }
+      }
+      const mlipName = (mlipWorkerHidden.value || "").trim();
+      if (isServer && !mlipName) {
+        submitAlert.classList.add("err");
+        submitAlert.style.display = "";
+        submitAlert.textContent = "server 模式请在下拉中选择用于 MLIP 的 worker（可不点击「检测」直接提交）。";
+        return;
+      }
+      btnSubmit.disabled = true;
+      btnSubmit.textContent = "提交中…";
+      try {
+        const fd = new FormData(form);
+        if (!fd.get("do_vasp")) fd.set("do_vasp", "false");
+        const res = await fetch("/api/run", { method: "POST", body: fd });
+        const rawText = await res.text();
+        let j;
+        try {
+          j = JSON.parse(rawText);
+        } catch (_) {
+          const clip = rawText.replace(/\s+/g, " ").trim().slice(0, 400);
+          throw new Error(
+            (res.ok ? "服务器返回非 JSON（预期 JSON）" : "HTTP " + res.status) +
+              (clip ? "：" + clip : "")
+          );
+        }
+        const detailMsg = (function () {
+          const d = j.detail;
+          if (d == null) return null;
+          if (typeof d === "string") return d;
+          if (Array.isArray(d)) {
+            try {
+              return JSON.stringify(d);
+            } catch (_) {
+              return String(d);
+            }
+          }
+          if (typeof d === "object") {
+            try {
+              return JSON.stringify(d);
+            } catch (_) {
+              return String(d);
+            }
+          }
+          return String(d);
+        })();
+        if (!res.ok) {
+          const parts = [detailMsg, j.error_type].filter(Boolean);
+          throw new Error(parts.length ? parts.join(" · ") : ("HTTP " + res.status));
+        }
+        submitAlert.classList.add("ok");
+        submitAlert.style.display = "";
+        const sid = j.session_id || j.task_id;
+        const detailUrl = "/manage/" + encodeURIComponent(sid);
+        submitAlert.innerHTML =
+          "任务已提交：<a href=\"" + detailUrl + "\"><code>" + esc(sid) + "</code></a> · " +
+          "<a href=\"" + detailUrl + "\">点此查看详情 →</a>";
+        await loadTasks();
+      } catch (e) {
+        submitAlert.classList.add("err");
+        submitAlert.style.display = "";
+        submitAlert.textContent = "提交失败：" + e.message;
+      } finally {
+        btnSubmit.disabled = false;
+        btnSubmit.textContent = "提交任务";
+      }
+    });
+
+    loadTasks();
+    startPolling();
+  </script>
+</body>
+</html>
