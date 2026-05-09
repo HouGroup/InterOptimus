@@ -12,10 +12,10 @@ This guide lists what a **new administrator** must have in place before `interop
   git clone <your-fork-or-upstream-url> InterOptimus
   cd InterOptimus
   git checkout pure-workflow   # if you maintain this branch on the remote
-  pip install -e ".[mlip,yaml]"   # MLIP backends (torch, orb-models, sevenn, deepmd-kit) + YAML configs; omit [mlip] for core-only
+  pip install -e .
   ```
 
-- The default **PyPI / `pip install`** set does **not** include PyTorch or the ORB / SevenNet / DeepMD packages; add **`[mlip]`** (see `setup.py`) or install those wheels in your conda env before running workflows that use MLIP relaxation.
+- The default **`pip install`** includes **PyYAML** for YAML configs; it does **not** include PyTorch or the ORB / SevenNet / DeepMD packages. Use **`itom config --with-mlip-workers`** (writes jobflow-remote YAML and creates orb/dpa/matris/sevenn conda workers—see `InterOptimus/deploy_jobflow_stack.py`), or install `torch`, `orb-models`, `sevenn`, and `deepmd-kit` yourself in the env that executes MLIP jobs.
 - If `pip install` pulls MLIP wheels that expect **MPI** (e.g. some `deepmd-kit` builds), install the small **`mpich`** PyPI shim or use a conda MPI stack that matches your site policy.
 
 ## 2. Jobflow + MongoDB

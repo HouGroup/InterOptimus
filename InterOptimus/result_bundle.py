@@ -91,6 +91,27 @@ def _append_per_match_sections(run_dir: Path, base_text: str) -> str:
         rb = block.get("relaxed_best_interface")
         if isinstance(rb, dict) and rb.get("structure") is not None:
             lines.append("  relaxed_best_interface: structure exported to pairs_best_it/")
+        if isinstance(rb, dict):
+            mdisp = rb.get("mlip_displacement") or {}
+            if mdisp:
+                _f = mdisp.get("film_avg_disp")
+                _s = mdisp.get("substrate_avg_disp")
+                if _f is not None or _s is not None:
+                    fs = "N/A" if _f is None else f"{float(_f):.4f} A"
+                    ss = "N/A" if _s is None else f"{float(_s):.4f} A"
+                    lines.append(
+                        f"  MLIP avg atomic displacement (translation-removed): film={fs}, substrate={ss}"
+                    )
+            vdisp = rb.get("vasp_displacement") or {}
+            if vdisp:
+                _f = vdisp.get("film_avg_disp")
+                _s = vdisp.get("substrate_avg_disp")
+                if _f is not None or _s is not None:
+                    fs = "N/A" if _f is None else f"{float(_f):.4f} A"
+                    ss = "N/A" if _s is None else f"{float(_s):.4f} A"
+                    lines.append(
+                        f"  VASP avg atomic displacement (translation-removed): film={fs}, substrate={ss}"
+                    )
         lines.append("")
     return "\n".join(lines) + "\n"
 

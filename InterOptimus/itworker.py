@@ -1199,6 +1199,9 @@ class InterfaceWorker:
                 it_bd_E, strain_E = self.post_bayesian_process(i,j,A)
                 
             self.thk_conv_test_results[thk] = self.opt_results[(i,j)]
+        for _d in self.thk_conv_test_results.values():
+            if isinstance(_d, dict):
+                self._strip_one_opt_result_entry_bayesian(_d)
         with open(f'conv_test_results.pkl','wb') as f:
             pickle.dump(self.thk_conv_test_results, f)
     
@@ -1370,20 +1373,23 @@ class InterfaceWorker:
         self.opt_results[(i,j)]['relaxed_best_interface'] = {}
 
         #get lowest-energy relaxed it
-        relaxed_its, relaxed_Es = [], []
+        relaxed_its, relaxed_Es, unrelaxed_its = [], [], []
         for s_id in self.opt_results[(i,j)]['BO_selected_ids']:
-            relaxed_it, relaxed_E = self.relax_with_selective_dyn_it(
+            relaxed_it, relaxed_E, unrelaxed_it = self.relax_with_selective_dyn_it(
                 self.opt_results[(i, j)]["sampled_interfaces"][s_id],
                 fthk_film,
                 fthk_substrate,
                 match_id=i,
                 term_id=j,
+                return_unrelaxed=True,
             )
             relaxed_its.append(relaxed_it)
             relaxed_Es.append(relaxed_E)
+            unrelaxed_its.append(unrelaxed_it)
 
         relaxed_min_id = relaxed_Es.index(min(relaxed_Es))
         best_it, relaxed_best_sup_E = relaxed_its[relaxed_min_id], relaxed_Es[relaxed_min_id]
+        best_unrelaxed_it = unrelaxed_its[relaxed_min_id]
         self.opt_results[(i,j)]['relaxed_interfaces'] = relaxed_its
         self.opt_results[(i,j)]['relaxed_interface_sup_Es'] = relaxed_Es
         site_properties = self.opt_results[(i,j)]['sampled_interfaces'][0].site_properties
@@ -1396,6 +1402,19 @@ class InterfaceWorker:
         #save to result dict
         self.opt_results[(i,j)]['relaxed_best_interface']['structure'] = best_it
         self.opt_results[(i,j)]['relaxed_best_interface']['e'] = relaxed_best_sup_E
+        self.opt_results[(i,j)]['relaxed_best_interface']['unrelaxed_structure'] = best_unrelaxed_it
+        try:
+            from InterOptimus.tool import compute_film_substrate_displacements
+            disp = compute_film_substrate_displacements(
+                best_unrelaxed_it,
+                best_it,
+                film_indices=getattr(best_it, "film_indices", None),
+                substrate_indices=getattr(best_it, "substrate_indices", None),
+            )
+            if disp is not None:
+                self.opt_results[(i, j)]['relaxed_best_interface']['mlip_displacement'] = disp
+        except Exception:
+            pass
         try:
             film_indices = [int(idx) for idx in best_it.film_indices]
             substrate_indices = [int(idx) for idx in best_it.substrate_indices]
@@ -1462,7 +1481,7 @@ class InterfaceWorker:
             pass
         return it_E, strain_E
     
-    def relax_with_selective_dyn_it(self, it, film_shell, substrate_shell, match_id=None, term_id=None):
+    def relax_with_selective_dyn_it(self, it, film_shell, substrate_shell, match_id=None, term_id=None, return_unrelaxed=False):
         interface_properties = it.interface_properties
         film_indices, substrate_indices = it.film_indices, it.substrate_indices
         if not self.double_interface:
@@ -1470,6 +1489,13 @@ class InterfaceWorker:
             it, mblt_mtx = add_sele_dyn_it(it, film_shell, substrate_shell)
         if not self.double_interface:
             it.add_site_property('selective_dynamics', mblt_mtx)
+        unrelaxed_it = Structure.from_dict(json.loads(it.to_json()))
+        try:
+            unrelaxed_it.film_indices = list(film_indices)
+            unrelaxed_it.substrate_indices = list(substrate_indices)
+            unrelaxed_it.interface_properties = interface_properties
+        except Exception:
+            pass
         opt_kw = dict(self.opt_kwargs)
         opt_kw.pop("viz_meta", None)
         if match_id is not None and term_id is not None and _interoptimus_viz_env_active():
@@ -1498,6 +1524,8 @@ class InterfaceWorker:
         it.interface_properties = interface_properties
         it.film_indices = film_indices
         it.substrate_indices = substrate_indices
+        if return_unrelaxed:
+            return it, relaxed_it_sup_E, unrelaxed_it
         return it, relaxed_it_sup_E
     
     def relax_with_selective_dyn_slab(self, slab, shell, left_or_right):
@@ -1520,19 +1548,20 @@ class InterfaceWorker:
         self.opt_results[(i,j)]['relaxed_best_interface'] = {}
 
         #get lowest-energy relaxed it
-        relaxed_its, relaxed_Es = [], []
+        relaxed_its, relaxed_Es, unrelaxed_its = [], [], []
         self.gradient_descend_disps, self.gradient_descend_interfaces = [], []
         self.opt_results[(i,j)]['film_indices'] = self.opt_results[(i,j)]['sampled_interfaces'][0].film_indices
         self.opt_results[(i,j)]['substrate_indices'] = self.opt_results[(i,j)]['sampled_interfaces'][0].substrate_indices
         for s_id in self.opt_results[(i,j)]['BO_selected_ids']:
-            relaxed_it, relaxed_E = self.relax_with_selective_dyn_it(
+            relaxed_it, relaxed_E, unrelaxed_it = self.relax_with_selective_dyn_it(
                 self.opt_results[(i, j)]["sampled_interfaces"][s_id],
                 fthk_film,
                 fthk_substrate,
                 match_id=i,
                 term_id=j,
+                return_unrelaxed=True,
             )
-            
+
             if self.do_gd:
                 gd_xs, gd_Es, gd_gs = gradient_descend(sampling_function = self.get_displaced_relaxed_interface,
                                                      dx = 0.05,
@@ -1548,9 +1577,11 @@ class InterfaceWorker:
             else:
                 relaxed_its.append(relaxed_it)
                 relaxed_Es.append(relaxed_E)
-            
+            unrelaxed_its.append(unrelaxed_it)
+
         relaxed_min_id = relaxed_Es.index(min(relaxed_Es))
         best_it, relaxed_best_sup_E = relaxed_its[relaxed_min_id], relaxed_Es[relaxed_min_id]
+        best_unrelaxed_it = unrelaxed_its[relaxed_min_id]
         self.opt_results[(i,j)]['relaxed_interfaces'] = relaxed_its
         self.opt_results[(i,j)]['relaxed_interface_sup_Es'] = relaxed_Es
 
@@ -1565,6 +1596,19 @@ class InterfaceWorker:
         #save to result dict
         self.opt_results[(i,j)]['relaxed_best_interface']['structure'] = best_it
         self.opt_results[(i,j)]['relaxed_best_interface']['e'] = relaxed_best_sup_E
+        self.opt_results[(i,j)]['relaxed_best_interface']['unrelaxed_structure'] = best_unrelaxed_it
+        try:
+            from InterOptimus.tool import compute_film_substrate_displacements
+            disp = compute_film_substrate_displacements(
+                best_unrelaxed_it,
+                best_it,
+                film_indices=getattr(best_it, "film_indices", None),
+                substrate_indices=getattr(best_it, "substrate_indices", None),
+            )
+            if disp is not None:
+                self.opt_results[(i, j)]['relaxed_best_interface']['mlip_displacement'] = disp
+        except Exception:
+            pass
         # atom counts for reporting
         try:
             self.opt_results[(i, j)]['film_atom_count'] = len(best_it.film)
@@ -1621,6 +1665,29 @@ class InterfaceWorker:
             pass
         return bd_E, strain_E
 
+    @staticmethod
+    def _strip_one_opt_result_entry_bayesian(entry: dict) -> None:
+        """Remove BO interface object lists; keep n_bayesian_samples count."""
+        n = 0
+        siv = entry.get("sampled_interfaces")
+        if siv is not None:
+            try:
+                n = len(siv)
+            except TypeError:
+                n = 0
+        entry["n_bayesian_samples"] = n
+        entry["sampled_interfaces"] = []
+        entry.pop("selected_its", None)
+
+    def _strip_bayesian_interfaces_for_export(self, opt_results: dict) -> None:
+        """
+        Shrink on-disk opt_results: drop full BO-sampled interface objects (and
+        selected_its) while keeping scalars, relaxed structures, and a sample count.
+        """
+        for entry in opt_results.values():
+            if isinstance(entry, dict):
+                self._strip_one_opt_result_entry_bayesian(entry)
+
     def global_minimization(self, n_calls_density = 4, z_range = (0.5, 3), calc = 'sevenn', strain_E_correction = False, term_screen_tol = 1, name = ''):
         """
         apply bassian optimization for the xyz registration of all the interfaces with the predicted
@@ -1646,7 +1713,9 @@ class InterfaceWorker:
                    r'$u_{f1}$',r'$v_{f1}$',r'$w_{f1}$',
                    r'$u_{f2}$',r'$v_{f2}$',r'$w_{f2}$',
                    r'$u_{s1}$',r'$v_{s1}$',r'$w_{s1}$',
-                   r'$u_{s2}$',r'$v_{s2}$',r'$w_{s2}$', r'$T$', r'$i_m$', r'$i_t$']
+                   r'$u_{s2}$',r'$v_{s2}$',r'$w_{s2}$', r'$T$', r'$i_m$', r'$i_t$',
+                   r'$\bar{d}_{f}^{MLIP}$ (' + '\u00C5' + ')',
+                   r'$\bar{d}_{s}^{MLIP}$ (' + '\u00C5' + ')']
         self.formated_data = []
         self.strain_E_correction = effective_strain_E_correction(
             strain_E_correction,
@@ -1755,6 +1824,14 @@ class InterfaceWorker:
                             else:
                                 it_bd_E, strain_E = self.post_bayesian_process(i,j,A)
                             
+                            disp_info = (
+                                self.opt_results.get((i, j), {})
+                                .get('relaxed_best_interface', {})
+                                .get('mlip_displacement')
+                                or {}
+                            )
+                            f_disp_mlip = disp_info.get('film_avg_disp')
+                            s_disp_mlip = disp_info.get('substrate_avg_disp')
                             self.formated_data.append(
                                     [hkl_f[0], hkl_f[1], hkl_f[2],\
                                     hkl_s[0], hkl_s[1], hkl_s[2], \
@@ -1763,7 +1840,8 @@ class InterfaceWorker:
                                     uvw_f2[0], uvw_f2[1], uvw_f2[2], \
                                     uvw_s1[0], uvw_s1[1], uvw_s1[2], \
                                     uvw_s2[0], uvw_s2[1], uvw_s2[2], \
-                                    self.all_unique_terminations[i][j], i, j])
+                                    self.all_unique_terminations[i][j], i, j,
+                                    f_disp_mlip, s_disp_mlip])
                         
                         term_pbar.update(1)
                     
@@ -1773,6 +1851,7 @@ class InterfaceWorker:
             self.best_key = None
             self.close_energy_calculator()
             self.global_optimized_data.to_csv(f'all_data_{name}.csv')
+            self._strip_bayesian_interfaces_for_export(self.opt_results)
             with open(f'opt_results_{name}.pkl','wb') as f:
                 pickle.dump(self.opt_results, f)
             self.opt_results = convert_dict_to_json(self.opt_results)
@@ -1783,9 +1862,19 @@ class InterfaceWorker:
         #close docker container
         self.close_energy_calculator()
         self.global_optimized_data.to_csv(f'all_data_{name}.csv')
+        self._strip_bayesian_interfaces_for_export(self.opt_results)
         with open(f'opt_results_{name}.pkl','wb') as f:
             pickle.dump(self.opt_results, f)
         self.opt_results = convert_dict_to_json(self.opt_results)
+    
+    def write_mlip_selected_interfaces_csv(self, path: str) -> None:
+        """Write MLIP-only ``selected_interfaces.csv`` from ``global_optimized_data`` + ``opt_results``."""
+        from InterOptimus.iomaker_minimal_export import write_mlip_selected_interfaces_csv_table
+        write_mlip_selected_interfaces_csv_table(
+            getattr(self, "global_optimized_data", None),
+            self.opt_results or {},
+            path,
+        )
     
     def get_selected_match_ids_per_plane(self):
         ranked_pairs = list(zip(

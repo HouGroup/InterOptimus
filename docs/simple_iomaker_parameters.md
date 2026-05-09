@@ -1,7 +1,7 @@
 # `simple_iomaker` 配置参数说明
 
 适用于命令 **`interoptimus-simple -c <config.json|yaml>`** 与 Python **`InterOptimus.agents.simple_iomaker.run_simple_iomaker`**。  
-配置为 JSON 或 YAML（YAML 需安装 `pyyaml`）。
+配置为 JSON 或 YAML（YAML 依赖随 InterOptimus 安装的 `pyyaml`）。
 
 ---
 

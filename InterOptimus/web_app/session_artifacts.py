@@ -122,6 +122,11 @@ def enrich_ok_payload_artifacts(workdir: Path, payload: Dict[str, Any]) -> None:
         if picked is not None:
             art[key] = str(picked)
 
+    if not art.get("stereographic_interactive_html"):
+        picked2 = pick_artifact_file(workdir, "stereographic_interactive")
+        if picked2 is not None:
+            art["stereographic_interactive_html"] = str(picked2)
+
     pb = find_pairs_best_it_dir(workdir)
     if pb is not None:
         art["pairs_best_it_dir"] = str(pb)

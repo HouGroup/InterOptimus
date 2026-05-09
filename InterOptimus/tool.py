@@ -27,6 +27,156 @@ from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from scipy.stats.mstats import spearmanr
 from scipy.stats import pearsonr
 
+def compute_film_substrate_displacements(
+    unrelaxed,
+    relaxed,
+    film_indices=None,
+    substrate_indices=None,
+    matcher=None,
+    use_matcher=True,
+    wrap_c=True,
+):
+    """Average atomic displacement of film/substrate after a relaxation.
+
+    Uses :class:`pymatgen.analysis.structure_matcher.StructureMatcher` to
+    align ``relaxed`` to ``unrelaxed`` (rigid translation + same-species site
+    permutation), then computes minimum-image-corrected Cartesian
+    displacements with :func:`pymatgen.util.coord.pbc_diff` and the
+    *unrelaxed* lattice. A residual global translation (mean Cartesian
+    displacement) is removed before per-atom magnitudes are averaged
+    separately for film and substrate.
+
+    Args:
+        unrelaxed (Structure): pre-relaxation interface structure.
+        relaxed (Structure): post-relaxation interface structure. May have
+            permuted site ordering for atoms of the same species; the
+            StructureMatcher path will reorder it to match ``unrelaxed``.
+        film_indices, substrate_indices: site indices in the ``unrelaxed``
+            ordering. When omitted, falls back to ``film_indices`` /
+            ``substrate_indices`` attributes on either structure.
+        matcher (StructureMatcher, optional): pre-configured matcher to reuse.
+        use_matcher (bool): when ``True`` (default), align via
+            ``StructureMatcher.get_s2_like_s1``; falls back to direct
+            site-by-site comparison if alignment fails.
+        wrap_c (bool): wrap fractional differences along c. ``True`` is the
+            standard PBC convention; harmless for slab cells when atomic
+            displacements are small relative to the c lattice.
+
+    Returns:
+        dict with keys ``film_avg_disp``, ``film_rms_disp``,
+        ``substrate_avg_disp``, ``substrate_rms_disp``, ``max_disp``,
+        ``global_translation_norm``, ``film_n_atoms``, ``substrate_n_atoms``,
+        ``n_atoms``, ``aligned_by_structure_matcher`` (bool). Lengths in Å.
+        ``None`` is returned when the two structures are incompatible.
+    """
+    if unrelaxed is None or relaxed is None:
+        return None
+    if len(unrelaxed) != len(relaxed):
+        return None
+
+    if film_indices is None:
+        film_indices = getattr(unrelaxed, "film_indices", None)
+    if film_indices is None:
+        film_indices = getattr(relaxed, "film_indices", None)
+    if substrate_indices is None:
+        substrate_indices = getattr(unrelaxed, "substrate_indices", None)
+    if substrate_indices is None:
+        substrate_indices = getattr(relaxed, "substrate_indices", None)
+
+    # Reference structures often arrive with mismatched decorations: the unrelaxed
+    # interface keeps its oxidation states (``Li+``) while the VASP output is plain
+    # ``Li``. Compare on Element symbols only after stripping oxidation states so the
+    # StructureMatcher and the fallback path are not derailed by ``Li+`` ≠ ``Li``.
+    def _stripped_copy(s):
+        try:
+            cp = s.copy()
+        except Exception:
+            return s
+        try:
+            cp.remove_oxidation_states()
+        except Exception:
+            pass
+        return cp
+
+    unrelax_cmp = _stripped_copy(unrelaxed)
+    relaxed_cmp = _stripped_copy(relaxed)
+
+    aligned = None
+    if use_matcher:
+        try:
+            from pymatgen.analysis.structure_matcher import StructureMatcher
+            sm = matcher or StructureMatcher(
+                ltol=0.5,
+                stol=0.6,
+                angle_tol=10,
+                primitive_cell=False,
+                scale=False,
+                attempt_supercell=False,
+                allow_subset=False,
+            )
+            aligned = sm.get_s2_like_s1(unrelax_cmp, relaxed_cmp)
+        except Exception:
+            aligned = None
+
+    if aligned is None:
+        # Fallback: compare *element* symbols, not full species strings, so that
+        # interfaces relaxed by VASP (charge-stripped) still align with the
+        # MLIP-side reference (charge-decorated).
+        sym_u = [getattr(s.specie, "symbol", str(s.specie)) for s in unrelax_cmp]
+        sym_r = [getattr(s.specie, "symbol", str(s.specie)) for s in relaxed_cmp]
+        if sym_u != sym_r:
+            return None
+        aligned = relaxed_cmp
+        aligned_by_sm = False
+    else:
+        aligned_by_sm = True
+
+    try:
+        from pymatgen.util.coord import pbc_diff
+    except Exception:
+        pbc_diff = None
+
+    fc_u = np.asarray(unrelaxed.frac_coords, dtype=float)
+    fc_r = np.asarray(aligned.frac_coords, dtype=float)
+    if pbc_diff is not None:
+        df = np.asarray(pbc_diff(fc_r, fc_u), dtype=float)
+    else:
+        df = fc_r - fc_u
+        df -= np.round(df)
+    if not wrap_c:
+        df[:, 2] = fc_r[:, 2] - fc_u[:, 2]
+
+    dr_cart = df @ np.asarray(unrelaxed.lattice.matrix, dtype=float)
+    global_translation = dr_cart.mean(axis=0)
+    dr_corrected = dr_cart - global_translation
+    norms = np.linalg.norm(dr_corrected, axis=1)
+
+    def _stats(idx):
+        if idx is None:
+            return None, None, 0
+        idx = np.asarray(list(idx), dtype=int)
+        if idx.size == 0:
+            return None, None, 0
+        v = norms[idx]
+        return float(v.mean()), float(np.sqrt((v ** 2).mean())), int(idx.size)
+
+    f_avg, f_rms, n_f = _stats(film_indices)
+    s_avg, s_rms, n_s = _stats(substrate_indices)
+
+    return {
+        "film_avg_disp": f_avg,
+        "film_rms_disp": f_rms,
+        "substrate_avg_disp": s_avg,
+        "substrate_rms_disp": s_rms,
+        "max_disp": float(norms.max()) if norms.size else None,
+        "global_translation_norm": float(np.linalg.norm(global_translation)),
+        "film_n_atoms": n_f,
+        "substrate_n_atoms": n_s,
+        "n_atoms": int(len(unrelaxed)),
+        "aligned_by_structure_matcher": bool(aligned_by_sm),
+    }
+
+
 def convert_dict_to_json(obj):
     """
     Recursively convert objects to JSON-serializable format.
@@ -633,7 +783,7 @@ def plot_bcmk(mlips, name):
         axs[count][0].set_yticklabels(axs[count][0].get_yticklabels(), fontsize = 10)
         axs[count][1].bar(keys, disps, alpha = 1)
         axs[count][1].set_ylim(0, max(all_dps)+0.01)
-        axs[count][1].set_ylabel(r'$\Delta X $' + ' $\AA$', fontsize = 15)
+        axs[count][1].set_ylabel(r'$\Delta X $' + r' $\AA$', fontsize = 15)
         axs[count][1].yaxis.grid(True)
         axs[count][0].yaxis.grid(True)
         axs[count][0].text(0.05, 0.88, f'{name}({mlip_name_dict[mlip]})',

@@ -13,6 +13,7 @@ from jobflow import Flow, Response, job, Maker
 from qtoolkit.core.data_objects import QResources
 import os
 from InterOptimus.itworker import InterfaceWorker
+from InterOptimus.iomaker_minimal_export import FN_SELECTED_CSV
 from InterOptimus.mlip import resolve_mlip_checkpoint
 from dataclasses import dataclass
 from pymatgen.transformations.site_transformations import TranslateSitesTransformation
@@ -59,17 +60,109 @@ def _miller_hkl_lists_for_report(idx_data: Optional[dict]) -> Tuple[Optional[Lis
     return fc, sc
 
 
-def _write_opt_results_summary_json(cwd: str, opt_results: Dict) -> None:
+def _conventional_uv_lists_for_report(idx_data: Optional[dict]) -> Tuple[List[List[float]], List[List[float]]]:
+    """
+    Film / substrate in-plane direction vectors (2×3) as JSON-friendly nested lists.
+
+    Mirrors ``unique_matches_indices_data`` entries from lattice matching (``film_conventional_vectors``, …).
+    """
+    if not idx_data or not isinstance(idx_data, dict):
+        return [], []
+
+    def _to_float(x: Any) -> Optional[float]:
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            pass
+        # Lattice matching expresses some uvw entries as fraction strings (e.g. ``'-1/2'``).
+        # ``np.asarray(..., dtype=float)`` cannot parse those, so do it explicitly here.
+        try:
+            from fractions import Fraction
+
+            return float(Fraction(str(x).strip()))
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+
+    def _row3(seq: Any) -> Optional[List[float]]:
+        if seq is None:
+            return None
+        try:
+            items = list(seq)
+        except TypeError:
+            return None
+        if len(items) < 3:
+            return None
+        out_row: List[float] = []
+        for v in items[:3]:
+            f = _to_float(v)
+            if f is None:
+                return None
+            out_row.append(f)
+        return out_row
+
+    def _pair(key: str) -> List[List[float]]:
+        a = idx_data.get(key)
+        if a is None:
+            return []
+        try:
+            elems = list(a)
+        except TypeError:
+            return []
+        if not elems:
+            return []
+        first = elems[0]
+        # Detect 1-D vs 2-D layout regardless of whether elements are str / Fraction / np.str_.
+        try:
+            iter(first)
+            first_is_seq = not isinstance(first, (str, bytes))
+        except TypeError:
+            first_is_seq = False
+        if first_is_seq:
+            rows: List[List[float]] = []
+            for raw_row in elems[:2]:
+                row = _row3(raw_row)
+                if row is None:
+                    return []
+                rows.append(row)
+            if len(rows) == 2:
+                return rows
+            return rows or []
+        row = _row3(elems)
+        return [row] if row is not None else []
+
+    return _pair("film_conventional_vectors"), _pair("substrate_conventional_vectors")
+
+
+def _write_opt_results_summary_json(
+    cwd: str,
+    opt_results: Dict,
+    *,
+    unique_matches_millers: Optional[List[Dict[str, Any]]] = None,
+) -> None:
     """
     Write JSON-serializable energy / coordinate summaries (no pymatgen structures).
 
     Full structures also go to ``opt_results.pkl`` on disk; this JSON is for quick inspection
-    without unpickling.
+    without unpickling. When *unique_matches_millers* is provided (per match index), conventional
+    Miller indices / UVW vectors are copied in so downstream CSV exports need only this JSON.
     """
     out: Dict[str, Any] = {}
     for (i, j), d in opt_results.items():
         key = f"match_{i}_term_{j}"
         od: Dict[str, Any] = {"match_id": int(i), "term_id": int(j)}
+        i_int = int(i)
+        if unique_matches_millers and 0 <= i_int < len(unique_matches_millers):
+            ume = unique_matches_millers[i_int]
+            if isinstance(ume, dict):
+                for mkey in (
+                    "film_conventional_miller",
+                    "substrate_conventional_miller",
+                    "film_conventional_vectors",
+                    "substrate_conventional_vectors",
+                ):
+                    val = ume.get(mkey)
+                    if val not in (None, [], ""):
+                        od[mkey] = val
         for name in (
             "relaxed_min_it_E",
             "relaxed_min_bd_E",
@@ -77,6 +170,7 @@ def _write_opt_results_summary_json(cwd: str, opt_results: Dict) -> None:
             "substrate_atom_count",
             "match_area",
             "strain",
+            "strain_E",
         ):
             if name not in d or d[name] is None:
                 continue
@@ -108,6 +202,11 @@ def _write_opt_results_summary_json(cwd: str, opt_results: Dict) -> None:
                 od["relaxed_best_interface_E"] = float(rb["e"])
             except (TypeError, ValueError):
                 od["relaxed_best_interface_E"] = rb["e"]
+        if isinstance(rb, dict) and isinstance(rb.get("mlip_displacement"), dict):
+            od["mlip_displacement"] = {
+                k: (float(v) if isinstance(v, (int, float)) else v)
+                for k, v in rb["mlip_displacement"].items()
+            }
         out[key] = od
     path = os.path.join(cwd, "opt_results_summary.json")
     with open(path, "w", encoding="utf-8") as f:
@@ -239,6 +338,35 @@ def resolve_opt_results_pickle_path(run_dir: os.PathLike[str]) -> Optional[str]:
     return str(best.resolve())
 
 
+def _compact_opt_results_for_pickle(opt_results: Dict[Any, Any]) -> Dict[Any, Any]:
+    """
+    Return an on-disk copy of ``opt_results`` without full BO sampled-interface lists.
+
+    The full ``sampled_interfaces`` and ``selected_its`` lists can dominate pickle size.
+    Keep the best/relaxed structures and scalar metadata, and preserve the sample count
+    as ``n_bayesian_samples`` for provenance.
+    """
+    compact: Dict[Any, Any] = {}
+    for key, value in (opt_results or {}).items():
+        if not isinstance(value, dict):
+            compact[key] = value
+            continue
+        entry = dict(value)
+        sampled = entry.get("sampled_interfaces")
+        if sampled is not None:
+            try:
+                n_samples = len(sampled)
+            except TypeError:
+                n_samples = 0
+        else:
+            n_samples = int(entry.get("n_bayesian_samples") or 0)
+        entry["n_bayesian_samples"] = n_samples
+        entry["sampled_interfaces"] = []
+        entry.pop("selected_its", None)
+        compact[key] = entry
+    return compact
+
+
 def _serialize_unique_matches_millers_for_payload(idt: Any) -> List[Dict[str, Any]]:
     """
     Per lattice-match film/substrate conventional Miller indices (JSON-friendly lists).
@@ -251,13 +379,18 @@ def _serialize_unique_matches_millers_for_payload(idt: Any) -> List[Dict[str, An
         return []
     out: List[Dict[str, Any]] = []
     for i in range(len(idt)):
-        fc, sc = _miller_hkl_lists_for_report(idt[i] if isinstance(idt[i], dict) else None)
-        out.append(
-            {
-                "film_conventional_miller": fc or [],
-                "substrate_conventional_miller": sc or [],
-            }
-        )
+        row = idt[i] if isinstance(idt[i], dict) else None
+        fc, sc = _miller_hkl_lists_for_report(row)
+        fv, sv = _conventional_uv_lists_for_report(row)
+        entry: Dict[str, Any] = {
+            "film_conventional_miller": fc or [],
+            "substrate_conventional_miller": sc or [],
+        }
+        if fv:
+            entry["film_conventional_vectors"] = fv
+        if sv:
+            entry["substrate_conventional_vectors"] = sv
+        out.append(entry)
     return out
 
 
@@ -267,15 +400,27 @@ def _write_opt_results_pickle(
     pair_keys: List[Tuple[int, int]],
 ) -> None:
     path = os.path.join(cwd, "opt_results.pkl")
+    gor: List[Dict[str, Any]] = []
+    god = getattr(iw, "global_optimized_data", None)
+    if god is not None:
+        try:
+            if len(god) > 0:
+                raw = god.to_json(orient="records", default_handler=str)
+                gor = json.loads(raw) if raw else []
+        except Exception:
+            gor = []
+    if not isinstance(gor, list):
+        gor = []
     payload = {
         "version": 1,
-        "opt_results": iw.opt_results,
+        "opt_results": _compact_opt_results_for_pickle(iw.opt_results),
         "materialize_pairs": list(pair_keys),
         "double_interface": bool(iw.double_interface),
         "strain_E_correction": bool(iw.strain_E_correction),
         "unique_matches_millers": _serialize_unique_matches_millers_for_payload(
             getattr(iw, "unique_matches_indices_data", None)
         ),
+        "global_optimized_records": gor,
     }
     with open(path, "wb") as f:
         pickle.dump(payload, f)
@@ -776,6 +921,14 @@ class IOMaker(Maker):
             substrate_name=_formula_to_subscript(substrate_formula),
         )
 
+        cwd_here = os.getcwd()
+        try:
+            mlip_dir = os.path.join(cwd_here, "mlip_results")
+            os.makedirs(mlip_dir, exist_ok=True)
+            iw.write_mlip_selected_interfaces_csv(os.path.join(mlip_dir, FN_SELECTED_CSV))
+        except Exception:
+            pass
+
         # Selected pairs table + opt_results.pkl + VASP jobs (``vasp_pair_selection``).
         pair_kw = self._resolved_pair_selection_kwargs()
         pairs = iw.get_lowest_energy_pairs_each_match(
@@ -786,7 +939,6 @@ class IOMaker(Maker):
         )
         pairs_summary = []
 
-        cwd_here = os.getcwd()
         pairs_dir = cwd_here
         summary_path = os.path.join(cwd_here, "pairs_summary.txt")
 
@@ -848,6 +1000,7 @@ class IOMaker(Maker):
             _od = iw.opt_results.get((i, j), {}) or {}
             _ma = _od.get("match_area")
             _st = _od.get("strain")
+            _disp = ((_od.get("relaxed_best_interface") or {}).get("mlip_displacement") or {})
             pairs_summary.append(
                 {
                     "match_id": i,
@@ -859,6 +1012,8 @@ class IOMaker(Maker):
                     "substrate_atom_count": substrate_atoms,
                     "match_area": _ma,
                     "strain": _st,
+                    "film_avg_disp_mlip_A": _disp.get("film_avg_disp"),
+                    "substrate_avg_disp_mlip_A": _disp.get("substrate_avg_disp"),
                 }
             )
 
@@ -876,6 +1031,8 @@ class IOMaker(Maker):
                     "substrate_atom_count",
                     "match_area",
                     "strain",
+                    "film_avg_disp_mlip_A",
+                    "substrate_avg_disp_mlip_A",
                 ]
                 f.write("\t".join(headers) + "\n")
                 for item in pairs_summary:
@@ -897,6 +1054,8 @@ class IOMaker(Maker):
                         str(item.get("substrate_atom_count")),
                         str(item.get("match_area")),
                         str(item.get("strain")),
+                        str(item.get("film_avg_disp_mlip_A")),
+                        str(item.get("substrate_avg_disp_mlip_A")),
                     ]
                     f.write("\t".join(row) + "\n")
         except Exception:
@@ -1000,7 +1159,13 @@ class IOMaker(Maker):
             pass
 
         try:
-            _write_opt_results_summary_json(os.getcwd(), iw.opt_results)
+            _write_opt_results_summary_json(
+                os.getcwd(),
+                iw.opt_results,
+                unique_matches_millers=_serialize_unique_matches_millers_for_payload(
+                    getattr(iw, "unique_matches_indices_data", None)
+                ),
+            )
         except Exception:
             pass
 
