@@ -783,7 +783,7 @@ def plot_bcmk(mlips, name):
         axs[count][0].set_yticklabels(axs[count][0].get_yticklabels(), fontsize = 10)
         axs[count][1].bar(keys, disps, alpha = 1)
         axs[count][1].set_ylim(0, max(all_dps)+0.01)
-        axs[count][1].set_ylabel(r'$\Delta X $' + ' $\AA$', fontsize = 15)
+        axs[count][1].set_ylabel(r'$\Delta X $' + r' $\AA$', fontsize = 15)
         axs[count][1].yaxis.grid(True)
         axs[count][0].yaxis.grid(True)
         axs[count][0].text(0.05, 0.88, f'{name}({mlip_name_dict[mlip]})',

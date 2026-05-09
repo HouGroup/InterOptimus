@@ -995,7 +995,7 @@ class EquiMatchSorter:
         ax2.bar(x_pos + width/2 + offset, array(y2)*100, width, alpha=0.6, label='strain', color ='C01')
 
         ax1.set_xlabel('Type', fontsize = 30)
-        ax1.set_ylabel('Matching area ($\mathregular{\AA}^2$)', color='C00', fontsize = 30)
+        ax1.set_ylabel(r'Matching area ($\mathregular{\AA}^2$)', color='C00', fontsize = 30)
         ax2.set_ylabel('Strain (%)', color='C01', fontsize = 30)
 
         ax1.set_xticks(x_pos)
