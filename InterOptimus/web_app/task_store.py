@@ -130,6 +130,8 @@ class TaskStore(Protocol):
 
     def list_match_terms(self, task_id: str) -> List[dict]: ...
 
+    def delete_task(self, task_id: str) -> bool: ...
+
 
 class FileTaskStore:
     backend = "file"
@@ -241,6 +243,19 @@ class FileTaskStore:
         with self._lock:
             return [dict(x) for x in self._read()["match_terms"].get(str(task_id), [])]
 
+    def delete_task(self, task_id: str) -> bool:
+        """Drop the task and all associated events / artifacts / match_terms."""
+        key = str(task_id)
+        with self._lock:
+            db = self._read()
+            existed = key in db["tasks"]
+            db["tasks"].pop(key, None)
+            db["events"] = [x for x in db["events"] if x.get("task_id") != key]
+            db["artifacts"] = [x for x in db["artifacts"] if x.get("task_id") != key]
+            db["match_terms"].pop(key, None)
+            self._write(db)
+        return existed
+
 
 class MongoTaskStore:
     backend = "mongo"
@@ -331,6 +346,15 @@ class MongoTaskStore:
     def list_match_terms(self, task_id: str) -> List[dict]:
         cur = self.match_terms.find({"task_id": task_id}, {"_id": 0}).sort([("match_id", 1), ("term_id", 1)])
         return [dict(x) for x in cur]
+
+    def delete_task(self, task_id: str) -> bool:
+        """Drop the task and all associated events / artifacts / match_terms across collections."""
+        res = self.tasks.delete_one({"task_id": task_id})
+        existed = bool(getattr(res, "deleted_count", 0))
+        self.events.delete_many({"task_id": task_id})
+        self.artifacts.delete_many({"task_id": task_id})
+        self.match_terms.delete_many({"task_id": task_id})
+        return existed
 
 
 _STORE: Optional[TaskStore] = None
@@ -770,6 +794,134 @@ def _apply_local_mlip_done_progress_override(task_id: str, progress: dict) -> di
         "当前为 VASP 阶段。已在会话目录检测到 MLIP 结果（如 fetched_results）；"
         f"队列中根作业状态可能尚未同步（job_state={js}）。真实 VASP 子任务展开后计数会更新。"
     )
+    return out
+
+
+def _interoptimus_registry_path() -> Path:
+    """Path to ``~/.interoptimus/iomaker_tasks.json`` (overridable via env var).
+
+    Mirrors ``InterOptimus.agents.remote_submit._interoptimus_registry_path`` so
+    the web UI can read entries written by ``run_simple_iomaker`` directly,
+    without having to import ``remote_submit`` at module load time (it pulls in
+    pymatgen / jobflow on import, which we want to defer).
+    """
+    base = os.environ.get("INTEROPTIMUS_TASK_REGISTRY_DIR") or str(Path.home() / ".interoptimus")
+    return Path(base) / "iomaker_tasks.json"
+
+
+def _load_simple_iomaker_registry() -> Dict[str, Any]:
+    p = _interoptimus_registry_path()
+    if not p.is_file():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _safe_simple_iomaker_task_id(serial_id: str) -> str:
+    """Coerce a registry serial_id into a value that passes ``is_safe_task_id``."""
+    s = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(serial_id or "").strip())
+    s = s.lstrip("._-") or "task"
+    return s[:128]
+
+
+def import_simple_iomaker_tasks_into_store() -> Dict[str, Any]:
+    """Mirror ``run_simple_iomaker`` registry entries into the web TaskStore.
+
+    For each ``serial_id`` in ``~/.interoptimus/iomaker_tasks.json`` not yet
+    present in the TaskStore, insert a stub task with ``mlip_job_uuid`` /
+    ``flow_uuid`` / ``vasp_job_uuids`` / ``submit_workdir`` populated so the
+    standard ``/manage`` listing + ``refresh_remote_progress`` pipeline works
+    against simple-iomaker submissions exactly the same as web-form submissions.
+
+    Idempotent + de-duplicating:
+        * Skip serial_ids that already have a TaskStore row.
+        * Skip registry entries whose ``mlip_job_uuid`` / ``flow_uuid`` /
+          ``jf_job_id`` already matches an existing row (avoids creating a
+          duplicate when the GUI form already produced a UUID-shaped task_id).
+        * Skip entries with no remote handles at all (nothing the UI can do
+          with them — no progress, no fetch, no cancel).
+
+    Returns ``{imported: [...], skipped: int, errors: [...]}``.
+    """
+    out: Dict[str, Any] = {"imported": [], "skipped": 0, "errors": []}
+    reg = _load_simple_iomaker_registry()
+    if not reg:
+        return out
+    store = get_task_store()
+    existing = store.list_tasks(limit=1000)
+    known_uuids: set[str] = set()
+    for t in existing:
+        for k in ("mlip_job_uuid", "flow_uuid", "submit_jf_job_id", "task_id"):
+            v = t.get(k)
+            if isinstance(v, str) and v.strip():
+                known_uuids.add(v.strip().lower())
+        for u in t.get("vasp_job_uuids") or []:
+            if isinstance(u, str) and u.strip():
+                known_uuids.add(u.strip().lower())
+    for serial_id, rec in reg.items():
+        if not isinstance(rec, dict):
+            continue
+        tid = _safe_simple_iomaker_task_id(rec.get("serial_id") or serial_id)
+        if not is_safe_task_id(tid):
+            out["errors"].append(f"unsafe_serial:{serial_id}")
+            continue
+        if store.get_task(tid):
+            out["skipped"] += 1
+            continue
+        rec_uuids = {
+            (rec.get("mlip_job_uuid") or "").strip().lower(),
+            (rec.get("flow_uuid") or "").strip().lower(),
+            (rec.get("jf_job_id") or "").strip().lower(),
+        }
+        rec_uuids.discard("")
+        if rec_uuids and rec_uuids & known_uuids:
+            out["skipped"] += 1
+            continue
+        if not rec_uuids:
+            out["skipped"] += 1
+            continue
+        do_vasp = bool(rec.get("do_vasp"))
+        vasp_uuids = list(rec.get("vasp_job_uuids") or [])
+        try:
+            doc = {
+                "task_id": tid,
+                "session_id": tid,
+                "name": str(rec.get("task_name") or "simple_iomaker"),
+                "status": "remote_running",
+                "phase": "remote",
+                "mode": "mlip+vasp" if do_vasp else "mlip",
+                "mlip_calc": "",
+                "execution": "server",
+                "ui_mode": "simple_iomaker",
+                "source": "simple_iomaker",
+                "film_name": "",
+                "substrate_name": "",
+                "workdir": str(rec.get("submit_workdir") or ""),
+                "submit_workdir": str(rec.get("submit_workdir") or ""),
+                "submit_jf_job_id": str(rec.get("jf_job_id") or "").strip() or None,
+                "mlip_job_uuid": str(rec.get("mlip_job_uuid") or "").strip() or None,
+                "flow_uuid": str(rec.get("flow_uuid") or "").strip() or None,
+                "vasp_job_uuids": [str(x).strip() for x in vasp_uuids if str(x).strip()],
+                "interoptimus_task_serial": str(rec.get("serial_id") or serial_id),
+                "interoptimus_task_record": rec,
+                "stage_summary": "(simple_iomaker submission, refresh for status)",
+            }
+            doc_created = store.create_task(doc)
+            store.append_event(
+                tid,
+                "imported",
+                "Imported from run_simple_iomaker registry",
+                source="simple_iomaker",
+            )
+            out["imported"].append({"task_id": tid, "serial_id": doc_created.get("interoptimus_task_serial")})
+            for k in rec_uuids:
+                if k:
+                    known_uuids.add(k)
+        except Exception as e:
+            out["errors"].append(f"{serial_id}:{e}")
     return out
 
 

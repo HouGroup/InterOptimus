@@ -7,9 +7,11 @@ Form POST → ``session_form.json`` + CIFs → subprocess worker. Long runs exec
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -19,7 +21,7 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,6 +42,7 @@ from InterOptimus.web_app.task_store import (
     _load_web_result,
     create_initial_task,
     get_task_store,
+    import_simple_iomaker_tasks_into_store,
     is_safe_task_id,
     refresh_remote_progress,
     refresh_task_indexes,
@@ -140,6 +143,162 @@ def cancel_job(session_id: str, *, reason: str = "cancelled") -> bool:
     return True
 
 
+def _collect_remote_uuids(task: Dict[str, Any]) -> Dict[str, Any]:
+    """Pull all jobflow-remote handles we know about for ``task``.
+
+    Returns a dict with keys ``flow_uuid`` (str | None), ``job_uuids``
+    (list[str], includes MLIP root + any expanded VASP children), and
+    ``submit_jf_job_id`` (str | None — the IOMaker submitter job, used by
+    legacy entries that don't carry a flow_uuid yet).
+    """
+    flow_uuid = (task or {}).get("flow_uuid") or None
+    job_uuids: List[str] = []
+    for key in ("mlip_job_uuid", "submit_jf_job_id"):
+        v = (task or {}).get(key)
+        if isinstance(v, str) and v.strip():
+            job_uuids.append(v.strip())
+    vasp_uuids = (task or {}).get("vasp_job_uuids") or []
+    if isinstance(vasp_uuids, (list, tuple)):
+        for v in vasp_uuids:
+            s = str(v or "").strip()
+            if s:
+                job_uuids.append(s)
+    seen: set = set()
+    uniq: List[str] = []
+    for u in job_uuids:
+        if u not in seen:
+            seen.add(u)
+            uniq.append(u)
+    return {
+        "flow_uuid": str(flow_uuid).strip() if flow_uuid else None,
+        "job_uuids": uniq,
+        "submit_jf_job_id": (task or {}).get("submit_jf_job_id") or None,
+    }
+
+
+def _get_jobflow_remote_jc():
+    """Return a configured ``JobController`` or ``None`` if jobflow-remote is unavailable."""
+    try:
+        from jobflow_remote.cli.utils import (
+            get_job_controller,
+            initialize_config_manager,
+        )
+
+        initialize_config_manager()
+        return get_job_controller()
+    except Exception:
+        return None
+
+
+def stop_remote_jobs_for_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    """Stop running / queued jobs in jobflow-remote for ``task``.
+
+    Combines ``stop_jobflow`` (cancels WAITING / READY children of the Flow)
+    and ``stop_jobs`` (sends ``scancel`` to currently SUBMITTED / RUNNING jobs).
+    Falls back to per-uuid ``stop_job`` when no flow_uuid is known.
+
+    Always best-effort — every backend call is wrapped to keep the API
+    responsive even when MongoDB / the worker is unreachable.
+    """
+    refs = _collect_remote_uuids(task)
+    out: Dict[str, Any] = {
+        "flow_uuid": refs.get("flow_uuid"),
+        "stopped_uuids": [],
+        "errors": [],
+    }
+    jc = _get_jobflow_remote_jc()
+    if jc is None:
+        out["errors"].append("jobflow_remote_unavailable")
+        return out
+
+    flow_uuid = refs.get("flow_uuid")
+    if flow_uuid:
+        try:
+            jc.stop_jobflow(flow_uuid=flow_uuid)
+        except Exception as e:
+            out["errors"].append(f"stop_jobflow:{e}")
+        try:
+            stopped = jc.stop_jobs(flow_ids=flow_uuid, raise_on_error=False) or []
+            for s in stopped:
+                if s and s not in out["stopped_uuids"]:
+                    out["stopped_uuids"].append(str(s))
+        except Exception as e:
+            out["errors"].append(f"stop_jobs(flow):{e}")
+    for uid in refs.get("job_uuids") or []:
+        try:
+            jc.stop_job(job_id=uid, break_lock=True)
+            if uid not in out["stopped_uuids"]:
+                out["stopped_uuids"].append(uid)
+        except Exception as e:
+            out["errors"].append(f"stop_job({uid[:8]}):{e}")
+    return out
+
+
+def delete_remote_flow_for_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    """Delete the Flow + jobs in jobflow-remote (queue store + outputs).
+
+    Implies ``stop_remote_jobs_for_task`` first so anything still running is
+    sent ``scancel`` before the records disappear.
+    """
+    out: Dict[str, Any] = {"deleted_flow": False, "deleted_jobs": [], "errors": []}
+    cancel_res = stop_remote_jobs_for_task(task)
+    out["stopped_uuids"] = cancel_res.get("stopped_uuids") or []
+    out["errors"].extend(cancel_res.get("errors") or [])
+    refs = _collect_remote_uuids(task)
+    jc = _get_jobflow_remote_jc()
+    if jc is None:
+        out["errors"].append("jobflow_remote_unavailable")
+        return out
+    flow_uuid = refs.get("flow_uuid")
+    if flow_uuid:
+        try:
+            ok = bool(
+                jc.delete_flow(flow_uuid, delete_output=True, delete_files=True)
+            )
+            out["deleted_flow"] = ok
+            if ok:
+                out["flow_uuid"] = flow_uuid
+        except Exception as e:
+            out["errors"].append(f"delete_flow:{e}")
+    leftover = list(refs.get("job_uuids") or [])
+    if leftover:
+        try:
+            removed = (
+                jc.delete_jobs(
+                    job_ids=[(uid, 1) for uid in leftover],
+                    raise_on_error=False,
+                    delete_output=True,
+                    delete_files=True,
+                )
+                or []
+            )
+            for r in removed:
+                if r and r not in out["deleted_jobs"]:
+                    out["deleted_jobs"].append(str(r))
+        except Exception as e:
+            out["errors"].append(f"delete_jobs:{e}")
+    return out
+
+
+def _safe_delete_session_dir(task_id: str) -> Dict[str, Any]:
+    """Remove ``~/.interoptimus/web_sessions/<task_id>/`` if it exists."""
+    out: Dict[str, Any] = {"deleted": False, "path": None, "error": None}
+    try:
+        sd = sessions_root() / task_id
+    except Exception as e:
+        out["error"] = f"sessions_root:{e}"
+        return out
+    out["path"] = str(sd)
+    if not sd.exists():
+        return out
+    try:
+        shutil.rmtree(sd, ignore_errors=False)
+        out["deleted"] = True
+    except OSError as e:
+        out["error"] = str(e)
+    return out
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     yield
@@ -189,17 +348,6 @@ async def local_gui(request: Request) -> Any:
     )
 
 
-@app.get("/hub", response_class=HTMLResponse)
-async def flow_hub(request: Request) -> Any:
-    return templates.TemplateResponse(
-        "hub_simple.html",
-        {
-            "request": request,
-            "default_host": os.environ.get("INTEROPTIMUS_WEB_PUBLIC_HOST", ""),
-        },
-    )
-
-
 @app.get("/manage", response_class=HTMLResponse)
 async def manage_page(request: Request) -> Any:
     """Task management dashboard: submission form + list of submitted tasks."""
@@ -217,6 +365,11 @@ async def manage_task_page(request: Request, task_id: str) -> Any:
     """Task detail page: structure visualization, CIF download, and phase-aware progress."""
     if not is_safe_task_id(task_id):
         raise HTTPException(status_code=400, detail="Invalid task_id")
+    if get_task_store().get_task(task_id) is None:
+        try:
+            import_simple_iomaker_tasks_into_store()
+        except Exception:
+            pass
     return templates.TemplateResponse(
         "manage_detail.html",
         {
@@ -512,25 +665,113 @@ async def api_status(session_id: str) -> JSONResponse:
 
 @app.post("/api/cancel/{session_id}")
 async def api_cancel(session_id: str) -> JSONResponse:
+    """Cancel a task: kill the local worker subprocess **and** stop the Flow / Jobs in
+    jobflow-remote (so SLURM-submitted jobs are ``scancel``ed)."""
     if ".." in session_id or "/" in session_id or "\\" in session_id:
         raise HTTPException(status_code=400, detail="Invalid session_id")
-    ok = cancel_job(session_id, reason="cancelled_by_user")
+    local_killed = cancel_job(session_id, reason="cancelled_by_user")
+
+    remote_result: Dict[str, Any] = {
+        "stopped_uuids": [],
+        "errors": ["task_not_found"],
+        "flow_uuid": None,
+    }
+    try:
+        store = get_task_store()
+        task = store.get_task(session_id) or {}
+        if task:
+            sync_submission_refs_from_result(session_id)
+            task = store.get_task(session_id) or task
+            remote_result = stop_remote_jobs_for_task(task)
+            try:
+                store.append_event(
+                    session_id,
+                    "remote_cancel",
+                    f"stopped={len(remote_result.get('stopped_uuids') or [])} "
+                    f"errors={len(remote_result.get('errors') or [])}",
+                )
+            except Exception:
+                pass
+    except Exception as e:
+        remote_result.setdefault("errors", []).append(f"cancel_remote:{e}")
+
     return JSONResponse(
         content={
             "session_id": session_id,
-            "cancelled": ok,
-            "detail": "Job terminated" if ok else "No running job for this session",
+            "cancelled": local_killed or bool(remote_result.get("stopped_uuids")),
+            "local_killed": local_killed,
+            "remote": remote_result,
+            "detail": (
+                "Local worker terminated"
+                if local_killed
+                else "No running local worker; remote stop attempted"
+            ),
         }
     )
 
 
+@app.delete("/api/tasks/{task_id}")
+async def api_delete_task(task_id: str, cascade_remote: bool = True) -> JSONResponse:
+    """Delete a task end-to-end.
+
+    With ``cascade_remote=true`` (default), this also stops any still-running
+    Slurm jobs and deletes the corresponding Flow + Jobs from the jobflow-remote
+    queue store. Set ``?cascade_remote=false`` to only purge the local DB row
+    and the session workdir on disk.
+    """
+    if not is_safe_task_id(task_id):
+        raise HTTPException(status_code=400, detail="Invalid task_id")
+    store = get_task_store()
+    task = store.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    summary: Dict[str, Any] = {
+        "task_id": task_id,
+        "local_killed": False,
+        "remote": None,
+        "session_dir": None,
+        "store_deleted": False,
+    }
+
+    summary["local_killed"] = cancel_job(task_id, reason="task_deleted")
+    if cascade_remote:
+        try:
+            sync_submission_refs_from_result(task_id)
+            task = store.get_task(task_id) or task
+        except Exception:
+            pass
+        try:
+            summary["remote"] = delete_remote_flow_for_task(task)
+        except Exception as e:
+            summary["remote"] = {"errors": [f"delete_remote:{e}"]}
+    summary["session_dir"] = _safe_delete_session_dir(task_id)
+    try:
+        summary["store_deleted"] = bool(store.delete_task(task_id))
+    except Exception as e:
+        summary["store_error"] = str(e)
+    return JSONResponse(content=summary)
+
+
 @app.get("/api/tasks")
 async def api_tasks(limit: int = 100) -> JSONResponse:
+    """Return all tasks, including those submitted via :func:`run_simple_iomaker`.
+
+    Before reading from the TaskStore we mirror new entries from
+    ``~/.interoptimus/iomaker_tasks.json`` so simple-iomaker submissions show up
+    in ``/manage`` even though they didn't go through the web form.
+    """
     store = get_task_store()
+    import_summary: Dict[str, Any]
+    try:
+        import_summary = import_simple_iomaker_tasks_into_store()
+    except Exception as e:
+        import_summary = {"errors": [f"import_simple:{e}"], "imported": [], "skipped": 0}
     return JSONResponse(
         content={
             "backend": store.backend,
             "tasks": store.list_tasks(limit=limit),
+            "simple_iomaker_import": import_summary,
         }
     )
 
@@ -541,6 +782,12 @@ async def api_task_detail(task_id: str) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Invalid task_id")
     store = get_task_store()
     task = store.get_task(task_id)
+    if task is None:
+        try:
+            import_simple_iomaker_tasks_into_store()
+        except Exception:
+            pass
+        task = store.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     try:
@@ -1114,8 +1361,22 @@ async def api_task_fetch_results(task_id: str) -> JSONResponse:
     if not is_safe_task_id(task_id):
         raise HTTPException(status_code=400, detail="Invalid task_id")
     workdir = sessions_root() / task_id
-    if not workdir.is_dir():
+    store = get_task_store()
+    task_row = store.get_task(task_id)
+    if task_row is None and not workdir.is_dir():
+        # simple_iomaker imports may not have been mirrored yet — try once.
+        try:
+            import_simple_iomaker_tasks_into_store()
+        except Exception:
+            pass
+        task_row = store.get_task(task_id)
+    if task_row is None and not workdir.is_dir():
         raise HTTPException(status_code=404, detail="Task workdir missing")
+    if not workdir.is_dir():
+        # simple_iomaker tasks live in a server submit_workdir; the web UI still
+        # writes ``fetched_results/`` under sessions_root so its artifact scanner
+        # finds the same layout as web-form submissions.
+        workdir.mkdir(parents=True, exist_ok=True)
 
     payload: Dict[str, Any] = {
         "task_id": task_id,
@@ -1132,6 +1393,17 @@ async def api_task_fetch_results(task_id: str) -> JSONResponse:
         except (OSError, json.JSONDecodeError):
             web_result = {}
     inner = web_result.get("result") if isinstance(web_result.get("result"), dict) else {}
+    if not inner and task_row is not None:
+        # simple_iomaker imports: synthesize a minimal result dict from the row.
+        inner = {
+            "mlip_job_uuid": task_row.get("mlip_job_uuid"),
+            "flow_uuid": task_row.get("flow_uuid"),
+            "vasp_job_uuids": task_row.get("vasp_job_uuids") or [],
+            "submit_workdir": task_row.get("submit_workdir"),
+            "interoptimus_task_record": task_row.get("interoptimus_task_record"),
+            "interoptimus_task_serial": task_row.get("interoptimus_task_serial"),
+            "task_name": task_row.get("name"),
+        }
     mlip_uuid = str(
         inner.get("mlip_job_uuid")
         or (inner.get("interoptimus_task_record") or {}).get("mlip_job_uuid")
@@ -1209,3 +1481,181 @@ async def api_task_fetch_results(task_id: str) -> JSONResponse:
     except Exception as e:
         payload["refresh_error"] = str(e)
     return JSONResponse(content=payload)
+
+
+def _resolve_task_ref_for_remote_query(task_id: str) -> str:
+    """Pick the best UUID to pass to ``iomaker_*`` helpers for ``task_id``.
+
+    Prefer ``mlip_job_uuid`` (root MLIP job, the canonical InterOptimus handle),
+    then ``submit_jf_job_id``, then ``flow_uuid``. Returns ``""`` if no remote
+    handles are known.
+    """
+    store = get_task_store()
+    task = store.get_task(task_id) or {}
+    try:
+        sync_submission_refs_from_result(task_id)
+    except Exception:
+        pass
+    task = store.get_task(task_id) or task
+    for key in ("mlip_job_uuid", "submit_jf_job_id", "flow_uuid"):
+        v = (task.get(key) or "").strip() if isinstance(task.get(key), str) else ""
+        if v:
+            return v
+    return ""
+
+
+@app.get("/api/tasks/{task_id}/failed_vasp_jobs")
+async def api_task_failed_vasp_jobs(task_id: str) -> JSONResponse:
+    """List failed VASP sub-jobs (with their current INCAR) for ``task_id``.
+
+    Wraps :func:`InterOptimus.agents.remote_submit.iomaker_failed_vasp_jobs` so
+    the GUI can surface the same data the notebook helper exposes.
+    """
+    if not is_safe_task_id(task_id):
+        raise HTTPException(status_code=400, detail="Invalid task_id")
+    store = get_task_store()
+    if store.get_task(task_id) is None:
+        try:
+            import_simple_iomaker_tasks_into_store()
+        except Exception:
+            pass
+    if store.get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    ref = _resolve_task_ref_for_remote_query(task_id)
+    if not ref:
+        return JSONResponse(
+            content={
+                "task_id": task_id,
+                "success": False,
+                "error": "no_remote_handles",
+                "failed_jobs": [],
+                "failed_job_count": 0,
+            }
+        )
+    try:
+        from InterOptimus.agents.remote_submit import iomaker_failed_vasp_jobs
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"iomaker_failed_vasp_jobs unavailable: {e}") from e
+    try:
+        info = await asyncio.to_thread(iomaker_failed_vasp_jobs, ref=ref, verbose=False)
+    except Exception as e:
+        return JSONResponse(
+            content={
+                "task_id": task_id,
+                "success": False,
+                "error": str(e),
+                "task_ref_used": ref,
+                "failed_jobs": [],
+                "failed_job_count": 0,
+            },
+            status_code=200,
+        )
+    info = info if isinstance(info, dict) else {}
+    info["task_id"] = task_id
+    info["task_ref_used"] = info.get("task_ref_used") or ref
+    info.pop("progress", None)  # drop noisy nested progress; UI re-fetches via /refresh
+    return JSONResponse(content=info)
+
+
+@app.post("/api/tasks/{task_id}/rerun_failed_vasp")
+async def api_task_rerun_failed_vasp(task_id: str, request: Request) -> JSONResponse:
+    """Apply INCAR overrides and rerun a single failed VASP sub-job.
+
+    Body JSON::
+
+        {
+            "failed_job_uuid": "<uuid>",
+            "failed_job_index": 1,            # optional
+            "incar_updates":  { "NELM": 200 } # tags to add/override; null = remove
+            "delete_files":   true,           # optional, default true
+            "wait":           30,             # optional
+            "break_lock":     false           # optional
+        }
+    """
+    if not is_safe_task_id(task_id):
+        raise HTTPException(status_code=400, detail="Invalid task_id")
+    if get_task_store().get_task(task_id) is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}") from e
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    failed_job_uuid = str(body.get("failed_job_uuid") or "").strip()
+    if not failed_job_uuid:
+        raise HTTPException(status_code=400, detail="failed_job_uuid is required")
+    incar_updates_raw = body.get("incar_updates") or {}
+    if not isinstance(incar_updates_raw, dict):
+        raise HTTPException(status_code=400, detail="incar_updates must be an object")
+    incar_updates: Dict[str, Any] = {}
+    for k, v in incar_updates_raw.items():
+        key = str(k or "").strip()
+        if not key:
+            continue
+        incar_updates[key] = v  # ``None`` → remove, anything else → override
+    failed_job_index_raw = body.get("failed_job_index")
+    failed_job_index: Optional[int]
+    try:
+        failed_job_index = int(failed_job_index_raw) if failed_job_index_raw is not None else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="failed_job_index must be an integer") from None
+    delete_files = bool(body.get("delete_files", True))
+    break_lock = bool(body.get("break_lock", False))
+    wait_raw = body.get("wait", 30)
+    try:
+        wait = int(wait_raw) if wait_raw is not None else None
+    except (TypeError, ValueError):
+        wait = 30
+
+    ref = _resolve_task_ref_for_remote_query(task_id)
+    if not ref:
+        raise HTTPException(status_code=400, detail="No remote handles for this task")
+
+    try:
+        from InterOptimus.agents.remote_submit import iomaker_rerun_failed_vasp
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"iomaker_rerun_failed_vasp unavailable: {e}") from e
+
+    try:
+        result = await asyncio.to_thread(
+            iomaker_rerun_failed_vasp,
+            ref=ref,
+            failed_job_uuid=failed_job_uuid,
+            failed_job_index=failed_job_index,
+            incar_updates=incar_updates,
+            delete_files=delete_files,
+            wait=wait,
+            break_lock=break_lock,
+            verbose=False,
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "task_id": task_id,
+                "success": False,
+                "error": str(e),
+                "task_ref_used": ref,
+                "failed_job_uuid": failed_job_uuid,
+            },
+        )
+
+    res = result if isinstance(result, dict) else {}
+    res.pop("progress", None)
+    res["task_id"] = task_id
+    res.setdefault("task_ref_used", ref)
+    try:
+        store = get_task_store()
+        store.append_event(
+            task_id,
+            "vasp_rerun",
+            f"Rerun failed VASP job {failed_job_uuid[:8]} "
+            f"(updates={list(incar_updates.keys())}) success={bool(res.get('success'))}",
+            failed_job_uuid=failed_job_uuid,
+            incar_updates=incar_updates,
+            success=bool(res.get("success")),
+        )
+    except Exception:
+        pass
+    return JSONResponse(content=res)

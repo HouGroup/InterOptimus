@@ -132,13 +132,13 @@
       gap: 0.85rem;
     }
     .task-card {
-      display: block;
-      text-decoration: none;
-      color: inherit;
+      position: relative;
+      display: flex;
+      flex-direction: column;
       border: 1px solid var(--border);
       background: var(--panel);
       border-radius: 12px;
-      padding: 0.85rem 1rem;
+      padding: 0.85rem 1rem 0.65rem;
       box-shadow: var(--shadow);
       transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
     }
@@ -147,6 +147,42 @@
       border-color: var(--accent);
       box-shadow: var(--shadow-md);
     }
+    .task-card-link {
+      display: block;
+      text-decoration: none;
+      color: inherit;
+    }
+    .task-card-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.4rem;
+      padding-top: 0.45rem;
+      margin-top: 0.45rem;
+      border-top: 1px dashed var(--border);
+    }
+    .btn-mini {
+      padding: 0.22rem 0.55rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #f8fafc;
+      color: #334155;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.12s ease;
+    }
+    .btn-mini:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-mini.danger {
+      color: #b91c1c;
+      border-color: #fca5a5;
+      background: #fef2f2;
+    }
+    .btn-mini.danger:hover {
+      color: #fff;
+      background: #dc2626;
+      border-color: #b91c1c;
+    }
+    .btn-mini[disabled] { opacity: 0.55; cursor: progress; }
     .task-card-title {
       display: flex; align-items: center; gap: 0.45rem;
       font-weight: 700; font-size: 0.97rem;
@@ -343,8 +379,6 @@
       <a href="/">← 返回 Portal</a>
       <span>·</span>
       <a href="/local">IOMaker Local（本地交互）</a>
-      <span>·</span>
-      <a href="/hub">IOFlow Hub（旧版）</a>
       <span class="pill" id="store-pill" style="margin-left:auto;">store: …</span>
     </nav>
 
@@ -804,18 +838,78 @@
         const id = t.task_id;
         const url = "/manage/" + encodeURIComponent(id);
         return (
-          '<a class="task-card" href="' + url + '">' +
-          '<div class="task-card-title">' + esc(t.name || "(unnamed)") + statusBadge(t) + "</div>" +
-          '<div class="task-card-meta">' + esc(modeLabel(t)) + " · " + esc(t.mlip_calc || "") +
-            " · " + esc(t.execution || "local") +
-            "<br/>film: " + esc(t.film_name || "film.cif") + " · substrate: " + esc(t.substrate_name || "substrate.cif") +
+          '<div class="task-card" data-task-id="' + esc(id) + '">' +
+          '<a class="task-card-link" href="' + url + '">' +
+            '<div class="task-card-title">' + esc(t.name || "(unnamed)") + statusBadge(t) + "</div>" +
+            '<div class="task-card-meta">' + esc(modeLabel(t)) + " · " + esc(t.mlip_calc || "") +
+              " · " + esc(t.execution || "local") +
+              "<br/>film: " + esc(t.film_name || "film.cif") + " · substrate: " + esc(t.substrate_name || "substrate.cif") +
+            "</div>" +
+            '<div class="task-card-meta task-card-mono">' + esc(id) + "</div>" +
+            '<div class="task-card-meta">提交时间: ' + esc(formatTime(t.created_at)) + "</div>" +
+            '<div class="progress-line">' + progressLine(t) + "</div>" +
+          "</a>" +
+          '<div class="task-card-actions">' +
+            '<button type="button" class="btn-mini btn-task-delete" data-task-id="' + esc(id) +
+              '" data-task-name="' + esc(t.name || id) +
+              '" title="删除任务（含远端 Flow / Job）">删除任务</button>' +
           "</div>" +
-          '<div class="task-card-meta task-card-mono">' + esc(id) + "</div>" +
-          '<div class="task-card-meta">提交时间: ' + esc(formatTime(t.created_at)) + "</div>" +
-          '<div class="progress-line">' + progressLine(t) + "</div>" +
-          "</a>"
+          "</div>"
         );
       }).join("") + "</div>";
+      attachDeleteHandlers();
+    }
+
+    /**
+     * Delete-task button handler. Asks for confirmation, then issues
+     * ``DELETE /api/tasks/{id}?cascade_remote=true`` and refreshes the list.
+     * Cascade is on by default so jobflow-remote Flow / Jobs are also removed
+     * (and any running Slurm jobs are ``scancel``ed).
+     */
+    function attachDeleteHandlers() {
+      taskList.querySelectorAll(".btn-task-delete").forEach((btn) => {
+        if (btn.dataset.bound === "1") return;
+        btn.dataset.bound = "1";
+        btn.addEventListener("click", async (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const id = btn.getAttribute("data-task-id");
+          const nm = btn.getAttribute("data-task-name") || id;
+          if (!id) return;
+          const cascade = window.confirm(
+            "删除任务「" + nm + "」？\n\n" +
+            "确定 = 同时停止并删除 jobflow-remote 中的 Flow / Job（运行中的 Slurm 任务会被 scancel）。\n" +
+            "取消 = 不做删除。"
+          );
+          if (!cascade) return;
+          btn.disabled = true;
+          const origText = btn.textContent;
+          btn.textContent = "删除中…";
+          try {
+            const url = "/api/tasks/" + encodeURIComponent(id) + "?cascade_remote=true";
+            const res = await fetch(url, { method: "DELETE" });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const j = await res.json();
+            const stopped = (j.remote && j.remote.stopped_uuids) || [];
+            const errs = (j.remote && j.remote.errors) || [];
+            console.info("[delete-task]", id, j);
+            const summary =
+              "已删除任务 " + id + "\n" +
+              "  · 本地 worker: " + (j.local_killed ? "已终止" : "无活动进程") + "\n" +
+              "  · 远端: " + (j.remote && j.remote.deleted_flow ? "Flow 已删除" : "未删除 Flow") +
+              "（停止 " + stopped.length + " 个 job" +
+              (errs.length ? "，" + errs.length + " 条警告" : "") + "）";
+            window.alert(summary);
+          } catch (e) {
+            console.error("delete-task failed", e);
+            window.alert("删除失败：" + e);
+          } finally {
+            btn.disabled = false;
+            btn.textContent = origText;
+            await loadTasks({ silent: true });
+          }
+        });
+      });
     }
 
     async function loadTasks(opts) {

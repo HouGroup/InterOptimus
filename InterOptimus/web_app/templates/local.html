@@ -393,8 +393,7 @@
     <p class="sub">原本的本地浏览器 GUI：只面向打开浏览器的节点本地运行 MLIP 任务，不负责集群工作流/数据库管理。任务在<strong>子进程</strong>中运行：可用「停止」结束；uvicorn <kbd>Ctrl+C</kbd> 会终止服务及在跑任务。</p>
     <p class="sub" style="margin-top:0.45rem;">
       <a href="/">← Portal</a> ·
-      <a href="/manage">任务管理（提交、查看、结构可视化）</a> ·
-      <a href="/hub">IOFlow Hub（旧版）</a>
+      <a href="/manage">任务管理（提交、查看、结构可视化）</a>
     </p>
     {% if default_host %}
     <p class="sub">提示：若经反向代理访问，请设置环境变量 <code>INTEROPTIMUS_WEB_PUBLIC_HOST</code> 以生成正确的下载链接。</p>
@@ -735,7 +734,6 @@
       relax: {},
       relaxOrder: [],
       relaxFinalOrder: [],
-      relaxFinalLegacy: false,
       raf: null,
       eventCount: 0,
       jsonlLines: 0,
@@ -832,7 +830,6 @@
       WBV.relax = {};
       WBV.relaxOrder = [];
       WBV.relaxFinalOrder = [];
-      WBV.relaxFinalLegacy = false;
       WBV.eventCount = 0;
       WBV.jsonlLines = 0;
       WBV.vizLogExists = null;
@@ -927,8 +924,6 @@
         if (!isNaN(mk) && !isNaN(tk)) {
           const k = bk(mk, tk);
           if (WBV.relaxFinalOrder.indexOf(k) < 0) WBV.relaxFinalOrder.push(k);
-        } else {
-          WBV.relaxFinalLegacy = true;
         }
         handled = true;
       } else if (evn === "viz_log_ready") {
@@ -1268,8 +1263,7 @@
       if (!el) return;
       const sidForImage = WBV.sessionId || currentSid;
       const pairs = WBV.relaxFinalOrder || [];
-      const legacyOnly = WBV.relaxFinalLegacy && pairs.length === 0;
-      if (!sidForImage || (!pairs.length && !legacyOnly)) {
+      if (!sidForImage || !pairs.length) {
         el.innerHTML = wbEmptyHtml(
           "暂无终态界面图：等待 relax_final（每个 (match, term) 一段 MLIP 弛豫结束后由服务端 ASE plot_atoms 生成 PNG）。"
         );
@@ -1307,21 +1301,17 @@
         );
       }
       let inner = '<div class="relax-final-strip">';
-      if (legacyOnly) {
-        inner += thumbBlock("", "relax_final（兼容）");
-      } else {
-        for (const key of pairs) {
-          const ps = key.split(",");
-          const m = ps[0];
-          const t = ps[1];
-          inner += thumbBlock(
-            "match_id=" +
-              encodeURIComponent(m) +
-              "&term_id=" +
-              encodeURIComponent(t),
-            "match " + String(m) + " · term " + String(t)
-          );
-        }
+      for (const key of pairs) {
+        const ps = key.split(",");
+        const m = ps[0];
+        const t = ps[1];
+        inner += thumbBlock(
+          "match_id=" +
+            encodeURIComponent(m) +
+            "&term_id=" +
+            encodeURIComponent(t),
+          "match " + String(m) + " · term " + String(t)
+        );
       }
       inner += "</div>";
       el.innerHTML = inner + '<p class="bo-iface-foot">' + foot + "</p>";

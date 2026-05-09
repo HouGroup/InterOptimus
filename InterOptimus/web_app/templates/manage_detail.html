@@ -361,6 +361,75 @@
       border-radius: 10px;
       background: #f8fafc;
     }
+    .fvj-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.75rem 0.9rem;
+      margin: 0.55rem 0;
+      background: #fff7ed;
+    }
+    .fvj-head { margin-bottom: 0.4rem; }
+    .fvj-title { font-weight: 600; color: #9a3412; word-break: break-all; }
+    .fvj-sub { word-break: break-all; }
+    .fvj-details {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.45rem 0.6rem;
+      margin: 0.4rem 0;
+    }
+    .fvj-details summary {
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .incar-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.8rem;
+      margin-top: 0.35rem;
+    }
+    .incar-table th, .incar-table td {
+      border: 1px solid #e2e8f0;
+      padding: 0.18rem 0.45rem;
+      text-align: left;
+    }
+    .incar-table th { background: #f1f5f9; }
+    .incar-pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 0.5rem 0.7rem;
+      border-radius: 6px;
+      max-height: 220px;
+      overflow: auto;
+      font-size: 0.78rem;
+    }
+    .fvj-editor textarea {
+      width: 100%;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.5rem 0.6rem;
+      background: #fff;
+    }
+    .fvj-editor .fvj-flag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.83rem;
+      color: var(--muted);
+      margin-right: 0.85rem;
+      margin-top: 0.4rem;
+    }
+    .fvj-editor .fvj-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-top: 0.5rem;
+    }
     .download-list {
       display: flex;
       flex-wrap: wrap;
@@ -551,9 +620,21 @@
       </div>
     </section>
 
+    <section class="panel" aria-label="失败 VASP 子任务">
+      <h2>失败的 VASP 子任务</h2>
+      <p class="hint" style="margin-top:0;">列出当前 Flow 中所有失败的 VASP 子任务、对应的 <code>run_dir</code> 与当前 <code>INCAR</code>。可在每行下方填写 INCAR 覆盖（仅写需要修改的标签；值为空表示删除该标签），点击 <strong>重新提交</strong> 后，jobflow-remote 会就地修改该 job 并 rerun（等价于 notebook 中 <code>iomaker_rerun_failed_vasp</code>）。</p>
+      <div id="failed-vasp-bar" class="actions" style="margin-top:0;">
+        <button type="button" id="btn-failed-vasp-refresh">刷新失败列表</button>
+        <span class="hint" id="failed-vasp-status">仅当任务有远端 Flow / Job UUID 时可用。</span>
+      </div>
+      <div id="failed-vasp-block">
+        <p class="empty">尚未查询，或当前没有失败的 VASP 子任务。</p>
+      </div>
+    </section>
+
     <section class="panel" aria-label="界面结构 (3D)">
       <h2>界面结构 (3D · VESTA 风格)</h2>
-      <p class="hint" id="interfaces-hint">弛豫界面 3D 视图使用遗留目录 <code>pairs_best_it/.../POSCAR</code>；新导出中界面结构在 <code>selected_interfaces.csv</code> 末列 CIF 文本中。</p>
+      <p class="hint" id="interfaces-hint">每个 (match, term) 显示一张可旋转的 3D 弛豫界面结构；同一界面的完整 CIF 文本也保存在 <code>selected_interfaces.csv</code> 的末列。</p>
       <div id="interfaces-block">
         <p class="empty">界面结构将在 MLIP 弛豫完成后，或拉取 VASP 结果后出现。</p>
       </div>
@@ -669,6 +750,9 @@
     const interfacesHint = document.getElementById("interfaces-hint");
     const btnFetchResults = document.getElementById("btn-fetch-results");
     const fetchResultsStatus = document.getElementById("fetch-results-status");
+    const btnFailedVaspRefresh = document.getElementById("btn-failed-vasp-refresh");
+    const failedVaspStatus = document.getElementById("failed-vasp-status");
+    const failedVaspBlock = document.getElementById("failed-vasp-block");
     const eventsBlock = document.getElementById("events-block");
     const btnRefresh = document.getElementById("btn-refresh");
     const btnCancel = document.getElementById("btn-cancel");
@@ -1086,10 +1170,10 @@
     /**
      * Files surfaced under the unified "结果文件" panel. Kept in lockstep
      * across MLIP and VASP so the two phases display the same four entries.
-     * Auxiliary outputs (legacy ``pairs_best_it/`` zip, the VASP markdown
+     * Auxiliary outputs (the ``pairs_best_it/`` POSCAR zip, the VASP markdown
      * energy report, the energy comparison plot) are intentionally excluded
-     * here — the 3D viewer panel below already consumes ``pairs_best_it/``,
-     * and the energy report/plot live elsewhere in the page.
+     * here — the 3D viewer panel below already consumes ``pairs_best_it/``
+     * directly, and the energy report/plot live elsewhere in the page.
      */
     const RESULT_FILE_KINDS = [
       "stereo_table",
@@ -1406,6 +1490,211 @@
         fetchTriggeredOnce = true;
         triggerFetchResults({ silent: false });
       });
+    }
+
+    /* ========================================================================
+     * Failed-VASP rerun UI
+     *
+     * Lists failed VASP sub-jobs returned by ``GET /api/tasks/{tid}/failed_vasp_jobs``
+     * (which wraps :func:`iomaker_failed_vasp_jobs`), shows each one's current
+     * ``INCAR`` (collapsible), exposes a small key=value editor for INCAR
+     * overrides, and submits the merged INCAR via ``POST /api/tasks/{tid}/rerun_failed_vasp``
+     * (which wraps :func:`iomaker_rerun_failed_vasp`). Existing INCAR keys can
+     * be removed by clearing the value field.
+     * ====================================================================== */
+
+    function _renderIncarTable(incar, fallbackText) {
+      const obj = (incar && typeof incar === "object") ? incar : null;
+      if (!obj) {
+        if (fallbackText) {
+          return '<pre class="incar-pre">' + esc(fallbackText) + "</pre>";
+        }
+        return '<p class="empty">读取 INCAR 失败或运行目录中没有 INCAR。</p>';
+      }
+      const keys = Object.keys(obj).sort();
+      if (!keys.length) return '<p class="empty">INCAR 为空。</p>';
+      let html = '<table class="incar-table"><thead><tr><th>tag</th><th>value</th></tr></thead><tbody>';
+      keys.forEach((k) => {
+        const v = obj[k];
+        const val = (v == null) ? "" : (typeof v === "object" ? JSON.stringify(v) : String(v));
+        html += "<tr><td>" + esc(k) + "</td><td>" + esc(val) + "</td></tr>";
+      });
+      html += "</tbody></table>";
+      return html;
+    }
+
+    function _renderFailedVaspCard(item, idx) {
+      const uid = String(item.uuid || "");
+      const idxLabel = (item.index != null) ? String(item.index) : "";
+      const runDir = String(item.run_dir || "");
+      const incarPath = String(item.current_incar_path || "");
+      const incarObj = (item.current_incar && typeof item.current_incar === "object") ? item.current_incar : null;
+      const incarText = String(item.current_incar_text || "");
+      const cardId = "fvj-" + idx;
+      const tableHtml = _renderIncarTable(incarObj, incarText);
+      const parseErr = item.current_incar_parse_error
+        ? '<p class="hint" style="color:#b91c1c;">INCAR 解析告警：' + esc(item.current_incar_parse_error) + "</p>"
+        : "";
+      const readErr = item.current_incar_read_error
+        ? '<p class="hint" style="color:#b91c1c;">INCAR 读取错误：' + esc(item.current_incar_read_error) + "</p>"
+        : "";
+      const stateBadge = item.state ? '<span class="badge failed">' + esc(item.state) + "</span>" : "";
+      return (
+        '<div class="fvj-card" data-uuid="' + esc(uid) + '" data-index="' + esc(idxLabel) + '" id="' + cardId + '">' +
+          '<div class="fvj-head">' +
+            '<div class="fvj-title">' + (item.name ? '<strong>' + esc(item.name) + '</strong> · ' : '') +
+              '<code>' + esc(uid) + '</code>' + (idxLabel ? ' (index ' + esc(idxLabel) + ')' : '') +
+              ' ' + stateBadge +
+            '</div>' +
+            '<div class="fvj-sub task-card-meta">run_dir: <code>' + esc(runDir || "(unknown)") + "</code>" +
+              (incarPath ? '<br/>INCAR: <code>' + esc(incarPath) + "</code>" : "") +
+            '</div>' +
+          '</div>' +
+          '<details class="fvj-details" open>' +
+            '<summary>当前 INCAR</summary>' +
+            tableHtml + parseErr + readErr +
+          '</details>' +
+          '<div class="fvj-editor">' +
+            '<p class="hint" style="margin:0.4rem 0 0.3rem;">INCAR 覆盖（每行一个 <code>KEY=VALUE</code>；只写需要修改的标签；值为空表示删除该标签）：</p>' +
+            '<textarea class="fvj-updates" rows="5" spellcheck="false" placeholder="NELM=200&#10;EDIFF=1e-5&#10;ALGO=Normal"></textarea>' +
+            '<label class="fvj-flag"><input type="checkbox" class="fvj-break-lock"/> break_lock（已被锁住时强制解锁）</label>' +
+            '<label class="fvj-flag"><input type="checkbox" class="fvj-delete-files" checked/> 提交前清空 run_dir 旧文件</label>' +
+            '<div class="fvj-actions">' +
+              '<button type="button" class="btn-fvj-rerun primary">重新提交</button>' +
+              '<span class="hint fvj-msg"></span>' +
+            '</div>' +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    function _parseIncarUpdatesText(text) {
+      const out = {};
+      const lines = String(text || "").split(/\r?\n/);
+      for (const ln of lines) {
+        const s = ln.trim();
+        if (!s || s.startsWith("#")) continue;
+        const eq = s.indexOf("=");
+        if (eq <= 0) continue;
+        const key = s.slice(0, eq).trim();
+        if (!key) continue;
+        const raw = s.slice(eq + 1).trim();
+        if (raw === "") {
+          out[key] = null;  // empty value -> remove tag
+        } else {
+          // Try numeric / boolean coercion so the server-side INCAR merge sees
+          // the same types ``Incar.from_dict`` would emit.
+          if (/^-?\d+$/.test(raw)) out[key] = parseInt(raw, 10);
+          else if (/^-?\d*\.\d+([eE][-+]?\d+)?$/.test(raw)) out[key] = parseFloat(raw);
+          else if (/^-?\d+([eE][-+]?\d+)$/.test(raw)) out[key] = parseFloat(raw);
+          else if (/^(true|false|t|f|yes|no)$/i.test(raw)) {
+            out[key] = /^(true|t|yes)$/i.test(raw);
+          } else {
+            out[key] = raw;
+          }
+        }
+      }
+      return out;
+    }
+
+    async function loadFailedVaspJobs() {
+      if (!failedVaspBlock) return;
+      btnFailedVaspRefresh.disabled = true;
+      const origText = btnFailedVaspRefresh.textContent;
+      btnFailedVaspRefresh.textContent = "查询中…";
+      failedVaspStatus.textContent = "正在通过 jobflow-remote 查询失败的 VASP 子任务…";
+      try {
+        const r = await fetch("/api/tasks/" + encodeURIComponent(TASK_ID) + "/failed_vasp_jobs");
+        const j = await r.json();
+        if (!j.success) {
+          failedVaspStatus.innerHTML = '<span style="color:#b91c1c;">查询失败：' +
+            esc(j.error || "unknown") + "</span>";
+          failedVaspBlock.innerHTML = '<p class="empty">无可用数据。</p>';
+          return j;
+        }
+        const items = j.failed_jobs || [];
+        failedVaspStatus.textContent = "失败数：" + (j.failed_job_count || items.length || 0) +
+          "（task_ref=" + (j.task_ref_used || "—") + "）";
+        if (!items.length) {
+          failedVaspBlock.innerHTML = '<p class="empty">当前没有失败的 VASP 子任务。</p>';
+          return j;
+        }
+        const html = items.map((it, idx) => _renderFailedVaspCard(it, idx)).join("");
+        failedVaspBlock.innerHTML = html;
+        // Wire up rerun buttons
+        failedVaspBlock.querySelectorAll(".btn-fvj-rerun").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const card = btn.closest(".fvj-card");
+            if (!card) return;
+            const uuid = card.getAttribute("data-uuid");
+            const idxStr = card.getAttribute("data-index");
+            const updatesText = card.querySelector(".fvj-updates").value || "";
+            const breakLock = card.querySelector(".fvj-break-lock").checked;
+            const deleteFiles = card.querySelector(".fvj-delete-files").checked;
+            const msg = card.querySelector(".fvj-msg");
+            const updates = _parseIncarUpdatesText(updatesText);
+            if (!Object.keys(updates).length) {
+              if (!confirm("INCAR 覆盖为空 —— 将以**当前 INCAR 原样**重新提交。继续？")) return;
+            }
+            btn.disabled = true;
+            const origBtn = btn.textContent;
+            btn.textContent = "提交中…";
+            msg.textContent = "向 jobflow-remote 提交 rerun…";
+            msg.style.color = "";
+            try {
+              const body = {
+                failed_job_uuid: uuid,
+                incar_updates: updates,
+                break_lock: breakLock,
+                delete_files: deleteFiles,
+              };
+              if (idxStr !== "" && idxStr != null) {
+                const ix = parseInt(idxStr, 10);
+                if (!Number.isNaN(ix)) body.failed_job_index = ix;
+              }
+              const r2 = await fetch(
+                "/api/tasks/" + encodeURIComponent(TASK_ID) + "/rerun_failed_vasp",
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(body),
+                }
+              );
+              const j2 = await r2.json();
+              if (j2.success) {
+                msg.style.color = "#15803d";
+                msg.textContent = "已重新提交，rerun_modified_job_db_ids=" +
+                  JSON.stringify(j2.rerun_modified_job_db_ids || []) + "。任务概要将自动刷新。";
+                console.info("[rerun-failed-vasp]", uuid, j2);
+                setTimeout(() => { loadFailedVaspJobs(); }, 1500);
+                refreshAll();
+              } else {
+                msg.style.color = "#b91c1c";
+                const hint = j2.hint ? " — " + j2.hint : "";
+                msg.textContent = "提交失败：" + (j2.error || "unknown") + hint;
+                console.error("[rerun-failed-vasp]", uuid, j2);
+              }
+            } catch (e) {
+              msg.style.color = "#b91c1c";
+              msg.textContent = "请求异常：" + e;
+            } finally {
+              btn.disabled = false;
+              btn.textContent = origBtn;
+            }
+          });
+        });
+        return j;
+      } catch (e) {
+        failedVaspStatus.innerHTML = '<span style="color:#b91c1c;">查询请求失败：' + esc(e) + "</span>";
+        return null;
+      } finally {
+        btnFailedVaspRefresh.disabled = false;
+        btnFailedVaspRefresh.textContent = origText;
+      }
+    }
+
+    if (btnFailedVaspRefresh) {
+      btnFailedVaspRefresh.addEventListener("click", loadFailedVaspJobs);
     }
 
     function maybeAutoFetchResults(task, arts) {
@@ -1743,12 +2032,33 @@
 
     btnRefresh.addEventListener("click", refreshAll);
     btnCancel.addEventListener("click", async () => {
-      if (!confirm("确认取消该任务？正在运行的 worker 会被强制终止。")) return;
+      if (!confirm(
+        "确认取消该任务？\n\n" +
+        "本地 worker 进程会被终止；同时会调用 jobflow-remote 停止 Flow 中的待运行子任务，\n" +
+        "并对正在排队 / 运行的远端 Slurm 任务发送 scancel。"
+      )) return;
       btnCancel.disabled = true;
+      const origText = btnCancel.textContent;
+      btnCancel.textContent = "取消中…";
       try {
-        await fetch("/api/cancel/" + encodeURIComponent(TASK_ID), { method: "POST" });
+        const res = await fetch("/api/cancel/" + encodeURIComponent(TASK_ID), { method: "POST" });
+        const j = await res.json().catch(() => ({}));
+        const stopped = (j.remote && j.remote.stopped_uuids) || [];
+        const errs = (j.remote && j.remote.errors) || [];
+        const summary =
+          "取消请求已发送：\n" +
+          "  · 本地 worker: " + (j.local_killed ? "已终止" : "无活动进程") + "\n" +
+          "  · 远端 Flow: " + ((j.remote && j.remote.flow_uuid) || "(未知)") + "\n" +
+          "  · 已停止 job 数: " + stopped.length +
+          (errs.length ? "（" + errs.length + " 条警告，详见控制台）" : "");
+        console.info("[cancel-task]", TASK_ID, j);
+        window.alert(summary);
+      } catch (e) {
+        console.error("cancel-task failed", e);
+        window.alert("取消失败：" + e);
       } finally {
         btnCancel.disabled = false;
+        btnCancel.textContent = origText;
       }
       await loadDetail();
     });

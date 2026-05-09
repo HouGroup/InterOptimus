@@ -36,10 +36,9 @@
     .sub { color: var(--muted); margin: 0 0 1.8rem; max-width: 58rem; line-height: 1.65; }
     .grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 1rem;
     }
-    @media (max-width: 1024px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
     @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
     .label.featured {
       background: #dcfce7;
@@ -78,37 +77,27 @@
 <body>
   <main>
     <h1>InterOptimus GUI</h1>
-    <p class="sub">请选择使用场景。三个界面分开运行：本地交互计算、新版任务管理（推荐）、以及旧版工作流 Hub。</p>
+    <p class="sub">请选择使用场景：远程集群任务的「任务管理」（推荐），或在本机直接交互运行的「IOMaker Local」。</p>
     <div class="grid">
       <a class="card" href="/manage">
         <span class="label featured">Recommended</span>
         <h2>任务管理（Manage）</h2>
-        <p>新版界面计算数据管理中心。提交 MLIP / MLIP+VASP 任务、查看任务列表与状态，点入任意任务可看到结构 3D 可视化、CIF 下载和分阶段进度。</p>
+        <p>界面计算数据管理中心。提交 MLIP / MLIP+VASP 任务、查看任务列表与状态，点入任意任务可看到结构 3D 可视化、CIF 下载和分阶段进度。</p>
         <ul>
           <li>提交新任务（MLIP only / MLIP + VASP）</li>
           <li>统一任务库（MongoDB / 本地 JSON 自动回退）</li>
-          <li>结构 3D 可视化 + CIF 下载</li>
+          <li>界面结构 3D 可视化 + CIF / 结果文件下载</li>
           <li>分阶段进度：MLIP → 每个 match 筛选出 term → VASP</li>
         </ul>
       </a>
       <a class="card" href="/local">
         <span class="label">Local</span>
         <h2>IOMaker Local</h2>
-        <p>原来的本地浏览器图形界面。适合在打开浏览器的节点上直接跑 MLIP 任务、看实时日志和可视化。</p>
+        <p>本机交互式 GUI。适合在打开浏览器的节点上直接运行 MLIP 任务、查看实时日志与中间结果可视化。</p>
         <ul>
           <li>只支持本地 MLIP 计算</li>
-          <li>不负责分配集群任务</li>
-          <li>不作为长期数据库管理入口</li>
-        </ul>
-      </a>
-      <a class="card" href="/hub">
-        <span class="label">Legacy</span>
-        <h2>IOFlow Hub（旧版）</h2>
-        <p>初版界面计算工作流 / 任务库浏览器，仅有简洁列表 + 旁边详情面板。已被「任务管理（Manage）」取代，仍保留以便回看。</p>
-        <ul>
-          <li>面向 jobflow-remote / 多节点计算</li>
-          <li>无提交表单 / 无结构可视化</li>
-          <li>仅用作迁移参考</li>
+          <li>不分配集群任务，不作为长期数据库</li>
+          <li>实时日志、relax / final 可视化</li>
         </ul>
       </a>
     </div>
