@@ -194,14 +194,24 @@ MIT License — Copyright (c) 2024 Yaoshu Xie. 详见 [`LICENSE`](LICENSE)。
 
 ## 引用 · Citation
 
-如在学术论文中使用 InterOptimus，请引用本软件：
+如在学术论文中使用 InterOptimus，请引用：
+
+> Yaoshu Xie, Lu Jiang, Tingzheng Hou, *et al.*
+> **InterOptimus: An AI-assisted robust workflow for screening ground-state heterogeneous interface structures in lithium batteries.**
+> *Journal of Energy Chemistry*, **106**, 631–641 (2025).
+> [https://doi.org/10.1016/j.jechem.2025.03.007](https://doi.org/10.1016/j.jechem.2025.03.007)
 
 ```bibtex
-@software{InterOptimus,
-  author = {Xie, Yaoshu and contributors},
-  title  = {InterOptimus: high-throughput crystal interface search and optimization},
-  year   = {2024},
-  url    = {https://github.com/HouGroup/InterOptimus}
+@article{InterOptimus2025,
+  author  = {Xie, Yaoshu and Jiang, Lu and Hou, Tingzheng and others},
+  title   = {{InterOptimus}: An {AI}-assisted robust workflow for screening
+             ground-state heterogeneous interface structures in lithium batteries},
+  journal = {Journal of Energy Chemistry},
+  volume  = {106},
+  pages   = {631--641},
+  year    = {2025},
+  doi     = {10.1016/j.jechem.2025.03.007},
+  url     = {https://www.sciencedirect.com/science/article/pii/S2095495625002098}
 }
 ```
 
