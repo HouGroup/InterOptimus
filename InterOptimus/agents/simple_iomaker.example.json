@@ -18,7 +18,9 @@
     "structure_settings": {
       "termination_ftol": 0.15,
       "double_interface": true,
-      "vacuum_over_film": 5.0
+      "vacuum_over_film": 5.0,
+      "non_polar_substrate_termination": false,
+      "non_polar_film_termination": false
     },
     "optimization_settings": {
       "n_calls_density": 4,

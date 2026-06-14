@@ -24,6 +24,23 @@
 
 归一化由 **`normalize_iomaker_settings_from_full_dict`** 填充默认值；加载结构时覆盖 **`BuildConfig`** 中的 `film_cif` / `substrate_cif`。
 
+### `settings.structure_settings`（终端面 / slab 生成）
+
+直接透传给 **`InterfaceWorker.parse_interface_structure_params`**（见 `InterOptimus/itworker.py`）。常用字段：
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `termination_ftol` | float | `0.15` | 区分不同终端原子面的 c-分数坐标聚类容差。 |
+| `film_thickness` | float | 见预设 | 薄膜 slab 厚度（Å）。 |
+| `substrate_thickness` | float | 见预设 | 基底 slab 厚度（Å）。 |
+| `double_interface` | bool | `false` | 是否构建无真空的双界面（周期性 c 方向）。 |
+| `vacuum_over_film` | float | `5` | 薄膜上方真空层厚度（Å）。 |
+| `charge_filter_settings` | bool/dict/null | `null` | 启用后按简单静电匹配启发式剔除明显不合理的终端面对（需氧化态）。 |
+| `non_polar_substrate_termination` | bool/dict | `false` | 启用后只保留**基底**表面 slab 为**非极性**（无垂直表面净偶极，Tasker I/II 型）的终端面。传 dict 可覆盖 `oxidation_states`、`tol_dipole_per_unit_area`。 |
+| `non_polar_film_termination` | bool/dict | `false` | 同上，但作用于**薄膜**表面 slab。 |
+
+非极性判定基于 **`pymatgen.core.surface.Slab.is_polar`**：对每个 lattice match，按终端面的 c-shift 重建 film / substrate slab，用氧化态装饰后计算单位面积偶极并与 `tol_dipole_per_unit_area`（默认 `1e-3`）比较。`non_polar_substrate_termination` 与 `non_polar_film_termination` 相互独立，可分别开启。氧化态优先使用结构已有的、其次 `oxidation_states` 映射，最后回退到成分猜测（`add_oxidation_state_by_guess`）。
+
 可选分组仅两种：
 
 | 分组 | 作用 |

@@ -16,6 +16,7 @@ from InterOptimus.equi_term import get_non_identical_slab_pairs
 from InterOptimus.tool import apply_cnid_rbt, sort_list, get_it_core_indices, get_min_nb_distance, cut_vaccum, add_sele_dyn_slab, add_sele_dyn_it, get_non_strained_film, get_rot_strain, trans_to_bottom, get_non_matching_structures, convert_dict_to_json
 from pymatgen.io.vasp.sets import MPRelaxSet
 from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
+from pymatgen.core.surface import SlabGenerator
 from skopt import gp_minimize
 from skopt.space import Real
 from tqdm.notebook import tqdm
@@ -405,7 +406,7 @@ class InterfaceWorker:
                 #break
         return screened_matches
     
-    def parse_interface_structure_params(self, termination_ftol = 0.15, film_thickness = 15, substrate_thickness = 15, double_interface = False, vacuum_over_film = 5, charge_filter_settings = None):
+    def parse_interface_structure_params(self, termination_ftol = 0.15, film_thickness = 15, substrate_thickness = 15, double_interface = False, vacuum_over_film = 5, charge_filter_settings = None, non_polar_substrate_termination = False, non_polar_film_termination = False):
         """
         parse necessary structure parameters for interface generation in the next steps
 
@@ -418,11 +419,25 @@ class InterfaceWorker:
         charge_filter_settings (dict|bool|None): optional termination screening settings.
             When enabled, removes termination pairs with obviously unreasonable
             charge matching before MLIP energy estimation.
+        non_polar_substrate_termination (bool|dict|None): when truthy, keep only
+            terminations whose substrate surface slab is non-polar (Tasker type I/II,
+            i.e. no net dipole perpendicular to the surface). Pass a dict to override
+            the polarity-screening settings (``oxidation_states``,
+            ``tol_dipole_per_unit_area``).
+        non_polar_film_termination (bool|dict|None): same as
+            ``non_polar_substrate_termination`` but for the film surface slab.
         """
         self.termination_ftol, self.film_thickness, self.substrate_thickness, self.double_interface, self.vacuum_over_film = \
         termination_ftol, film_thickness, substrate_thickness, double_interface, vacuum_over_film
         self.calculate_thickness()
         self.get_all_unique_terminations()
+        self.non_polar_substrate_termination = non_polar_substrate_termination
+        self.non_polar_film_termination = non_polar_film_termination
+        film_polar_enabled, film_polar_settings = self._normalize_polarity_flag(non_polar_film_termination, 'non_polar_film_termination')
+        substrate_polar_enabled, substrate_polar_settings = self._normalize_polarity_flag(non_polar_substrate_termination, 'non_polar_substrate_termination')
+        if film_polar_enabled or substrate_polar_enabled:
+            polarity_settings = {**substrate_polar_settings, **film_polar_settings}
+            self.filter_terminations_by_polarity(filter_film = film_polar_enabled, filter_substrate = substrate_polar_enabled, **polarity_settings)
         self.charge_filter_settings = charge_filter_settings
         if charge_filter_settings is not None and charge_filter_settings is not False:
             if charge_filter_settings is True:
@@ -763,7 +778,128 @@ class InterfaceWorker:
                 'Charge screening removed all unique terminations. '
                 'Please relax the thresholds or check the oxidation states.'
             )
-    
+
+    @staticmethod
+    def _normalize_polarity_flag(value, name):
+        """Normalize a ``non_polar_*_termination`` flag into ``(enabled, settings)``."""
+        if value is None or value is False:
+            return False, {}
+        if value is True:
+            return True, {}
+        if isinstance(value, dict):
+            return True, dict(value)
+        raise TypeError(f'{name} must be None, bool, or dict')
+
+    def _oxidation_decorated_copy(self, structure, oxidation_states):
+        """
+        Return an oxidation-state decorated copy of ``structure``.
+
+        Oxidation states are required so that :meth:`pymatgen.core.surface.Slab.is_polar`
+        can compute a meaningful dipole. Existing oxidation states are kept; otherwise
+        the explicit ``oxidation_states`` mapping is used, falling back to a composition
+        guess.
+        """
+        decorated = structure.copy()
+        has_oxi = all(getattr(site.specie, 'oxi_state', None) is not None for site in decorated)
+        if has_oxi:
+            return decorated
+        if oxidation_states is not None:
+            decorated.add_oxidation_state_by_element(oxidation_states)
+        else:
+            decorated.add_oxidation_state_by_guess()
+        return decorated
+
+    def filter_terminations_by_polarity(self, filter_film = True, filter_substrate = True,
+                                        oxidation_states = None,
+                                        tol_dipole_per_unit_area = 1e-3):
+        """
+        Keep only terminations whose film and/or substrate surface slab is non-polar.
+
+        A surface is treated as polar when the slab carries a net dipole moment
+        perpendicular to the surface (Tasker type III), evaluated with
+        :meth:`pymatgen.core.surface.Slab.is_polar`. For each unique match the film
+        and substrate slabs are regenerated from the termination's c-shift and tested
+        independently, so ``filter_film`` / ``filter_substrate`` can be toggled
+        separately.
+
+        Args:
+        filter_film (bool): drop terminations whose film surface slab is polar
+        filter_substrate (bool): drop terminations whose substrate surface slab is polar
+        oxidation_states (dict|None): optional element -> oxidation state mapping used
+            to decorate the slabs before the dipole calculation (guessed when omitted)
+        tol_dipole_per_unit_area (float): dipole-per-unit-area threshold above which a
+            slab is considered polar
+        """
+        if not filter_film and not filter_substrate:
+            return
+        sides = []
+        if filter_film:
+            sides.append('film')
+        if filter_substrate:
+            sides.append('substrate')
+        print(f"\nscreening terminations for non-polar {' & '.join(sides)} surface(s)")
+
+        film_struct = self._oxidation_decorated_copy(self.film, oxidation_states)
+        substrate_struct = self._oxidation_decorated_copy(self.substrate, oxidation_states)
+
+        self.termination_polarity_filter_log = {}
+        total_before = 0
+        total_after = 0
+        for i in range(len(self.all_unique_terminations)):
+            terminations_here = self.all_unique_terminations[i]
+            total_before += len(terminations_here)
+            cib = self.get_specified_match_cib(i)
+            film_thickness, substrate_thickness = self.thickness_in_layers[i]
+            film_sg = SlabGenerator(film_struct, self.unique_matches[i].film_miller,
+                                    min_slab_size = film_thickness, min_vacuum_size = 3,
+                                    in_unit_planes = True, center_slab = True,
+                                    primitive = True, reorient_lattice = False)
+            substrate_sg = SlabGenerator(substrate_struct, self.unique_matches[i].substrate_miller,
+                                         min_slab_size = substrate_thickness, min_vacuum_size = 3,
+                                         in_unit_planes = True, center_slab = True,
+                                         primitive = True, reorient_lattice = False)
+            kept_terminations = []
+            kept_term_ids = []
+            removed_reports = []
+            for j in range(len(terminations_here)):
+                termination = terminations_here[j]
+                film_shift, substrate_shift = cib._terminations[termination]
+                film_polar = bool(film_sg.get_slab(shift = film_shift).is_polar(tol_dipole_per_unit_area)) if filter_film else False
+                substrate_polar = bool(substrate_sg.get_slab(shift = substrate_shift).is_polar(tol_dipole_per_unit_area)) if filter_substrate else False
+                if (filter_film and film_polar) or (filter_substrate and substrate_polar):
+                    removed_reports.append({
+                        'term_id': j,
+                        'termination': termination,
+                        'film_polar': film_polar,
+                        'substrate_polar': substrate_polar,
+                    })
+                else:
+                    kept_terminations.append(termination)
+                    kept_term_ids.append(j)
+            self.all_unique_terminations[i] = kept_terminations
+            total_after += len(kept_terminations)
+            self.termination_polarity_filter_log[i] = {
+                'num_before': len(terminations_here),
+                'num_after': len(kept_terminations),
+                'kept_term_ids': kept_term_ids,
+                'removed': removed_reports,
+            }
+            print(
+                f'match {i}: kept {len(kept_terminations)}/{len(terminations_here)} '
+                'unique terminations after polarity screening'
+            )
+            if len(kept_terminations) == 0:
+                warnings.warn(
+                    f'match {i}: all unique terminations were removed by polarity screening; '
+                    'this match will be skipped in global minimization'
+                )
+        print(f'polarity screening kept {total_after}/{total_before} unique terminations')
+        if total_after == 0:
+            raise ValueError(
+                'Polarity screening removed all unique terminations. '
+                'Please disable non-polar filtering or check the structures/oxidation states.'
+            )
+
     def calculate_thickness(self):
         self.thickness_in_layers = [] 
         self.absolute_thicknesses = []
