@@ -3,6 +3,8 @@
 适用于命令 **`interoptimus-simple -c <config.json|yaml>`** 与 Python **`InterOptimus.agents.simple_iomaker.run_simple_iomaker`**。  
 配置为 JSON 或 YAML（YAML 依赖随 InterOptimus 安装的 `pyyaml`）。
 
+> **MatClaw agent（推荐）**：优先使用 `{workflow_name, IO_workflow_config, execution, cluster}` 形状（见同目录 `matclaw_quickstart.md` 与 `InterOptimus/agents/simple_iomaker.example.json`）。`IO_workflow_config` 会在内部归一化为下文 **`settings`**。本文档以归一化后的 `settings` / `execution` / `cluster` 键为准；高级调用也可直接传 legacy `{settings, execution, cluster}`。
+
 ---
 
 ## 1. 总体结构（以代码为准）
