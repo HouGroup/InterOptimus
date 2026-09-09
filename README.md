@@ -205,6 +205,33 @@ if status["is_finished"]:
 - `do_mlip_gd=True`：在 MLIP 优化阶段增加梯度下降。
 - `gd_max_steps` 和 `gd_max_displacement`：限制 MLIP-GD 的步数和单步位移。
 
+### Match 与 termination 对称性去重
+
+Match 去重以原始晶胞中的晶格方向为依据：
+
+- 先把 pymatgen 的 ZSL slab display vectors 还原到 crystal frame。
+- 将向量转换为整数晶格方向并约去公因数，因此向量长度、界面面积和应变不参与等价类定义。
+- Film 和 substrate 各自必须存在一个点群旋转，同时映射完整的两根面内基矢。
+- 两侧必须采用相同的向量交换/符号重标记，以保持外延对应关系。
+- 所有候选先按 `von_mises_strain` 升序排列，所以每个等价类保留最小应变 match。
+
+Termination 去重会区分边界条件：带真空的单界面保留有向表面法线，周期性双界面才允许法线反向等价。代表 termination 通过实际 film/substrate slab shift 映射到 pymatgen 标签，不依赖标签列表顺序。
+
+Film 和 substrate 可使用不同的非极性筛选参数：
+
+```python
+config["IO_workflow_config"]["structure_settings"].update({
+    "non_polar_film_termination": {
+        "oxidation_states": {"Zn": 2, "O": -2},
+        "tol_dipole_per_unit_area": 1e-4,
+    },
+    "non_polar_substrate_termination": {
+        "oxidation_states": {"Ga": 3, "N": -3},
+        "tol_dipole_per_unit_area": 2e-3,
+    },
+})
+```
+
 Bayesian Optimization 会把原子碰撞结构视为高能惩罚项；若所有采样点碰撞、能量非有限或所有弛豫失败，工作流会给出明确错误，而不是继续提交无效 VASP 任务。
 
 ## VASP 工作流
@@ -334,7 +361,7 @@ InterOptimus/
 python -m unittest discover -s InterOptimus/tests -p 'test_*.py'
 ```
 
-测试覆盖配置兼容、checkpoint 解析、pymatgen 晶体学兼容、三方晶系、工作流失败边界和远程状态汇总。真实 MLIP/VASP 运行仍取决于模型、GPU、MongoDB、Slurm、POTCAR 和 VASP 环境。
+测试覆盖配置兼容、checkpoint 解析、pymatgen 晶体学兼容、三方与 nonsymmorphic 晶系、match/termination 对称性去重、工作流失败边界和远程状态汇总。真实 MLIP/VASP 运行仍取决于模型、GPU、MongoDB、Slurm、POTCAR 和 VASP 环境。
 
 ## 引用
 

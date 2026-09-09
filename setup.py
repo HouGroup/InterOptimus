@@ -7,7 +7,7 @@ readme = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="InterOptimus",
-    version="0.1.2",
+    version="0.1.3",
     author="Yaoshu Xie",
     author_email="jasonxie@sz.tsinghua.edu.cn",
     description="High throughput simulation for crystalline interfaces",
