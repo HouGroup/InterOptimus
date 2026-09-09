@@ -11,10 +11,16 @@ from pymatgen.analysis.interfaces import SubstrateAnalyzer
 from pymatgen.core import Lattice, Structure
 from pymatgen.core.operations import SymmOp
 from pymatgen.core.surface import SlabGenerator
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 from InterOptimus.CNID import calculate_cnid_in_supercell
 from InterOptimus.equi_term import pair_fit
 from InterOptimus.itworker import InterfaceWorker
+from InterOptimus.matching import (
+    _rotation_maps_direction_pair,
+    equi_directions_identifier,
+    match_search,
+)
 from InterOptimus.pymatgen_compat import (
     coherent_interface_builder_for_match,
     slab_projected_height,
@@ -381,6 +387,162 @@ class TestPymatgenCompatibility(unittest.TestCase):
             set(range(len(interface))),
         )
         self.assertTrue(np.isfinite(interface.lattice.matrix).all())
+
+    def test_match_groups_ignore_area_and_keep_minimum_strain(self) -> None:
+        film = Structure(Lattice.cubic(3.0), ["Si"], [[0, 0, 0]])
+        substrate = Structure(Lattice.cubic(3.22), ["Ge"], [[0, 0, 0]])
+        analyzer = SubstrateAnalyzer(
+            max_area=60,
+            max_length_tol=0.15,
+            max_angle_tol=0.02,
+            film_max_miller=1,
+            substrate_max_miller=1,
+        )
+
+        unique, groups, _ = match_search(
+            substrate,
+            film,
+            substrate,
+            film,
+            analyzer,
+            [(0, 0, 1)],
+            [(0, 0, 1)],
+        )
+
+        self.assertTrue(
+            any(len({round(match.match_area, 8) for match in group}) > 1 for group in groups)
+        )
+        for representative, group in zip(unique, groups, strict=True):
+            self.assertAlmostEqual(
+                representative.von_mises_strain,
+                min(match.von_mises_strain for match in group),
+            )
+
+    def test_direction_pair_requires_one_common_symmetry_operation(self) -> None:
+        rotations = [
+            operation.rotation_matrix
+            for operation in SpacegroupAnalyzer(
+                _simple_cubic_structure()
+            ).get_symmetry_operations(cartesian=False)
+        ]
+        source = ((0, 1, -2), (0, 1, 1))
+        target = ((0, 1, -2), (1, -1, 0))
+
+        mapped = any(
+            _rotation_maps_direction_pair(
+                source,
+                target,
+                rotations,
+                permutation,
+                signs,
+            )
+            for permutation in ((0, 1), (1, 0))
+            for signs in ((1, 1), (1, -1), (-1, 1), (-1, -1))
+        )
+
+        self.assertFalse(mapped)
+
+    def test_direction_equivalence_ignores_nonsymmorphic_translation(self) -> None:
+        structure = Structure.from_spacegroup(
+            "Pnma",
+            Lattice.orthorhombic(5, 6, 7),
+            ["Si"],
+            [[0.13, 0.21, 0.31]],
+        )
+        identifier = equi_directions_identifier(structure)
+
+        self.assertFalse(identifier.identify(np.array([-1, 0, 0]), np.array([-1, 0, -1])))
+
+    def test_single_and_double_interfaces_use_different_termination_symmetry(self) -> None:
+        perovskite = Structure.from_spacegroup(
+            "Pm-3m",
+            Lattice.cubic(3.9),
+            ["Sr", "Ti", "O"],
+            [[0, 0, 0], [0.5, 0.5, 0.5], [0.5, 0.5, 0]],
+        )
+        worker = InterfaceWorker(perovskite, perovskite)
+        worker.lattice_matching(
+            max_area=20,
+            max_length_tol=0.05,
+            max_angle_tol=0.05,
+            film_max_miller=1,
+            substrate_max_miller=1,
+            film_millers=[(0, 0, 1)],
+            substrate_millers=[(0, 0, 1)],
+        )
+
+        worker.parse_interface_structure_params(
+            termination_ftol=0.15,
+            film_thickness=6,
+            substrate_thickness=6,
+            double_interface=False,
+            vacuum_over_film=8,
+        )
+        single_labels = worker.all_unique_terminations[0]
+
+        worker.parse_interface_structure_params(
+            termination_ftol=0.15,
+            film_thickness=6,
+            substrate_thickness=6,
+            double_interface=True,
+        )
+        double_labels = worker.all_unique_terminations[0]
+
+        self.assertEqual(len(single_labels), 4)
+        self.assertEqual(len(double_labels), 2)
+        self.assertTrue(any("TiO2" in label[0] for label in single_labels))
+
+    def test_termination_representatives_are_mapped_by_shift_not_position(self) -> None:
+        worker = InterfaceWorker.__new__(InterfaceWorker)
+        worker.film = MagicMock()
+        worker.substrate = MagicMock()
+        worker.unique_matches = [object()]
+        worker.ftol_termination_tuples = [(0.1, 0.1)]
+        worker.double_interface = False
+        builder = SimpleNamespace(terminations=["position_zero", "shift_match"])
+        worker.get_specified_match_cib = MagicMock(return_value=builder)
+        film_slab = SimpleNamespace(shift=0.2)
+        substrate_slab = SimpleNamespace(shift=0.7)
+
+        with patch(
+            "InterOptimus.itworker.get_non_identical_slab_pairs",
+            return_value=([0], [[[film_slab, substrate_slab]]], [[[0, 0, 0]]]),
+        ), patch(
+            "InterOptimus.itworker.termination_shift_map",
+            return_value={
+                "position_zero": (0.1, 0.3),
+                "shift_match": (0.2, 0.7),
+            },
+        ):
+            labels = worker.get_unique_terminations(0)
+
+        self.assertEqual(labels, ["shift_match"])
+
+    def test_polarity_settings_remain_separate_for_each_side(self) -> None:
+        worker = InterfaceWorker.__new__(InterfaceWorker)
+        worker.calculate_thickness = MagicMock()
+        worker.get_all_unique_terminations = MagicMock()
+        worker.filter_terminations_by_polarity = MagicMock()
+        film_settings = {
+            "oxidation_states": {"Zn": 2, "O": -2},
+            "tol_dipole_per_unit_area": 1e-4,
+        }
+        substrate_settings = {
+            "oxidation_states": {"Ga": 3, "N": -3},
+            "tol_dipole_per_unit_area": 2e-3,
+        }
+
+        worker.parse_interface_structure_params(
+            non_polar_film_termination=film_settings,
+            non_polar_substrate_termination=substrate_settings,
+        )
+
+        worker.filter_terminations_by_polarity.assert_called_once_with(
+            filter_film=True,
+            filter_substrate=True,
+            film_settings=film_settings,
+            substrate_settings=substrate_settings,
+        )
 
 
 if __name__ == "__main__":

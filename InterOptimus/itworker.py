@@ -482,8 +482,12 @@ class InterfaceWorker:
         film_polar_enabled, film_polar_settings = self._normalize_polarity_flag(non_polar_film_termination, 'non_polar_film_termination')
         substrate_polar_enabled, substrate_polar_settings = self._normalize_polarity_flag(non_polar_substrate_termination, 'non_polar_substrate_termination')
         if film_polar_enabled or substrate_polar_enabled:
-            polarity_settings = {**substrate_polar_settings, **film_polar_settings}
-            self.filter_terminations_by_polarity(filter_film = film_polar_enabled, filter_substrate = substrate_polar_enabled, **polarity_settings)
+            self.filter_terminations_by_polarity(
+                filter_film=film_polar_enabled,
+                filter_substrate=substrate_polar_enabled,
+                film_settings=film_polar_settings,
+                substrate_settings=substrate_polar_settings,
+            )
         self.charge_filter_settings = charge_filter_settings
         if charge_filter_settings is not None and charge_filter_settings is not False:
             if charge_filter_settings is True:
@@ -585,20 +589,44 @@ class InterfaceWorker:
         Args:
         id (int): unique match index
         """
-        unique_term_ids = get_non_identical_slab_pairs(self.film, self.substrate, self.unique_matches[id], \
-                                                       ftol = self.ftol_termination_tuples[id], c_periodic = True)[0]
+        unique_term_ids, slab_pair_groups, _ = get_non_identical_slab_pairs(
+            self.film,
+            self.substrate,
+            self.unique_matches[id],
+            ftol=self.ftol_termination_tuples[id],
+            c_periodic=self.double_interface,
+        )
         print(f'\nmatch {id}: number of unique terminations: {len(unique_term_ids)}')
         cib = self.get_specified_match_cib(id)
         if not cib.terminations:
             return []
-        invalid_ids = [term_id for term_id in unique_term_ids if term_id >= len(cib.terminations)]
-        if invalid_ids:
-            raise RuntimeError(
-                "Termination equivalence indices are inconsistent with pymatgen "
-                f"labels for match {id}: invalid indices {invalid_ids}, "
-                f"label count {len(cib.terminations)}."
+        shift_map = termination_shift_map(cib)
+
+        def shifts_match(first, second):
+            delta = (float(first) - float(second) + 0.5) % 1.0 - 0.5
+            return abs(delta) <= 1e-8
+
+        unique_terminations = []
+        for group in slab_pair_groups:
+            representative_film, representative_substrate = group[0]
+            expected = (
+                float(representative_film.shift),
+                float(representative_substrate.shift),
             )
-        return [cib.terminations[i] for i in unique_term_ids]
+            matching_labels = [
+                termination
+                for termination, actual in shift_map.items()
+                if shifts_match(expected[0], actual[0])
+                and shifts_match(expected[1], actual[1])
+            ]
+            if len(matching_labels) != 1:
+                raise RuntimeError(
+                    "Could not map a deduplicated slab pair to exactly one pymatgen "
+                    f"termination label for match {id}: shifts={expected}, "
+                    f"matching labels={matching_labels}."
+                )
+            unique_terminations.append(matching_labels[0])
+        return unique_terminations
     
     def get_all_unique_terminations(self):
         """
@@ -866,9 +894,15 @@ class InterfaceWorker:
             decorated.add_oxidation_state_by_guess()
         return decorated
 
-    def filter_terminations_by_polarity(self, filter_film = True, filter_substrate = True,
-                                        oxidation_states = None,
-                                        tol_dipole_per_unit_area = 1e-3):
+    def filter_terminations_by_polarity(
+        self,
+        filter_film=True,
+        filter_substrate=True,
+        oxidation_states=None,
+        tol_dipole_per_unit_area=1e-3,
+        film_settings=None,
+        substrate_settings=None,
+    ):
         """
         Keep only terminations whose film and/or substrate surface slab is non-polar.
 
@@ -882,13 +916,47 @@ class InterfaceWorker:
         Args:
         filter_film (bool): drop terminations whose film surface slab is polar
         filter_substrate (bool): drop terminations whose substrate surface slab is polar
-        oxidation_states (dict|None): optional element -> oxidation state mapping used
-            to decorate the slabs before the dipole calculation (guessed when omitted)
-        tol_dipole_per_unit_area (float): dipole-per-unit-area threshold above which a
-            slab is considered polar
+        oxidation_states (dict|None): backward-compatible default element -> oxidation
+            state mapping for both sides
+        tol_dipole_per_unit_area (float): backward-compatible default threshold for
+            both sides
+        film_settings (dict|None): film-specific ``oxidation_states`` and/or
+            ``tol_dipole_per_unit_area``
+        substrate_settings (dict|None): substrate-specific equivalents
         """
         if not filter_film and not filter_substrate:
             return
+        allowed_settings = {'oxidation_states', 'tol_dipole_per_unit_area'}
+        film_settings = dict(film_settings or {})
+        substrate_settings = dict(substrate_settings or {})
+        for side, settings in (
+            ('film', film_settings),
+            ('substrate', substrate_settings),
+        ):
+            unknown = sorted(set(settings) - allowed_settings)
+            if unknown:
+                raise ValueError(
+                    f"Unknown {side} polarity setting(s): {unknown}. "
+                    f"Allowed: {sorted(allowed_settings)}"
+                )
+        film_oxidation_states = film_settings.get(
+            'oxidation_states', oxidation_states
+        )
+        substrate_oxidation_states = substrate_settings.get(
+            'oxidation_states', oxidation_states
+        )
+        film_polarity_tol = float(
+            film_settings.get(
+                'tol_dipole_per_unit_area', tol_dipole_per_unit_area
+            )
+        )
+        substrate_polarity_tol = float(
+            substrate_settings.get(
+                'tol_dipole_per_unit_area', tol_dipole_per_unit_area
+            )
+        )
+        if film_polarity_tol < 0 or substrate_polarity_tol < 0:
+            raise ValueError("Polarity dipole tolerances must be non-negative")
         sides = []
         if filter_film:
             sides.append('film')
@@ -896,8 +964,18 @@ class InterfaceWorker:
             sides.append('substrate')
         print(f"\nscreening terminations for non-polar {' & '.join(sides)} surface(s)")
 
-        film_struct = self._oxidation_decorated_copy(self.film, oxidation_states)
-        substrate_struct = self._oxidation_decorated_copy(self.substrate, oxidation_states)
+        film_struct = (
+            self._oxidation_decorated_copy(self.film, film_oxidation_states)
+            if filter_film
+            else self.film
+        )
+        substrate_struct = (
+            self._oxidation_decorated_copy(
+                self.substrate, substrate_oxidation_states
+            )
+            if filter_substrate
+            else self.substrate
+        )
 
         self.termination_polarity_filter_log = {}
         total_before = 0
@@ -922,8 +1000,14 @@ class InterfaceWorker:
             for j in range(len(terminations_here)):
                 termination = terminations_here[j]
                 film_shift, substrate_shift = shift_map[termination]
-                film_polar = bool(film_sg.get_slab(shift = film_shift).is_polar(tol_dipole_per_unit_area)) if filter_film else False
-                substrate_polar = bool(substrate_sg.get_slab(shift = substrate_shift).is_polar(tol_dipole_per_unit_area)) if filter_substrate else False
+                film_polar = bool(
+                    film_sg.get_slab(shift=film_shift).is_polar(film_polarity_tol)
+                ) if filter_film else False
+                substrate_polar = bool(
+                    substrate_sg.get_slab(shift=substrate_shift).is_polar(
+                        substrate_polarity_tol
+                    )
+                ) if filter_substrate else False
                 if (filter_film and film_polar) or (filter_substrate and substrate_polar):
                     removed_reports.append({
                         'term_id': j,
@@ -941,6 +1025,8 @@ class InterfaceWorker:
                 'num_after': len(kept_terminations),
                 'kept_term_ids': kept_term_ids,
                 'removed': removed_reports,
+                'film_tol_dipole_per_unit_area': film_polarity_tol,
+                'substrate_tol_dipole_per_unit_area': substrate_polarity_tol,
             }
             print(
                 f'match {i}: kept {len(kept_terminations)}/{len(terminations_here)} '

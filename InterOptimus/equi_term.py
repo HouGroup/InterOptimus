@@ -89,13 +89,19 @@ def pair_fit(film_slab_fit, sub_slab_fit, film_slab, sub_slab, matcher, c_period
     if film_slab_fit == film_slab:
         film_map = SymmOp.from_rotation_and_translation(np.eye(3), [0,0,0])
     else:
-        film_transformation = matcher.get_transformation(film_slab, film_slab_fit)[0]
+        film_match = matcher.get_transformation(film_slab, film_slab_fit)
+        if film_match is None:
+            return False
+        film_transformation = film_match[0]
         film_rotation = get_rotation_from_match(film_slab_fit.lattice.matrix, film_transformation)
         film_map = SymmOp.from_rotation_and_translation(film_rotation, [0,0,0])
     if sub_slab_fit == sub_slab:
         sub_map = SymmOp.from_rotation_and_translation(np.eye(3), [0,0,0])
     else:
-        sub_transformation = matcher.get_transformation(sub_slab, sub_slab_fit)[0]
+        substrate_match = matcher.get_transformation(sub_slab, sub_slab_fit)
+        if substrate_match is None:
+            return False
+        sub_transformation = substrate_match[0]
         sub_rotation = get_rotation_from_match(sub_slab_fit.lattice.matrix, sub_transformation)
         sub_map = SymmOp.from_rotation_and_translation(sub_rotation, [0,0,0])
     film_over_sub = film_map * sub_map.inverse

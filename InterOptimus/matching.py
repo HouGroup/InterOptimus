@@ -74,6 +74,57 @@ def get_identical_pairs(match, film, substrate):
 
     return combs
 
+
+def _primitive_integer_direction(vector):
+    """Reduce a non-zero integer lattice vector without discarding its sign."""
+
+    integer = np.asarray(vector, dtype=int)
+    if integer.shape != (3,) or not np.any(integer):
+        raise ValueError(f"Expected a non-zero three-dimensional direction, got {vector!r}")
+    divisor = int(np.gcd.reduce(np.abs(integer[integer != 0])))
+    return tuple(int(value) for value in integer // divisor)
+
+
+def _crystal_frame_direction_pair(structure, miller, vectors):
+    """Return primitive integer directions for a reduced ZSL basis."""
+
+    crystal_vectors = zsl_vectors_in_crystal_frame(structure, miller, vectors)
+    fractional = np.linalg.solve(
+        structure.lattice.matrix.T, np.asarray(crystal_vectors, dtype=float).T
+    ).T
+    integral = np.rint(fractional).astype(int)
+    if not np.allclose(fractional, integral, atol=1e-7):
+        raise RuntimeError(
+            "Could not reconstruct integral ZSL directions in the crystal frame: "
+            f"{fractional}"
+        )
+    return tuple(_primitive_integer_direction(vector) for vector in integral)
+
+
+def _rotation_maps_direction_pair(
+    source, target, rotations, permutation, signs
+):
+    """Whether one point-group rotation maps both source directions to target."""
+
+    expected = tuple(
+        tuple(signs[index] * value for value in target[permutation[index]])
+        for index in range(2)
+    )
+    for rotation in rotations:
+        mapped = []
+        for direction in source:
+            transformed = np.asarray(rotation, dtype=float) @ np.asarray(
+                direction, dtype=float
+            )
+            integral = np.rint(transformed).astype(int)
+            if not np.allclose(transformed, integral, atol=1e-8):
+                break
+            mapped.append(_primitive_integer_direction(integral))
+        if len(mapped) == 2 and tuple(mapped) == expected:
+            return True
+    return False
+
+
 class equi_directions_identifier:
     """
     Identify whether two directions in a crystal structure are equivalent.
@@ -108,7 +159,7 @@ class equi_directions_identifier:
         are_equivalent = False
 
         for operation in self.symmetry_operations:
-            transformed_direction1 = operation.operate(direction1)
+            transformed_direction1 = operation.apply_rotation_only(direction1)
             if norm(cross(transformed_direction1, direction2)) < 1e-2:
                 are_equivalent = True
                 break
@@ -139,6 +190,30 @@ class equi_match_identifier:
         self.substrate_conv = substrate_conv
         self.substrate_equi_directions_identifier = equi_directions_identifier(substrate_conv)
         self.film_equi_directions_identifier = equi_directions_identifier(film_conv)
+        self.substrate_rotations = [
+            operation.rotation_matrix
+            for operation in SpacegroupAnalyzer(substrate).get_symmetry_operations(
+                cartesian=False
+            )
+        ]
+        self.film_rotations = [
+            operation.rotation_matrix
+            for operation in SpacegroupAnalyzer(film).get_symmetry_operations(
+                cartesian=False
+            )
+        ]
+        self._direction_pair_cache = {}
+
+    def _match_direction_pair(self, match, side):
+        key = (id(match), side)
+        if key not in self._direction_pair_cache:
+            structure = self.film if side == "film" else self.substrate
+            self._direction_pair_cache[key] = _crystal_frame_direction_pair(
+                structure,
+                getattr(match, f"{side}_miller"),
+                getattr(match, f"{side}_sl_vectors"),
+            )
+        return self._direction_pair_cache[key]
     
     def identify_by_indices_matching(self, match_1, match_2):
         """
@@ -155,32 +230,31 @@ class equi_match_identifier:
         Returns:
             bool: True if matches are equivalent, False otherwise
         """
-        equivalent = False
-        substrate_set_1, substrate_set_2 = match_1.substrate_sl_vectors, match_2.substrate_sl_vectors
-        film_set_1, film_set_2 = match_1.film_sl_vectors, match_2.film_sl_vectors
-        """
-        substrate_set_1 = around(dot(inv(self.substrate_conv.lattice.matrix.T), \
-                                                        match_1.substrate_sl_vectors.T),8).T
-        substrate_set_2 = around(dot(inv(self.substrate_conv.lattice.matrix.T), \
-                                                        match_2.substrate_sl_vectors.T),8).T
-        film_set_1 = around(dot(inv(self.film_conv.lattice.matrix.T), \
-                                                        match_1.film_sl_vectors.T),8).T
-        film_set_2 = around(dot(inv(self.film_conv.lattice.matrix.T), \
-                                                        match_2.film_sl_vectors.T),8).T
-        """
-        if (
-            self.substrate_equi_directions_identifier.identify(substrate_set_1[0], substrate_set_2[0]) \
-            and self.substrate_equi_directions_identifier.identify(substrate_set_1[1], substrate_set_2[1]) \
-            and self.film_equi_directions_identifier.identify(film_set_1[0], film_set_2[0]) \
-            and self.film_equi_directions_identifier.identify(film_set_1[1], film_set_2[1])
-            ) or (
-            self.substrate_equi_directions_identifier.identify(substrate_set_1[0], substrate_set_2[1]) \
-            and self.substrate_equi_directions_identifier.identify(substrate_set_1[1], substrate_set_2[0]) \
-            and self.film_equi_directions_identifier.identify(film_set_1[0], film_set_2[1]) \
-            and self.film_equi_directions_identifier.identify(film_set_1[1], film_set_2[0])
-            ):
-            equivalent = True
-        return equivalent
+        substrate_pair_1 = self._match_direction_pair(match_1, "substrate")
+        substrate_pair_2 = self._match_direction_pair(match_2, "substrate")
+        film_pair_1 = self._match_direction_pair(match_1, "film")
+        film_pair_2 = self._match_direction_pair(match_2, "film")
+
+        # A signed permutation is a common relabeling of the two matched
+        # in-plane basis vectors. It must be the same on the film and
+        # substrate sides so their epitaxial correspondence is preserved.
+        for permutation in ((0, 1), (1, 0)):
+            for signs in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+                if _rotation_maps_direction_pair(
+                    substrate_pair_1,
+                    substrate_pair_2,
+                    self.substrate_rotations,
+                    permutation,
+                    signs,
+                ) and _rotation_maps_direction_pair(
+                    film_pair_1,
+                    film_pair_2,
+                    self.film_rotations,
+                    permutation,
+                    signs,
+                ):
+                    return True
+        return False
     
     def identify_by_stct_matching(self, match_1, match_2):
         """
@@ -295,7 +369,6 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_
     for i in matches:
         vstrains.append(i.von_mises_strain)
     matches = sort_list(matches, vstrains)
-    unique_angles = []
     unique_matches = []
     equivalent_matches = []
     unique_areas = []
@@ -303,33 +376,22 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_
     from tqdm.auto import tqdm
     with tqdm(total = len(matches), desc = "checking matching identity") as rgst_pbar:
         for i in range(len(matches)):
-            angle_here = get_cos(matches[i].substrate_sl_vectors[0],\
-                                                           matches[i].substrate_sl_vectors[1])
             if i == 0:
                 unique_matches.append(matches[i])
                 equivalent_matches.append([matches[i]])
-                unique_angles.append(angle_here)
                 unique_areas.append(get_area_match(matches[i]))
             else:
                 equivalent = False
-                same_angle_ids = where(abs(array(unique_angles) - angle_here) < 1e-1)[0]
-                if len(same_angle_ids) > 0:
-                    for j in same_angle_ids:
-                        #indices matching firstly
-                        if ins_equi_match_identifier.identify_by_indices_matching(matches[i], unique_matches[j]):
-                            equivalent = True
-                        #if indices match, check structure match
-                        else:
-                            equivalent = ins_equi_match_identifier.identify_by_stct_matching(matches[i], unique_matches[j])
-                                         
-                        if equivalent:
-                            equivalent_matches[j].append(matches[i])
-                            equivalent = True
-                            break
+                for j, representative in enumerate(unique_matches):
+                    if ins_equi_match_identifier.identify_by_indices_matching(
+                        matches[i], representative
+                    ):
+                        equivalent_matches[j].append(matches[i])
+                        equivalent = True
+                        break
                 if not equivalent:
                     unique_matches.append(matches[i])
                     equivalent_matches.append([matches[i]])
-                    unique_angles.append(angle_here)
                     unique_areas.append(get_area_match(matches[i]))
             rgst_pbar.update(1)
     return unique_matches, equivalent_matches, unique_areas
