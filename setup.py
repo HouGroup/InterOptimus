@@ -7,7 +7,7 @@ readme = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="InterOptimus",
-    version="0.1.1",
+    version="0.1.2",
     author="Yaoshu Xie",
     author_email="jasonxie@sz.tsinghua.edu.cn",
     description="High throughput simulation for crystalline interfaces",
@@ -29,13 +29,12 @@ setup(
     classifiers=[
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3 :: Only",
-        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires=">=3.10,<3.13",
+    python_requires=">=3.11,<3.13",
     # Upper-bound caps protect users from unexpected breakage in fast-moving deps.
     # MLIP backends (torch, orb-models, sevenn, deepmd-kit, MatRIS) are NOT installed
     # here; use ``itom config --with-mlip-workers`` (see InterOptimus.deploy_jobflow_stack)
@@ -43,22 +42,25 @@ setup(
     # pins torch to a version range whose PyPI default wheel is CUDA 12 (avoiding the
     # CUDA 13 default in torch 2.11+) so it works on offline / intranet-only clusters.
     install_requires=[
-        "pymatgen>=2024.5,<2027",
-        "interfacemaster",
-        "scikit-optimize",
+        "pymatgen==2026.5.4",
+        "pymatgen-core==2026.8.30",
+        "interfacemaster>=1.1.7,<1.2",
+        "scikit-optimize>=0.10.2,<0.11",
         "scikit-learn>=1.3,<2",
         "scipy>=1.11,<2",
         "pandas>=2.0,<3",
         "matplotlib>=3.7,<4",
         "numpy>=1.26,<2.3",
         "ase>=3.22,<4",
-        "atomate2",
-        "jobflow",
-        "jobflow-remote",
-        "qtoolkit",
-        "adjustText",
+        "atomate2>=0.1.5,<0.2",
+        "emmet-core>=0.87.2,<0.88",
+        "jobflow>=0.3.1,<0.4",
+        "jobflow-remote>=1.0,<1.1",
+        "pymongo>=4.4,<4.11",
+        "qtoolkit>=0.1.6,<0.2",
+        "adjustText>=1.3,<2",
         "tqdm>=4.65,<5",
-        "mp-api",
+        "mp-api>=0.46,<0.47",
         "pyyaml>=6.0,<7",
     ],
     extras_require={
@@ -66,7 +68,7 @@ setup(
         "web": [
             "fastapi>=0.100,<1",
             "uvicorn[standard]>=0.22,<1",
-            "python-multipart>=0.0.6",
+            "python-multipart>=0.0.6,<1",
             "jinja2>=3.1,<4",
             "plotly>=5.18,<7",
         ],

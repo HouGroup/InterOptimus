@@ -82,25 +82,25 @@ SOFTWARE_DIR = Path.home() / "software"
 # Version caps mirror setup.py to protect MLIP envs from unexpected breakage in
 # fast-moving deps. Keep this list in sync with setup.py ``install_requires``.
 INTEROPTIMUS_CORE_PIP = [
-    "pymatgen>=2024.5,<2027",
-    "interfacemaster",
-    "dscribe",
-    "scikit-optimize",
+    "pymatgen==2026.5.4",
+    "pymatgen-core==2026.8.30",
+    "interfacemaster>=1.1.7,<1.2",
+    "scikit-optimize>=0.10.2,<0.11",
     "scikit-learn>=1.3,<2",
     "scipy>=1.11,<2",
     "pandas>=2.0,<3",
     "matplotlib>=3.7,<4",
     "numpy>=1.26,<2.3",
     "ase>=3.22,<4",
-    "atomate2",
-    "jobflow",
-    "jobflow-remote",
-    "qtoolkit",
-    "adjustText",
-    "ipywidgets",
+    "atomate2>=0.1.5,<0.2",
+    "emmet-core>=0.87.2,<0.88",
+    "jobflow>=0.3.1,<0.4",
+    "jobflow-remote>=1.0,<1.1",
+    "pymongo>=4.4,<4.11",
+    "qtoolkit>=0.1.6,<0.2",
+    "adjustText>=1.3,<2",
     "tqdm>=4.65,<5",
-    "mp-api",
-    "openai",
+    "mp-api>=0.46,<0.47",
     "pyyaml>=6.0,<7",
 ]
 
@@ -375,12 +375,7 @@ def _pip_install(*, skip: bool, upgrade: bool) -> None:
         "-m",
         "pip",
         "install",
-        "jobflow",
-        "jobflow-remote",
-        "atomate2",
-        "pyyaml",
-        "maggma",
-        "pymongo",
+        *INTEROPTIMUS_CORE_PIP,
     ]
     if upgrade:
         cmd.append("--upgrade")
@@ -820,7 +815,186 @@ def verify_configuration(
     return errors
 
 
-def main() -> None:
+def _prompt_text(
+    prompt: str,
+    *,
+    default: str | None = None,
+    required: bool = False,
+    secret: bool = False,
+) -> str:
+    suffix = "" if secret else (f" [{default}]" if default not in (None, "") else "")
+    while True:
+        if secret:
+            value = getpass.getpass(f"{prompt}: ")
+        else:
+            value = input(f"{prompt}{suffix}: ")
+        value = value.strip()
+        if not value and default is not None:
+            value = str(default)
+        if value or not required:
+            return value
+        print("此项必填。")
+
+
+def _prompt_bool(prompt: str, *, default: bool) -> bool:
+    suffix = "Y/n" if default else "y/N"
+    while True:
+        value = input(f"{prompt} [{suffix}]: ").strip().lower()
+        if not value:
+            return default
+        if value in {"y", "yes", "是", "true", "1"}:
+            return True
+        if value in {"n", "no", "否", "false", "0"}:
+            return False
+        print("请输入 y 或 n。")
+
+
+def _prompt_int(prompt: str, *, default: int) -> int:
+    while True:
+        raw = _prompt_text(prompt, default=str(default), required=True)
+        try:
+            return int(raw)
+        except ValueError:
+            print("请输入整数。")
+
+
+def _apply_interactive_config(args: argparse.Namespace) -> None:
+    """Collect and validate configuration values before the normal deploy flow."""
+    print("InterOptimus 交互式配置向导")
+    print("此向导会先询问必要信息，再复用 itom config 的自动部署流程写入配置。")
+    print()
+    try:
+        from InterOptimus.doctor import run_doctor
+
+        run_doctor(project_name=args.project_name, check_runner=False, suggest_interactive=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"预检未能完整运行，继续进入配置向导: {exc}")
+    print()
+
+    print("Step 1/5: MongoDB")
+    _ensure_pymongo_for_mongo_check()
+    while True:
+        args.mongo_host = _prompt_text(
+            "MongoDB host（auto 会尝试检测本机 mongod）",
+            default=args.mongo_host or "auto",
+            required=True,
+        )
+        args.mongo_port = _prompt_int("MongoDB port", default=args.mongo_port)
+        args.mongo_db = _prompt_text("MongoDB database", default=args.mongo_db, required=True)
+        args.mongo_user = _prompt_text("MongoDB user（无认证可留空）", default=args.mongo_user or "")
+        args.mongo_auth_source = _prompt_text(
+            "MongoDB auth source（通常留空；用户建在 admin 时填 admin）",
+            default=args.mongo_auth_source or "",
+        ) or None
+        if args.mongo_user:
+            env_password = os.environ.get("INTEROPTIMUS_MONGO_PASSWORD")
+            args.mongo_password = _prompt_text(
+                "MongoDB password（直接回车可使用 INTEROPTIMUS_MONGO_PASSWORD）",
+                default=args.mongo_password if args.mongo_password is not None else env_password,
+                secret=True,
+            )
+        else:
+            args.mongo_password = None
+
+        test_host = args.mongo_host
+        if test_host == "auto":
+            test_host = detect_mongo_client_host(args.mongo_port)
+            print(f"Mongo host（auto）: {test_host}")
+        test_mongo = {
+            "host": test_host,
+            "port": args.mongo_port,
+            "database": args.mongo_db,
+            "username": args.mongo_user,
+            "password": args.mongo_password or "",
+        }
+        print("正在检测 MongoDB 连接、认证和读写权限…")
+        mongo_errors = verify_mongodb_access(test_mongo, auth_source=args.mongo_auth_source)
+        if not mongo_errors:
+            print(
+                f"MongoDB 检测通过：{test_host}:{args.mongo_port} / 库「{args.mongo_db}」"
+                "（ping、列举集合、探针读写）"
+            )
+            args.mongo_host = test_host
+            break
+        print("MongoDB 检测失败：")
+        for error in mongo_errors:
+            print(f"  - {error}")
+        if not _prompt_bool("是否重新输入 MongoDB 信息", default=True):
+            raise SystemExit("MongoDB 不可用，已取消。")
+        args.mongo_password = None
+
+    print("\nStep 2/5: jobflow-remote")
+    args.project_name = _prompt_text(
+        "jobflow-remote project name", default=args.project_name, required=True
+    )
+    args.jf_worker_name = _prompt_text(
+        "default worker name", default=args.jf_worker_name, required=True
+    )
+    args.work_dir = Path(
+        _prompt_text("worker work dir", default=str(args.work_dir), required=True)
+    ).expanduser()
+
+    print("\nStep 3/5: atomate2 / VASP")
+    args.vasp_cmd = _prompt_text("VASP_CMD", default=args.vasp_cmd, required=True)
+    args.vasp_gamma_cmd = _prompt_text(
+        "VASP_GAMMA_CMD（gamma-only 任务使用）",
+        default=args.vasp_gamma_cmd,
+        required=True,
+    )
+
+    print("\nStep 4/5: MLIP workers")
+    args.with_mlip_workers = _prompt_bool(
+        "是否配置 orb/dpa/matris/sevenn MLIP workers",
+        default=args.with_mlip_workers,
+    )
+    if args.with_mlip_workers:
+        install_mlip_envs = _prompt_bool(
+            "是否创建并安装 MLIP conda 环境",
+            default=not args.skip_mlip_conda,
+        )
+        args.skip_mlip_conda = not install_mlip_envs
+        if install_mlip_envs:
+            matris = _prompt_text(
+                "MatRIS 本地包/源码路径（可留空自动查找，找不到则从 git 安装）",
+                default=str(args.matris_local or ""),
+            )
+            args.matris_local = Path(matris).expanduser() if matris else None
+            args.torch_spec = _prompt_text(
+                "torch 版本约束", default=args.torch_spec, required=True
+            )
+    else:
+        args.skip_mlip_conda = False
+
+    print("\nStep 5/5: installation and shell integration")
+    args.skip_install = not _prompt_bool(
+        "是否安装/补齐 Python 依赖", default=not args.skip_install
+    )
+    args.skip_bashrc = not _prompt_bool(
+        "是否更新 ~/.bashrc 中的 JOBFLOW/JFREMOTE 环境变量",
+        default=not args.skip_bashrc,
+    )
+
+    print("\n配置摘要")
+    print(
+        f"  MongoDB: {args.mongo_host}:{args.mongo_port} / {args.mongo_db} "
+        f"user={args.mongo_user or '(none)'}"
+    )
+    print(
+        f"  project: {args.project_name}, worker: {args.jf_worker_name}, "
+        f"work_dir: {args.work_dir}"
+    )
+    print(f"  VASP_CMD: {args.vasp_cmd}")
+    print(f"  VASP_GAMMA_CMD: {args.vasp_gamma_cmd}")
+    print(f"  MLIP workers: {'yes' if args.with_mlip_workers else 'no'}")
+    if args.with_mlip_workers:
+        print(f"  MLIP conda install: {'no' if args.skip_mlip_conda else 'yes'}")
+    print(f"  install Python deps: {'no' if args.skip_install else 'yes'}")
+    print(f"  update ~/.bashrc: {'no' if args.skip_bashrc else 'yes'}")
+    if not _prompt_bool("确认开始写入配置并执行安装/校验", default=True):
+        raise SystemExit("已取消。")
+
+
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="在登录节点一键部署 jobflow + jobflow-remote + atomate2（不含 pymatgen/POTCAR）"
     )
@@ -830,7 +1004,7 @@ def main() -> None:
         help="MongoDB 主机名或 IP；默认 auto=在登录节点用 ss 检测本机 mongod 监听（非 127.0.0.1 优先）",
     )
     parser.add_argument("--mongo-port", type=int, default=27017)
-    parser.add_argument("--mongo-db", required=True, help="MongoDB 数据库名，例如 htp_test")
+    parser.add_argument("--mongo-db", default=None, help="MongoDB 数据库名，例如 htp_test")
     parser.add_argument("--mongo-user", default="", help="可为空（无认证）")
     parser.add_argument(
         "--mongo-password",
@@ -868,6 +1042,11 @@ def main() -> None:
         help="写入 ~/.atomate2.yaml 的 VASP_CMD（并行启动命令视集群自行修改）",
     )
     parser.add_argument(
+        "--vasp-gamma-cmd",
+        default="vasp_gam",
+        help="写入 ~/.atomate2.yaml 的 VASP_GAMMA_CMD（gamma-only VASP 命令）",
+    )
+    parser.add_argument(
         "--custodian-scratch-dir",
         type=Path,
         default=None,
@@ -884,6 +1063,14 @@ def main() -> None:
     parser.add_argument("--upgrade-packages", action="store_true", help="pip install --upgrade")
     parser.add_argument("--skip-bashrc", action="store_true", help="不修改 ~/.bashrc（仍写入配置文件）")
     parser.add_argument("--verify-only", action="store_true", help="仅检测，不写配置")
+    parser.add_argument(
+        "--interactive",
+        "-i",
+        "--interacive",
+        dest="interactive",
+        action="store_true",
+        help="逐步检测并询问配置（--interacive 是兼容旧拼写的别名）",
+    )
     parser.add_argument(
         "--with-mlip-workers",
         action="store_true",
@@ -916,10 +1103,20 @@ def main() -> None:
         ),
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    if args.interactive and args.verify_only:
+        parser.error("--interactive 不能与 --verify-only 同时使用")
+
+    interactive_mongo_verified = False
+    if args.interactive:
+        _apply_interactive_config(args)
+        interactive_mongo_verified = True
 
     if args.skip_mlip_conda and not args.with_mlip_workers:
         parser.error("--skip-mlip-conda 需与 --with-mlip-workers 同时使用")
+    if not args.mongo_db:
+        parser.error("--mongo-db is required unless provided through --interactive")
 
     mongo_host = args.mongo_host
     if mongo_host == "auto":
@@ -940,17 +1137,18 @@ def main() -> None:
         "password": mongo_password or "",
     }
 
-    _ensure_pymongo_for_mongo_check()
-    mongo_errs = verify_mongodb_access(mongo, auth_source=args.mongo_auth_source)
-    if mongo_errs:
-        print("MongoDB 凭据或权限检测失败：", file=sys.stderr)
-        for e in mongo_errs:
-            print(f"  - {e}", file=sys.stderr)
-        raise SystemExit(1)
-    print(
-        f"MongoDB 检测通过：{mongo['host']}:{mongo['port']} / 库「{mongo['database']}」"
-        "（ping、列举集合、探针读写）"
-    )
+    if not interactive_mongo_verified:
+        _ensure_pymongo_for_mongo_check()
+        mongo_errs = verify_mongodb_access(mongo, auth_source=args.mongo_auth_source)
+        if mongo_errs:
+            print("MongoDB 凭据或权限检测失败：", file=sys.stderr)
+            for e in mongo_errs:
+                print(f"  - {e}", file=sys.stderr)
+            raise SystemExit(1)
+        print(
+            f"MongoDB 检测通过：{mongo['host']}:{mongo['port']} / 库「{mongo['database']}」"
+            "（ping、列举集合、探针读写）"
+        )
 
     _ensure_yaml()
 
@@ -983,7 +1181,10 @@ def main() -> None:
     )
     _write_jobflow_yaml(jobflow_cfg)
 
-    atomate2_cfg: dict[str, Any] = {"VASP_CMD": args.vasp_cmd}
+    atomate2_cfg: dict[str, Any] = {
+        "VASP_CMD": args.vasp_cmd,
+        "VASP_GAMMA_CMD": args.vasp_gamma_cmd,
+    }
     if args.custodian_scratch_dir is not None:
         atomate2_cfg["CUSTODIAN_SCRATCH_DIR"] = str(args.custodian_scratch_dir.expanduser().resolve())
     _write_atomate2_yaml(atomate2_cfg)

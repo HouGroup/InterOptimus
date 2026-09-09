@@ -7,8 +7,12 @@ symmetry analysis to identify equivalent matches and terminations.
 """
 
 from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
-from pymatgen.analysis.interfaces import CoherentInterfaceBuilder
 from InterOptimus.equi_term import get_non_identical_slab_pairs, co_point_group_operations
+from InterOptimus.pymatgen_compat import (
+    coherent_interface_builder_for_match,
+    symmetrically_equivalent_millers,
+    zsl_vectors_in_crystal_frame,
+)
 from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces.zsl import ZSLGenerator, ZSLMatch, reduce_vectors
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
@@ -26,17 +30,12 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from adjustText import adjust_text
 from scipy.linalg import polar
-from pymatgen.util.coord import in_coord_list
 from interfacemaster.cellcalc import MID
-from numpy.typing import ArrayLike
-
-from collections.abc import Sequence
-import itertools
-from pymatgen.core.surface import _is_in_miller_family
 
 import re
 import json
 import builtins
+import warnings
 from pathlib import Path
 
 
@@ -46,44 +45,9 @@ def get_symmetrically_equivalent_miller_indices(
 ) -> list:
     """Symmetrically equivalent Miller indices as 3-tuple (h, k, l).
 
-    Uses ``structure.lattice.get_recp_symmetry_operation()`` only (no trigonal
-    primitive-cell branch). Output is always hkl; there is no hkil conversion.
+    Uses pymatgen's public symmetry API and always requests hkl, not hkil.
     """
-    # Convert to hkl if hkil, because in_coord_list only handles tuples of 3
-    if len(miller_index) >= 3:
-        _miller_index: tuple[int, ...] = (
-            miller_index[0],
-            miller_index[1],
-            miller_index[-1],
-        )
-    else:
-        _miller_index = (miller_index[0], miller_index[1], miller_index[2])
-
-    max_idx = max(np.abs(miller_index))
-    idx_range = list(range(-max_idx, max_idx + 1))
-    idx_range.reverse()
-
-    # Skip crystal system analysis if already given
-    symm_ops = structure.lattice.get_recp_symmetry_operation()
-
-    equivalent_millers: list[tuple[int, int, int]] = [_miller_index]  # type: ignore[list-item]
-    for miller in itertools.product(idx_range, idx_range, idx_range):
-        if miller == _miller_index:
-            continue
-
-        if builtins.any(idx != 0 for idx in miller):
-            if _is_in_miller_family(miller, equivalent_millers, symm_ops):
-                equivalent_millers += [miller]
-
-            # Include larger Miller indices in the family of planes
-            if (
-                all(max_idx > i for i in np.abs(miller))
-                and not in_coord_list(equivalent_millers, miller)
-                and _is_in_miller_family(max_idx * np.array(miller), equivalent_millers, symm_ops)
-            ):
-                equivalent_millers += [miller]
-
-    return equivalent_millers
+    return symmetrically_equivalent_millers(structure, miller_index)
 
 def get_identical_pairs(match, film, substrate):
     """
@@ -237,18 +201,34 @@ class equi_match_identifier:
         matches = [match_1, match_2]
         its = []
         for i in range(2):
-            cib = CoherentInterfaceBuilder(film_structure=self.film,
-                                   substrate_structure=self.substrate,
-                                   film_miller=matches[i].film_miller,
-                                   substrate_miller=matches[i].substrate_miller,
-                                   zslgen=SubstrateAnalyzer(max_area=200), termination_ftol=0.1, label_index=True,\
-                                   filter_out_sym_slabs=False)
-            #print(cib.terminations)
-            cib.zsl_matches = [matches[i]]
-            its.append(list(cib.get_interfaces(termination = cib.terminations[0], substrate_thickness = 3,
-                                                           film_thickness = 3,
-                                                           vacuum_over_film=10,
-                                                           gap=1))[0])
+            try:
+                cib = coherent_interface_builder_for_match(
+                    film_structure=self.film,
+                    substrate_structure=self.substrate,
+                    match=matches[i],
+                    termination_ftol=0.1,
+                    label_index=True,
+                    filter_out_sym_slabs=False,
+                )
+                if not cib.terminations:
+                    return False
+                its.append(
+                    next(
+                        cib.get_interfaces(
+                            termination=cib.terminations[0],
+                            substrate_thickness=3,
+                            film_thickness=3,
+                            vacuum_over_film=10,
+                            gap=1,
+                        )
+                    )
+                )
+            except (IndexError, StopIteration, ValueError, np.linalg.LinAlgError) as exc:
+                warnings.warn(
+                    f"Could not compare ZSL matches through generated interfaces: {exc}",
+                    stacklevel=2,
+                )
+                return False
         return matcher.fit(its[0], its[1])
 
 def get_cos(v1, v2):
@@ -320,7 +300,7 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_
     equivalent_matches = []
     unique_areas = []
     ins_equi_match_identifier = equi_match_identifier(substrate, film, substrate_conv, film_conv)
-    from tqdm.notebook import tqdm
+    from tqdm.auto import tqdm
     with tqdm(total = len(matches), desc = "checking matching identity") as rgst_pbar:
         for i in range(len(matches)):
             angle_here = get_cos(matches[i].substrate_sl_vectors[0],\
@@ -412,7 +392,7 @@ def match_search(substrate, film, substrate_conv, film_conv, sub_analyzer, film_
     unique_areas = []
     #match_identifier = MatchIdentifier(substrate_conv, film_conv)
     emi = equi_match_identifier(substrate, film, substrate_conv, film_conv)
-    from tqdm.notebook import tqdm
+    from tqdm.auto import tqdm
     with tqdm(total = len(matches), desc = "checking matching identity") as rgst_pbar:
         for i in range(len(matches)):
             #normal_here = cross(matches[i].substrate_sl_vectors[0], matches[i].substrate_sl_vectors[1])
@@ -472,11 +452,13 @@ class convert_info_forma:
         """
         substrate_prim = substrate_conv.get_primitive_structure()
         film_prim = film_conv.get_primitive_structure()
+        self.substrate_prim = substrate_prim
+        self.film_prim = film_prim
         self.substrate_conv_lattice = substrate_conv.lattice.matrix.T
         self.film_conv_lattice = film_conv.lattice.matrix.T
         self.substrate_prim_lattice = substrate_prim.lattice.matrix.T
         self.film_prim_lattice = film_prim.lattice.matrix.T
-        
+
     def convert_to_conv(self, match):
         """
         convert primitive indices into conventional indices
@@ -487,15 +469,36 @@ class convert_info_forma:
         Return:
         (dict): matching information by indices represented in both primitive & conventional structures
         """
-        substrate_prim_sl_vecs_int = around(dot(inv(self.substrate_prim_lattice), \
-                                                match.substrate_sl_vectors.T),8).T
-        film_prim_sl_vecs_int = around(dot(inv(self.film_prim_lattice), \
-                                           match.film_sl_vectors.T),8).T
+        substrate_cart_vectors = zsl_vectors_in_crystal_frame(
+            self.substrate_prim,
+            match.substrate_miller,
+            match.substrate_sl_vectors,
+        )
+        film_cart_vectors = zsl_vectors_in_crystal_frame(
+            self.film_prim,
+            match.film_miller,
+            match.film_sl_vectors,
+        )
+        substrate_prim_sl_vecs = dot(
+            inv(self.substrate_prim_lattice), substrate_cart_vectors.T
+        ).T
+        film_prim_sl_vecs = dot(
+            inv(self.film_prim_lattice), film_cart_vectors.T
+        ).T
+        substrate_prim_sl_vecs_int = around(substrate_prim_sl_vecs).astype(int)
+        film_prim_sl_vecs_int = around(film_prim_sl_vecs).astype(int)
+        if not np.allclose(
+            substrate_prim_sl_vecs, substrate_prim_sl_vecs_int, atol=1e-7
+        ) or not np.allclose(film_prim_sl_vecs, film_prim_sl_vecs_int, atol=1e-7):
+            raise RuntimeError(
+                "Could not reconstruct integral ZSL vectors after undoing "
+                "pymatgen slab reorientation"
+            )
                                            
         substrate_conv_sl = dot(inv(self.substrate_conv_lattice), \
-                                                match.substrate_sl_vectors.T).T
+                                                substrate_cart_vectors.T).T
         film_conv_sl = dot(inv(self.film_conv_lattice), \
-                                                match.film_sl_vectors.T).T
+                                                film_cart_vectors.T).T
         
         substrate_prim_plane_set = plane_set(self.substrate_prim_lattice, match.substrate_miller, \
                                              substrate_prim_sl_vecs_int[0], substrate_prim_sl_vecs_int[1])
@@ -535,6 +538,33 @@ def get_area(v1, v2):
     """
     return norm(cross(v1,v2))
 
+
+def _millers_in_primitive_basis(millers, conventional, primitive):
+    """Convert user-facing conventional hkl indices to the matching basis."""
+
+    if millers is None:
+        return None
+    converted = []
+    for miller in millers:
+        hkl = (miller[0], miller[1], miller[-1])
+        primitive_hkl = np.asarray(
+            get_primitive_hkl(
+                hkl=hkl,
+                C_lattice=conventional.lattice.matrix.T,
+                P_lattice=primitive.lattice.matrix.T,
+            ),
+            dtype=float,
+        )
+        integral = np.rint(primitive_hkl).astype(int)
+        if not np.allclose(primitive_hkl, integral, atol=1e-8):
+            raise RuntimeError(
+                f"Conventional Miller index {hkl} did not transform to an "
+                f"integral primitive index: {primitive_hkl}"
+            )
+        converted.append(tuple(int(value) for value in integral))
+    return converted
+
+
 def interface_searching(substrate_conv, film_conv, sub_analyzer, film_millers=None, substrate_millers=None):
     """
     Perform comprehensive interface searching between substrate and film.
@@ -559,12 +589,20 @@ def interface_searching(substrate_conv, film_conv, sub_analyzer, film_millers=No
             - equivalent_matches_indices_data: Clustered Miller indices data
             - areas: List of matching areas for unique matches
     """
+    substrate_primitive = substrate_conv.get_primitive_structure()
+    film_primitive = film_conv.get_primitive_structure()
+    primitive_film_millers = _millers_in_primitive_basis(
+        film_millers, film_conv, film_primitive
+    )
+    primitive_substrate_millers = _millers_in_primitive_basis(
+        substrate_millers, substrate_conv, substrate_primitive
+    )
     unique_matches, equivalent_matches, areas = \
-    match_search(substrate_conv.get_primitive_structure(),\
-                 film_conv.get_primitive_structure(),\
+    match_search(substrate_primitive,\
+                 film_primitive,\
                  substrate_conv,\
                  film_conv,\
-                 sub_analyzer, film_millers, substrate_millers)
+                 sub_analyzer, primitive_film_millers, primitive_substrate_millers)
     unique_matches_indices_data = []
     equivalent_matches_indices_data = []
     

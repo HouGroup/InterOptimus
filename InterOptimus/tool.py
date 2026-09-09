@@ -13,6 +13,7 @@ from pymatgen.core.structure import Structure
 from pymatgen.core.lattice import Lattice
 from pymatgen.analysis.interfaces.zsl import fast_norm
 from InterOptimus.CNID import triple_dot, calculate_cnid_in_supercell
+from InterOptimus.pymatgen_compat import slab_projected_height
 from itertools import combinations
 from scipy.spatial.distance import squareform
 from scipy.cluster.hierarchy import fcluster, linkage
@@ -578,8 +579,10 @@ def get_film_length(match, film, it):
     """
     Calculate the length of film slab in the interface.
 
-    Determines the film thickness in the interface structure based on
-    the number of layers and the projected height of the film slab.
+    Determines the film thickness from the number of bulk-cell repeats in the
+    generated film supercell. ``Interface.film_layers`` counts atomic planes,
+    so multiplying it by the oriented-cell height overestimates polyatomic
+    structures such as wurtzite.
 
     Args:
         match: Lattice match object
@@ -599,7 +602,13 @@ def get_film_length(match, film, it):
             primitive=True,
             reorient_lattice=False,  # This is necessary to not screw up the lattice
         )
-    return film_sg._proj_height * it.film_layers
+    in_plane_multiplicity = abs(
+        float(np.linalg.det(np.asarray(match.film_transformation, dtype=float)))
+    )
+    if in_plane_multiplicity <= 0:
+        raise ValueError("The film match has a singular in-plane transformation")
+    cell_repeats = len(it.film_indices) / (len(film) * in_plane_multiplicity)
+    return slab_projected_height(film_sg) * cell_repeats
 
 def add_sele_dyn_slab(slab, shell=0, lr='left'):
     """

@@ -13,13 +13,17 @@ from pymatgen.core.structure import Structure
 from pymatgen.analysis.interfaces import SubstrateAnalyzer
 from pymatgen.analysis.structure_matcher import StructureMatcher
 from InterOptimus.equi_term import get_non_identical_slab_pairs
+from InterOptimus.pymatgen_compat import (
+    coherent_interface_builder_for_match,
+    termination_shift_map,
+)
 from InterOptimus.tool import apply_cnid_rbt, sort_list, get_it_core_indices, get_min_nb_distance, cut_vaccum, add_sele_dyn_slab, add_sele_dyn_it, get_non_strained_film, get_rot_strain, trans_to_bottom, get_non_matching_structures, convert_dict_to_json
 from pymatgen.io.vasp.sets import MPRelaxSet
-from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
 from pymatgen.core.surface import SlabGenerator
 from skopt import gp_minimize
 from skopt.space import Real
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
+import numpy as np
 from numpy import array, dot, column_stack, argsort, zeros, mod, mean, ceil, concatenate, random, repeat, cross, inf, round, arccos, pi, where, unique, savetxt, asarray
 from numpy.linalg import norm
 from InterOptimus.CNID import calculate_cnid_in_supercell
@@ -32,6 +36,9 @@ import warnings
 import shutil
 from interfacemaster.cellcalc import get_normal_from_MI, get_primitive_hkl
 from typing import Optional
+
+BO_CLASH_PENALTY_EV = 1.0e12
+MAX_LAYER_THICKNESS_PROBES = 20
 
 
 def _interoptimus_viz_env_active() -> bool:
@@ -233,7 +240,31 @@ def effective_strain_E_correction(strain_E_correction: bool, *, double_interface
     return bool(strain_E_correction) and not bool(double_interface)
 
 
-def gradient_descend(sampling_function, dx, dim, tol, initial_r, initial_xy, min_steps, **kwargs):
+def bounded_gradient_step(gradient, scale, max_displacement):
+    """Return ``-scale * gradient`` clipped to a Cartesian norm limit."""
+
+    step = -float(scale) * np.asarray(gradient, dtype=float)
+    max_displacement = float(max_displacement)
+    if max_displacement <= 0:
+        raise ValueError("max_displacement must be positive")
+    step_norm = float(norm(step))
+    if step_norm > max_displacement:
+        step *= max_displacement / step_norm
+    return step
+
+
+def gradient_descend(
+    sampling_function,
+    dx,
+    dim,
+    tol,
+    initial_r,
+    initial_xy,
+    min_steps,
+    max_steps=50,
+    max_displacement=0.2,
+    **kwargs,
+):
     """
     Perform gradient descent optimization in multi-dimensional space.
 
@@ -276,7 +307,7 @@ def gradient_descend(sampling_function, dx, dim, tol, initial_r, initial_xy, min
     
     count = 0
     print('-----gradient descend------')
-    while abs(dy) > tol or count < min_steps:
+    while (abs(dy) > tol or count < min_steps) and count < max_steps:
         g_n_1 = g_n.copy()
         for i in range(dim):
             pdx = zeros(dim)
@@ -287,11 +318,16 @@ def gradient_descend(sampling_function, dx, dim, tol, initial_r, initial_xy, min
             r = initial_r
         else:
             #print(f'x_n {x_n} x_n_1 {x_n_1}')
-            r = abs(dot((x_n - x_n_1), (g_n - g_n_1))) / norm(g_n - g_n_1) ** 2
+            gradient_delta = g_n - g_n_1
+            denominator = norm(gradient_delta) ** 2
+            if denominator <= np.finfo(float).eps:
+                r = initial_r
+            else:
+                r = abs(dot((x_n - x_n_1), gradient_delta)) / denominator
 
         x_n_1, y_n_1 = x_n.copy(), y_n
         #print(f'dx {- r * g_n}')
-        x_n += - r * g_n
+        x_n += bounded_gradient_step(g_n, r, max_displacement)
         y_n = sampling_function(x_n, is_x = True, **kwargs)
         dy = y_n - y_n_1
         print(f'dy {dy} x_n {x_n[0]} {x_n[1]} {x_n[2]} g_n {g_n[0]} {g_n[1]} {g_n[2]}')
@@ -299,6 +335,11 @@ def gradient_descend(sampling_function, dx, dim, tol, initial_r, initial_xy, min
         ys.append(y_n)
         rs.append(r)
         count += 1
+    if count >= max_steps and abs(dy) > tol:
+        warnings.warn(
+            f"MLIP gradient descent reached max_steps={max_steps} before convergence",
+            stacklevel=2,
+        )
     
     return xs, ys, rs
 
@@ -379,6 +420,11 @@ class InterfaceWorker:
         self.unique_matches_indices_data,\
         self.equivalent_matches_indices_data,\
         self.areas = interface_searching(self.substrate_conv, self.film_conv, sub_analyzer, film_millers, substrate_millers)
+        if not self.unique_matches:
+            raise ValueError(
+                "No lattice matches were found. Increase max_area or relax "
+                "max_length_tol/max_angle_tol before generating interfaces."
+            )
         self.ems = EquiMatchSorter(self.film_conv, self.substrate_conv, self.equivalent_matches_indices_data, self.unique_matches)
     
     def screen_matches_by_parallel_planes(self, hkl_conv_film, hkl_conv_substrate, tol = 0.1, max_area = 200, max_length_tol = 0.1, max_angle_tol = 0.1, film_max_miller = 3, substrate_max_miller = 3):
@@ -446,7 +492,7 @@ class InterfaceWorker:
                 raise TypeError('charge_filter_settings must be None, bool, or dict')
             self.filter_terminations_by_charge_balance(**charge_filter_settings)
     
-    def parse_optimization_params(self, set_relax_thicknesses = (0,0), relax_in_layers = False, relax_in_ratio = False, num_relax_bayesian = 0, discut = 0.8, BO_coord_bin_size = 0.5, BO_energy_bin_size = 0.01, BO_rms_bin_size = 0.5, do_mlip_gd = False, gd_tol = 5e-4, do_gd = None, **kwargs):
+    def parse_optimization_params(self, set_relax_thicknesses = (0,0), relax_in_layers = False, relax_in_ratio = False, num_relax_bayesian = 0, discut = 0.8, BO_coord_bin_size = 0.5, BO_energy_bin_size = 0.01, BO_rms_bin_size = 0.5, do_mlip_gd = False, gd_tol = 5e-4, gd_max_steps = 50, gd_max_displacement = 0.2, do_gd = None, **kwargs):
         #number of relaxing steps during BO
         self.num_relax_bayesian = num_relax_bayesian
         #during BO, structures with minimum atomic distance lower than discut will be attached a zero energy
@@ -464,6 +510,12 @@ class InterfaceWorker:
         self.do_gd = do_mlip_gd
         self.do_mlip_gd = do_mlip_gd
         self.gd_tol = gd_tol
+        self.gd_max_steps = int(gd_max_steps)
+        if self.gd_max_steps <= 0:
+            raise ValueError("gd_max_steps must be a positive integer")
+        self.gd_max_displacement = float(gd_max_displacement)
+        if self.gd_max_displacement <= 0:
+            raise ValueError("gd_max_displacement must be positive")
         
         if self.double_interface:
             self.opt_kwargs['fix_cell_booleans'] = [False, False, True, False, False, False]
@@ -517,18 +569,14 @@ class InterfaceWorker:
             #layer_thks = (layer_thks_0, layer_thks_1)
         else:
             termination_ftol = self.termination_ftol
-        cib = CoherentInterfaceBuilder(
-                                       film_structure=self.film,
-                                       substrate_structure=self.substrate,
-                                       film_miller=self.unique_matches[id].film_miller,
-                                       substrate_miller=self.unique_matches[id].substrate_miller,
-                                       zslgen=SubstrateAnalyzer(max_area=100),
-                                       termination_ftol=termination_ftol,
-                                       label_index=True,
-                                       filter_out_sym_slabs=False,
-                                       )
-        cib.zsl_matches = [self.unique_matches[id]]
-        return cib
+        return coherent_interface_builder_for_match(
+            film_structure=self.film,
+            substrate_structure=self.substrate,
+            match=self.unique_matches[id],
+            termination_ftol=termination_ftol,
+            label_index=True,
+            filter_out_sym_slabs=False,
+        )
     
     def get_unique_terminations(self, id):
         """
@@ -541,6 +589,15 @@ class InterfaceWorker:
                                                        ftol = self.ftol_termination_tuples[id], c_periodic = True)[0]
         print(f'\nmatch {id}: number of unique terminations: {len(unique_term_ids)}')
         cib = self.get_specified_match_cib(id)
+        if not cib.terminations:
+            return []
+        invalid_ids = [term_id for term_id in unique_term_ids if term_id >= len(cib.terminations)]
+        if invalid_ids:
+            raise RuntimeError(
+                "Termination equivalence indices are inconsistent with pymatgen "
+                f"labels for match {id}: invalid indices {invalid_ids}, "
+                f"label count {len(cib.terminations)}."
+            )
         return [cib.terminations[i] for i in unique_term_ids]
     
     def get_all_unique_terminations(self):
@@ -861,9 +918,10 @@ class InterfaceWorker:
             kept_terminations = []
             kept_term_ids = []
             removed_reports = []
+            shift_map = termination_shift_map(cib)
             for j in range(len(terminations_here)):
                 termination = terminations_here[j]
-                film_shift, substrate_shift = cib._terminations[termination]
+                film_shift, substrate_shift = shift_map[termination]
                 film_polar = bool(film_sg.get_slab(shift = film_shift).is_polar(tol_dipole_per_unit_area)) if filter_film else False
                 substrate_polar = bool(substrate_sg.get_slab(shift = substrate_shift).is_polar(tol_dipole_per_unit_area)) if filter_substrate else False
                 if (filter_film and film_polar) or (filter_substrate and substrate_polar):
@@ -1054,14 +1112,19 @@ class InterfaceWorker:
         xyz = [x,y,z]
 
         interface_here = self.get_specified_interface(self.match_id_now, self.term_id_now, xyz = xyz)
+        self.opt_results[(self.match_id_now, self.term_id_now)]['sampled_interfaces'].append(interface_here)
 
         term_atom_ids = self.get_interface_atom_indices(interface_here)
         for i in term_atom_ids:
             if get_min_nb_distance(i, interface_here, self.discut) < self.discut:
-                return 0
+                return BO_CLASH_PENALTY_EV
         #if self.num_relax_bayesian == 0:
-        self.opt_results[(self.match_id_now, self.term_id_now)]['sampled_interfaces'].append(interface_here)
         e = float(self.mc.calculate(interface_here))
+        if not np.isfinite(e):
+            raise ValueError(
+                f"MLIP returned a non-finite energy for match {self.match_id_now}, "
+                f"termination {self.term_id_now}: {e}"
+            )
         if _interoptimus_viz_env_active():
             try:
                 from InterOptimus.viz_runtime import emit_event
@@ -1114,38 +1177,33 @@ class InterfaceWorker:
         get single layer thickness
         """
         cib = self.get_specified_match_cib(match_id, False)
-        
-        delta_c = 0
-        last_delta_c = 0
-        initial_n = 2
-        while last_delta_c == 0:
-            last_delta_c = delta_c
-            interface_film_1 = list(cib.get_interfaces(termination = cib.terminations[0], \
-                                           substrate_thickness = 2, film_thickness = initial_n, \
-                                           vacuum_over_film = 1, gap = 1, in_layers = True))[0]
-            interface_film_2 = list(cib.get_interfaces(termination = cib.terminations[0], \
-                                           substrate_thickness = 2, film_thickness = initial_n + 5, \
-                                           vacuum_over_film = 1, gap = 1, in_layers = True))[0]
-            delta_c = interface_film_2.lattice.c - interface_film_1.lattice.c
-        film_delta_c = delta_c/5
-            
-        
-        delta_c = 0
-        last_delta_c = 0
-        initial_n = 2
-        while last_delta_c == 0:
-            last_delta_c = delta_c
-            interface_substrate_1 = list(cib.get_interfaces(termination = cib.terminations[0], \
-                                           substrate_thickness = initial_n, film_thickness = 2, \
-                                           vacuum_over_film = 1, gap = 1, in_layers = True))[0]
-            interface_substrate_2 = list(cib.get_interfaces(termination = cib.terminations[0], \
-                                           substrate_thickness = initial_n + 5, film_thickness = 2, \
-                                           vacuum_over_film = 1, gap = 1, in_layers = True))[0]
-            delta_c = interface_substrate_2.lattice.c - interface_substrate_1.lattice.c
-        substrate_delta_c = delta_c/5
-        
-        
-        return film_delta_c, substrate_delta_c
+        if not cib.terminations:
+            raise ValueError(f"Match {match_id} has no slab terminations")
+
+        def _probe_layer_delta(component):
+            for initial_n in range(2, 2 + MAX_LAYER_THICKNESS_PROBES):
+                kwargs_1 = {
+                    "termination": cib.terminations[0],
+                    "substrate_thickness": initial_n if component == "substrate" else 2,
+                    "film_thickness": initial_n if component == "film" else 2,
+                    "vacuum_over_film": 1,
+                    "gap": 1,
+                    "in_layers": True,
+                }
+                kwargs_2 = dict(kwargs_1)
+                thickness_key = f"{component}_thickness"
+                kwargs_2[thickness_key] = initial_n + 5
+                interface_1 = next(cib.get_interfaces(**kwargs_1))
+                interface_2 = next(cib.get_interfaces(**kwargs_2))
+                delta_c = float(interface_2.lattice.c - interface_1.lattice.c)
+                if abs(delta_c) > 1e-8:
+                    return delta_c / 5
+            raise RuntimeError(
+                f"Could not determine {component} layer thickness for match "
+                f"{match_id} after {MAX_LAYER_THICKNESS_PROBES} probes"
+            )
+
+        return _probe_layer_delta("film"), _probe_layer_delta("substrate")
     
     def output_slabs(self, match_id, term_id):
         sgs, dbs = self.get_decomposition_slabs(match_id, term_id)
@@ -1197,6 +1255,20 @@ class InterfaceWorker:
         result = registration_minimizer(self, n_calls, z_range)
         xs = array(result.x_iters)
         ys = result.func_vals
+        if not np.isfinite(ys).all():
+            raise ValueError(
+                f"Bayesian optimization returned non-finite energies for match "
+                f"{match_id}, termination {term_id}"
+            )
+        if np.all(np.asarray(ys) >= BO_CLASH_PENALTY_EV):
+            self.opt_results[(match_id, term_id)]["failure"] = {
+                "stage": "registration",
+                "error": "all sampled registrations contain atomic clashes",
+            }
+            raise ValueError(
+                f"All sampled registrations contain atomic clashes for match "
+                f"{match_id}, termination {term_id}; reduce discut or revise z_range."
+            )
         
         self.opt_results[(match_id,term_id)]['original_xs'] = xs
         self.opt_results[(match_id,term_id)]['original_ys'] = ys
@@ -1247,6 +1319,8 @@ class InterfaceWorker:
         smt = StructureMatcher(ltol = 0.01, stol = 0.5, angle_tol=0.01, primitive_cell=False, scale = True)
         selected_ids = array(selected_ids)
         selected_ids = selected_ids[get_non_matching_structures(selected_its, self.BO_rms_bin_size, smt)]
+        if len(selected_ids) == 0:
+            selected_ids = array([0], dtype=int)
         self.opt_results[(match_id,term_id)]['BO_selected_ids'] = selected_ids
         print(f'num of selected low-energy its: {len(selected_ids)}')
     
@@ -1510,18 +1584,36 @@ class InterfaceWorker:
 
         #get lowest-energy relaxed it
         relaxed_its, relaxed_Es, unrelaxed_its = [], [], []
+        relaxation_failures = []
         for s_id in self.opt_results[(i,j)]['BO_selected_ids']:
-            relaxed_it, relaxed_E, unrelaxed_it = self.relax_with_selective_dyn_it(
-                self.opt_results[(i, j)]["sampled_interfaces"][s_id],
-                fthk_film,
-                fthk_substrate,
-                match_id=i,
-                term_id=j,
-                return_unrelaxed=True,
+            try:
+                relaxed_it, relaxed_E, unrelaxed_it = self.relax_with_selective_dyn_it(
+                    self.opt_results[(i, j)]["sampled_interfaces"][s_id],
+                    fthk_film,
+                    fthk_substrate,
+                    match_id=i,
+                    term_id=j,
+                    return_unrelaxed=True,
+                )
+                if not np.isfinite(relaxed_E):
+                    raise ValueError(f"non-finite relaxed energy {relaxed_E}")
+                relaxed_its.append(relaxed_it)
+                relaxed_Es.append(relaxed_E)
+                unrelaxed_its.append(unrelaxed_it)
+            except Exception as exc:
+                relaxation_failures.append(
+                    {"sample_id": int(s_id), "error": f"{type(exc).__name__}: {exc}"}
+                )
+                warnings.warn(
+                    f"Skipping failed relaxation for match {i}, termination {j}, "
+                    f"sample {s_id}: {exc}",
+                    stacklevel=2,
+                )
+        self.opt_results[(i, j)]["relaxation_failures"] = relaxation_failures
+        if not relaxed_Es:
+            raise RuntimeError(
+                f"All interface relaxations failed for match {i}, termination {j}"
             )
-            relaxed_its.append(relaxed_it)
-            relaxed_Es.append(relaxed_E)
-            unrelaxed_its.append(unrelaxed_it)
 
         relaxed_min_id = relaxed_Es.index(min(relaxed_Es))
         best_it, relaxed_best_sup_E = relaxed_its[relaxed_min_id], relaxed_Es[relaxed_min_id]
@@ -1685,35 +1777,56 @@ class InterfaceWorker:
 
         #get lowest-energy relaxed it
         relaxed_its, relaxed_Es, unrelaxed_its = [], [], []
+        relaxation_failures = []
         self.gradient_descend_disps, self.gradient_descend_interfaces = [], []
         self.opt_results[(i,j)]['film_indices'] = self.opt_results[(i,j)]['sampled_interfaces'][0].film_indices
         self.opt_results[(i,j)]['substrate_indices'] = self.opt_results[(i,j)]['sampled_interfaces'][0].substrate_indices
         for s_id in self.opt_results[(i,j)]['BO_selected_ids']:
-            relaxed_it, relaxed_E, unrelaxed_it = self.relax_with_selective_dyn_it(
-                self.opt_results[(i, j)]["sampled_interfaces"][s_id],
-                fthk_film,
-                fthk_substrate,
-                match_id=i,
-                term_id=j,
-                return_unrelaxed=True,
-            )
+            try:
+                relaxed_it, relaxed_E, unrelaxed_it = self.relax_with_selective_dyn_it(
+                    self.opt_results[(i, j)]["sampled_interfaces"][s_id],
+                    fthk_film,
+                    fthk_substrate,
+                    match_id=i,
+                    term_id=j,
+                    return_unrelaxed=True,
+                )
+                if not np.isfinite(relaxed_E):
+                    raise ValueError(f"non-finite relaxed energy {relaxed_E}")
 
-            if self.do_gd:
-                gd_xs, gd_Es, gd_gs = gradient_descend(sampling_function = self.get_displaced_relaxed_interface,
-                                                     dx = 0.05,
-                                                     dim = 3,
-                                                     tol = self.gd_tol * len(relaxed_it),
-                                                     initial_r = 0.1,
-                                                     initial_xy = [array([0.0,0.0,0.0]), relaxed_E],
-                                                     min_steps = 5,
-                                                    interface = relaxed_it)
-                                                    
-                relaxed_its.append(self.gradient_descend_interfaces[-1])
-                relaxed_Es.append(gd_Es[-1])
-            else:
-                relaxed_its.append(relaxed_it)
-                relaxed_Es.append(relaxed_E)
-            unrelaxed_its.append(unrelaxed_it)
+                if self.do_gd:
+                    gd_xs, gd_Es, gd_gs = gradient_descend(sampling_function = self.get_displaced_relaxed_interface,
+                                                         dx = 0.05,
+                                                         dim = 3,
+                                                         tol = self.gd_tol * len(relaxed_it),
+                                                         initial_r = 0.1,
+                                                         initial_xy = [array([0.0,0.0,0.0]), relaxed_E],
+                                                         min_steps = 5,
+                                                         max_steps=self.gd_max_steps,
+                                                         max_displacement=self.gd_max_displacement,
+                                                        interface = relaxed_it)
+                    if len(gd_Es) == 0 or not self.gradient_descend_interfaces:
+                        raise RuntimeError("MLIP gradient descent returned no structures")
+                    relaxed_its.append(self.gradient_descend_interfaces[-1])
+                    relaxed_Es.append(gd_Es[-1])
+                else:
+                    relaxed_its.append(relaxed_it)
+                    relaxed_Es.append(relaxed_E)
+                unrelaxed_its.append(unrelaxed_it)
+            except Exception as exc:
+                relaxation_failures.append(
+                    {"sample_id": int(s_id), "error": f"{type(exc).__name__}: {exc}"}
+                )
+                warnings.warn(
+                    f"Skipping failed relaxation for match {i}, termination {j}, "
+                    f"sample {s_id}: {exc}",
+                    stacklevel=2,
+                )
+        self.opt_results[(i, j)]["relaxation_failures"] = relaxation_failures
+        if not relaxed_Es:
+            raise RuntimeError(
+                f"All interface relaxations failed for match {i}, termination {j}"
+            )
 
         relaxed_min_id = relaxed_Es.index(min(relaxed_Es))
         best_it, relaxed_best_sup_E = relaxed_its[relaxed_min_id], relaxed_Es[relaxed_min_id]
@@ -1909,56 +2022,94 @@ class InterfaceWorker:
                     e_labels = []
                     #for j in range(1):
                     for j in range(num_terms):
-                        #optimize
-                        self.optimize_specified_interface_by_mlip(i, j, n_calls = n_calls, z_range = z_range, calc = calc)
-                        it = self.opt_results[(i,j)]['sampled_interfaces'][0]
-                        A = it.lattice.a * it.lattice.b
-                        supcl_E0 = float(self.opt_results[(i,j)]['supcl_E'][0])
-                        if self.double_interface:
-                            film_scale = len(it.film_indices)/len(self.film)
-                            substrate_scale = len(it.substrate_indices)/len(self.substrate)
-                            it_E = (supcl_E0 - film_scale * self.film_e - substrate_scale * self.substrate_e) / A * 16.02176634 / 2
-                            e_labels.append(it_E)
-                            self._global_min_debug(
-                                stage="prescreen_double_interface",
-                                match_id=int(i),
-                                term_id=int(j),
-                                area=float(A),
-                                supcl_E0=supcl_E0,
-                                prescreen_it_E=float(it_E),
-                                film_scale=float(film_scale),
-                                substrate_scale=float(substrate_scale),
-                                film_atom_count=int(len(it.film_indices)),
-                                substrate_atom_count=int(len(it.substrate_indices)),
+                        try:
+                            self.optimize_specified_interface_by_mlip(
+                                i, j, n_calls=n_calls, z_range=z_range, calc=calc
                             )
-                        else:
-                            film_slab = it.film
-                            substrate_slab = it.substrate
-                            film_slab_E = float(self.mc.calculate(film_slab))
-                            substrate_slab_E = float(self.mc.calculate(substrate_slab))
-                            bd_E = (supcl_E0 - film_slab_E - substrate_slab_E) / A * 16.02176634
-                            e_labels.append(bd_E)
-                            self._global_min_debug(
-                                stage="prescreen_single_interface",
-                                match_id=int(i),
-                                term_id=int(j),
-                                area=float(A),
-                                supcl_E0=supcl_E0,
-                                film_slab_E=film_slab_E,
-                                substrate_slab_E=substrate_slab_E,
-                                prescreen_bd_E=float(bd_E),
+                            it = self.opt_results[(i,j)]['sampled_interfaces'][0]
+                            A = it.lattice.a * it.lattice.b
+                            supcl_E0 = float(self.opt_results[(i,j)]['supcl_E'][0])
+                            if self.double_interface:
+                                film_scale = len(it.film_indices)/len(self.film)
+                                substrate_scale = len(it.substrate_indices)/len(self.substrate)
+                                it_E = (supcl_E0 - film_scale * self.film_e - substrate_scale * self.substrate_e) / A * 16.02176634 / 2
+                                e_labels.append(it_E)
+                                self._global_min_debug(
+                                    stage="prescreen_double_interface",
+                                    match_id=int(i),
+                                    term_id=int(j),
+                                    area=float(A),
+                                    supcl_E0=supcl_E0,
+                                    prescreen_it_E=float(it_E),
+                                    film_scale=float(film_scale),
+                                    substrate_scale=float(substrate_scale),
+                                    film_atom_count=int(len(it.film_indices)),
+                                    substrate_atom_count=int(len(it.substrate_indices)),
+                                )
+                            else:
+                                film_slab = it.film
+                                substrate_slab = it.substrate
+                                film_slab_E = float(self.mc.calculate(film_slab))
+                                substrate_slab_E = float(self.mc.calculate(substrate_slab))
+                                bd_E = (supcl_E0 - film_slab_E - substrate_slab_E) / A * 16.02176634
+                                e_labels.append(bd_E)
+                                self._global_min_debug(
+                                    stage="prescreen_single_interface",
+                                    match_id=int(i),
+                                    term_id=int(j),
+                                    area=float(A),
+                                    supcl_E0=supcl_E0,
+                                    film_slab_E=film_slab_E,
+                                    substrate_slab_E=substrate_slab_E,
+                                    prescreen_bd_E=float(bd_E),
+                                )
+                        except Exception as exc:
+                            e_labels.append(float("inf"))
+                            entry = self.opt_results.setdefault((i, j), {})
+                            entry["failure"] = {
+                                "stage": "prescreen",
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }
+                            warnings.warn(
+                                f"Skipping match {i}, termination {j} after MLIP "
+                                f"pre-screen failure: {exc}",
+                                stacklevel=2,
                             )
                     print(e_labels)
+                    finite_e_labels = [value for value in e_labels if np.isfinite(value)]
+                    if not finite_e_labels:
+                        warnings.warn(
+                            f"match {i}: every termination failed MLIP pre-screening",
+                            stacklevel=2,
+                        )
+                        for _ in range(num_terms):
+                            term_pbar.update(1)
+                        match_pbar.update(1)
+                        continue
+                    min_e_label = min(finite_e_labels)
                     for j in range(num_terms):
-                        if e_labels[j] < min(e_labels) + term_screen_tol:
+                        if np.isfinite(e_labels[j]) and e_labels[j] < min_e_label + term_screen_tol:
                         
                             ltc = self.opt_results[(i,j)]['sampled_interfaces'][0].lattice
                             A = ltc.a * ltc.b
                             
-                            if self.double_interface:
-                                it_bd_E, strain_E = self.post_bayesian_process_double_interface(i,j,A)
-                            else:
-                                it_bd_E, strain_E = self.post_bayesian_process(i,j,A)
+                            try:
+                                if self.double_interface:
+                                    it_bd_E, strain_E = self.post_bayesian_process_double_interface(i,j,A)
+                                else:
+                                    it_bd_E, strain_E = self.post_bayesian_process(i,j,A)
+                            except Exception as exc:
+                                self.opt_results[(i, j)]["failure"] = {
+                                    "stage": "relaxation",
+                                    "error": f"{type(exc).__name__}: {exc}",
+                                }
+                                warnings.warn(
+                                    f"Skipping match {i}, termination {j} after "
+                                    f"relaxation failure: {exc}",
+                                    stacklevel=2,
+                                )
+                                term_pbar.update(1)
+                                continue
                             
                             disp_info = (
                                 self.opt_results.get((i, j), {})

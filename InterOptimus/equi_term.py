@@ -97,7 +97,7 @@ def pair_fit(film_slab_fit, sub_slab_fit, film_slab, sub_slab, matcher, c_period
     else:
         sub_transformation = matcher.get_transformation(sub_slab, sub_slab_fit)[0]
         sub_rotation = get_rotation_from_match(sub_slab_fit.lattice.matrix, sub_transformation)
-        sub_map = SymmOp.from_rotation_and_translation(sub_transformation, [0,0,0])
+        sub_map = SymmOp.from_rotation_and_translation(sub_rotation, [0,0,0])
     film_over_sub = film_map * sub_map.inverse
     
     sym_ops_film = SpacegroupAnalyzer(film_slab_fit).get_point_group_operations(cartesian = True)

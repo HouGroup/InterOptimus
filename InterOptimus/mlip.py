@@ -6,6 +6,7 @@ ORB, SevenNet, MatRIS, and Deep Potential (DPA) models, along with ASE optimizer
 """
 
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -81,6 +82,8 @@ def _patch_torch_jit_for_frozen_bundle() -> None:
 def _checkpoint_glob_patterns(calc: str) -> list[str]:
     if calc == "orb-models":
         return [
+            "orb-v3-conservative-inf-mpa-20250404.ckpt",
+            "orb-v3-conservative-20-mpa-20250404.ckpt",
             "orb-v3-conservative-inf-omat-20250404.ckpt",
             "orb-v3-conservative-20-omat-20250404.ckpt",
             "orb-v3-*.ckpt",
@@ -88,6 +91,7 @@ def _checkpoint_glob_patterns(calc: str) -> list[str]:
         ]
     if calc == "sevenn":
         return [
+            "checkpoint_sevennet_omni_i12.pth",
             "checkpoint_sevennet_mf_ompa.pth",
             "checkpoint_sevennet*.pth",
             "*sevennet*.pth",
@@ -95,11 +99,23 @@ def _checkpoint_glob_patterns(calc: str) -> list[str]:
         ]
     if calc == "dpa":
         return [
+            "dpa-3.1-3m-ft.pth",
             "dpa*.pth",
             "dpa*.pt",
             "dpa*.pb",
             "*deepmd*.pth",
+            "*deepmd*.pt",
             "*deepmd*.pb",
+        ]
+    if calc == "matris":
+        return [
+            "MatRIS_10M_OAM.pth.tar",
+            "MatRIS*.pth.tar",
+            "matris*.pth.tar",
+            "MatRIS*.pth",
+            "matris*.pth",
+            "MatRIS*.pt",
+            "matris*.pt",
         ]
     return []
 
@@ -151,10 +167,41 @@ def _apply_checkpoint_defaults(calc: str, user_settings: dict) -> None:
         "orb-models",
         "sevenn",
         "dpa",
+        "matris",
     ):
         ckpt = resolve_mlip_checkpoint(calc)
         if ckpt:
             user_settings["ckpt_path"] = ckpt
+
+
+def _prepare_matris_checkpoint(ckpt_path: str | None, model: str) -> str:
+    """Expose a compatible local MatRIS checkpoint in its upstream cache."""
+    if not ckpt_path:
+        return model
+
+    source = Path(ckpt_path).expanduser().resolve()
+    basename = source.name.upper()
+    known_models = {
+        "10M_OAM": ("matris_10m_oam", "MatRIS_10M_OAM.pth.tar"),
+        "10M_MP": ("matris_10m_mp", "MatRIS_10M_MP.pth.tar"),
+    }
+    detected = next((value for marker, value in known_models.items() if marker in basename), None)
+    if detected is None:
+        raise ValueError(
+            f"Cannot infer a supported MatRIS model from checkpoint {source.name!r}; "
+            "supported local checkpoint families are 10M_OAM and 10M_MP."
+        )
+    model_name, canonical_filename = detected
+
+    cache = Path.home() / ".cache" / "matris"
+    cache.mkdir(parents=True, exist_ok=True)
+    target = cache / canonical_filename
+    if not target.exists():
+        try:
+            target.symlink_to(source)
+        except OSError:
+            shutil.copy2(source, target)
+    return model_name
 
 
 def _init_orb_calculator(*, device: str, ckpt_path: str | None):
@@ -254,6 +301,13 @@ def get_optimizer(optimizer):
     elif optimizer == 'MinimaHopping':
         from ase.optimize.minimahopping import MinimaHopping
         return MinimaHopping
+    supported = (
+        "BFGS, LBFGS, LBFGSLineSearch, GPMin, FIRE, MDMin, "
+        "SciPyFminBFGS, SciPyFminCG, BasinHopping, MinimaHopping"
+    )
+    raise ValueError(
+        f"Unsupported ASE optimizer {optimizer!r}. Supported optimizers: {supported}."
+    )
 
 class MlipCalc:
     """
@@ -372,9 +426,11 @@ class MlipCalc:
                 try:
                     self.calc = SevenNetCalculator(PurePath(ckpt), modal='mpa')
                     print("SevenNet initialized with checkpoint from ~/.cache/InterOptimus/checkpoints or explicit path")
-                except Exception:
-                    self.calc = SevenNetCalculator(model='7net-mf-ompa', modal='mpa')
-                    print("SevenNet initialized with default model (checkpoint load failed)")
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"SevenNet failed to load the requested checkpoint {ckpt!r}; "
+                        "refusing to silently substitute a different model."
+                    ) from exc
             else:
                 self.calc = SevenNetCalculator(model='7net-mf-ompa', modal='mpa')
                 print("SevenNet initialized with default model (no checkpoint in cache)")
@@ -383,6 +439,7 @@ class MlipCalc:
             from matris.applications.base import MatRISCalculator
 
             model = user_settings.get('model', 'matris_10m_oam')
+            model = _prepare_matris_checkpoint(user_settings.get('ckpt_path'), model)
             task = user_settings.get('task', 'efsm')
             device = user_settings['device']
             self.calc = MatRISCalculator(model=model, task=task, device=device)

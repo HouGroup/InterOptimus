@@ -96,16 +96,19 @@ def _format_size(num_bytes: int | None) -> str:
 
 
 def checkpoint_status(spec: CheckpointSpec) -> tuple[bool, Path | None]:
-    """Return whether a checkpoint is present and the path that satisfied it."""
+    """Return whether a canonical or compatible checkpoint is present."""
     path = spec.target_path
     if path.is_file() and path.stat().st_size > 0:
         return True, path
 
-    # Report an alternate match for context, but keep the status missing because
-    # the managed setup expects the specific model version in the manifest.
-    if spec.calc in {"orb-models", "sevenn", "dpa"}:
-        resolved = resolve_mlip_checkpoint(spec.calc)
-        return False, Path(resolved) if resolved else None
+    # Runtime loading supports multiple released model versions. Treat any
+    # non-empty file selected by the same resolver as ready instead of forcing
+    # a download of the single recommended version in the manifest.
+    resolved = resolve_mlip_checkpoint(spec.calc)
+    if resolved:
+        compatible = Path(resolved)
+        if compatible.is_file() and compatible.stat().st_size > 0:
+            return True, compatible
     return False, None
 
 
@@ -217,12 +220,11 @@ def verify_checkpoints(specs: Iterable[CheckpointSpec]) -> bool:
     for spec in specs:
         ok, path = checkpoint_status(spec)
         if ok and path is not None:
-            print(f"  OK      {spec.key}: {path}")
+            label = "recommended" if path == spec.target_path else "compatible"
+            print(f"  OK      {spec.key}: {path} ({label})")
         else:
             all_ok = False
             print(f"  MISSING {spec.key}: expected {spec.target_path}")
-            if path is not None:
-                print(f"          found alternate checkpoint: {path}")
             print_manual_download_help(spec)
     return all_ok
 

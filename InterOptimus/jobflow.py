@@ -12,7 +12,7 @@ from pymatgen.core.structure import Structure
 from jobflow import Flow, Response, job, Maker
 from qtoolkit.core.data_objects import QResources
 import os
-from InterOptimus.itworker import InterfaceWorker
+from InterOptimus.itworker import InterfaceWorker, bounded_gradient_step
 from InterOptimus.iomaker_minimal_export import FN_SELECTED_CSV
 from InterOptimus.mlip import resolve_mlip_checkpoint
 from dataclasses import dataclass
@@ -26,6 +26,7 @@ from jobflow_remote import set_run_config
 import base64
 import json
 import datetime
+import warnings
 
 
 def _hpc_job_ids() -> Dict[str, str]:
@@ -599,6 +600,8 @@ class GDVaspMaker(Maker):
     initial_it: Interface = None
     film_indices: List = None
     min_steps: int = 3
+    max_steps: int = 20
+    max_displacement: float = 0.2
     # atomate2 RelaxMaker — lazy-only at runtime for VASP GD paths; avoid importing
     # atomate2 at module import (pymatgen/atomate2 version skew breaks MLIP-only remote jobs).
     relax_maker: Any = None
@@ -613,23 +616,30 @@ class GDVaspMaker(Maker):
         #calculate g_n
         g_n = (np.array(y_dns) - np.array(saved_data['ys'][-1])) / self.dx
         if saved_data['n'] == 0:
-            r = 0.01
+            r = self.initial_r
         else:
             #x_n & x_n_1 have been updated in saved_data
             x_n, x_n_1 = np.array(saved_data['xs'][-1]), np.array(saved_data['xs'][-2])
             #g_n_1 has not been updated
             g_n_1 = np.array(saved_data['gs'][-1])
-            r = abs(np.dot((x_n - x_n_1), (g_n - g_n_1))) / np.linalg.norm(g_n - g_n_1) ** 2
+            gradient_delta = g_n - g_n_1
+            denominator = np.linalg.norm(gradient_delta) ** 2
+            if denominator <= np.finfo(float).eps:
+                r = self.initial_r
+            else:
+                r = abs(np.dot((x_n - x_n_1), gradient_delta)) / denominator
         
-        #translate it_n
-        tt = TranslateSitesTransformation(self.film_indices, - r * g_n, False)
+        # Translate in Cartesian coordinates, clipping unstable BB steps that could
+        # create atomic overlaps before the next VASP relaxation.
+        step = bounded_gradient_step(g_n, r, self.max_displacement)
+        tt = TranslateSitesTransformation(self.film_indices, step, False)
         it = tt.apply_transformation(saved_data['its'][-1])
         #vasp_job = self.relax_maker.make(structure = it, prev_dir = saved_data['vasp_dir'])
         vasp_job = self.relax_maker.make(structure = it)
         saved_data['n'] += 1
         ask_gradient_job = self.ask_gradient(
                                saved_data,
-                                np.array(saved_data['xs'][-1]) - r * g_n,
+                                np.array(saved_data['xs'][-1]) + step,
                                 vasp_job.output.output.energy,
                                 g_n,
                                 vasp_job.output.output.structure,
@@ -672,7 +682,12 @@ class GDVaspMaker(Maker):
         #it_n_structure = Structure.from_dict(it_n)
         it_n_structure = it_n
         
-        if saved_data['n'] > self.min_steps and abs(saved_data['ys'][-1] - saved_data['ys'][-2]) < self.tol * len(it_n_structure):
+        converged = (
+            saved_data['n'] > self.min_steps
+            and abs(saved_data['ys'][-1] - saved_data['ys'][-2])
+            < self.tol * len(it_n_structure)
+        )
+        if converged or saved_data['n'] >= self.max_steps:
             save_job = self.save_final_data(saved_data)
             save_job.update_metadata(self.metadata)
             return Response(replace = Flow([save_job]))
@@ -937,6 +952,27 @@ class IOMaker(Maker):
             only_substrate=pair_kw.get("only_substrate", False),
             all_optimized_pairs=pair_kw.get("all_optimized_pairs", False),
         )
+        valid_pairs = []
+        for pair in pairs:
+            best_it_obj = (
+                iw.opt_results.get(pair, {})
+                .get("relaxed_best_interface", {})
+                .get("structure")
+            )
+            if _ensure_structure_for_export(best_it_obj) is None:
+                warnings.warn(
+                    f"Skipping pair {pair}: no valid relaxed_best_interface "
+                    "structure is available.",
+                    stacklevel=2,
+                )
+                continue
+            valid_pairs.append(pair)
+        pairs = valid_pairs
+        if self.do_vasp and not pairs:
+            raise ValueError(
+                "VASP was requested, but no successfully relaxed MLIP interface "
+                "is available for VASP submission."
+            )
         pairs_summary = []
 
         pairs_dir = cwd_here
@@ -1058,13 +1094,10 @@ class IOMaker(Maker):
                         str(item.get("substrate_avg_disp_mlip_A")),
                     ]
                     f.write("\t".join(row) + "\n")
-        except Exception:
-            pass
+        except Exception as exc:
+            warnings.warn(f"Could not write pairs_summary.txt: {exc}", stacklevel=2)
 
-        try:
-            _write_opt_results_pickle(cwd_here, iw, pairs)
-        except Exception:
-            pass
+        _write_opt_results_pickle(cwd_here, iw, pairs)
 
         # Write report locally (server-safe, uses current working dir)
         try:
@@ -1305,18 +1338,22 @@ def check_it_phase_stability(film_conv, substrate_conv, device='cpu',
                         film_max_miller = 4,
                         substrate_max_miller = 4)
                         
-    iw.parse_interface_structure_params(termination_ftol = 2, c_periodic = True, \
-                                    vacuum_over_film = 10, film_thickness = 15, \
-                                    substrate_thickness = 15, shift_to_bottom = True)
+    iw.parse_interface_structure_params(
+        termination_ftol=2,
+        double_interface=True,
+        vacuum_over_film=10,
+        film_thickness=15,
+        substrate_thickness=15,
+    )
                                     
-    iw.parse_optimization_params(do = True,
-                             set_fix_thicknesses = (0,0),
-                             fix_in_layers = True,
-                             whole_slab_fixed = False,
-                             fmax = fmax,
-                             steps = steps,
-                             device = device,
-                             ckpt_path = _ckpt)
+    iw.parse_optimization_params(
+        set_relax_thicknesses=(0, 0),
+        relax_in_layers=True,
+        fmax=fmax,
+        steps=steps,
+        device=device,
+        ckpt_path=_ckpt,
+    )
     
     static_it, relaxed_it, dx_frac, dx_cart = iw.phase_stability_evaluation(
                                                                             n_calls = n_calls,

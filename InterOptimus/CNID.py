@@ -5,10 +5,27 @@ This module calculates CNID (Cell of non-identical Displacement)
 vectors for crystal interfaces. CNID vectors describe the rigid body
 translation degrees of freedom in coherent interfaces.
 """
+from fractions import Fraction
+
 from numpy import *
 from numpy.linalg import *
 from interfacemaster.cellcalc import DSCcalc
-from interfacemaster.hetero_searching import apply_function_to_array, float_to_rational
+from interfacemaster.hetero_searching import apply_function_to_array
+
+
+def _cnid_float_to_rational(value, max_denominator=10000, atol=1e-7):
+    """Serialize a numerical CNID component as a validated rational string."""
+
+    numeric = float(value)
+    fraction = Fraction(numeric).limit_denominator(max_denominator)
+    if abs(float(fraction) - numeric) > atol:
+        raise ValueError(
+            f"Could not rationalize CNID component {numeric} within atol={atol} "
+            f"and denominator limit {max_denominator}"
+        )
+    if fraction.denominator == 1:
+        return str(fraction.numerator)
+    return f"{fraction.numerator}/{fraction.denominator}"
 
 def get_au_vector(B):
     """
@@ -91,4 +108,4 @@ def calculate_cnid_in_supercell(interface):
     slB = get_au_lattice(array(props['substrate_sl_vectors']).T)
     B = get_au_lattice(array(props['substrate_vectors']).T)
     CNID_sl = triple_dot(inv(slB), B, CNID)
-    return CNID_sl, apply_function_to_array(CNID_sl, float_to_rational)
+    return CNID_sl, apply_function_to_array(CNID_sl, _cnid_float_to_rational)
