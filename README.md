@@ -56,6 +56,8 @@ MLIP 后端不会随核心包自动安装。推荐在集群登录节点使用部
 itom config --interactive --with-mlip-workers
 ```
 
+该命令默认把当前 `itom` 对应的 InterOptimus PyPI 版本安装到各 MLIP 环境，不要求存在 `~/software/InterOptimus`。只有源码开发或离线部署时才需要显式传入 `--interoptimus-dir`。
+
 也可以手动安装所需的 PyTorch、`orb-models`、`deepmd-kit`、SevenNet 或 MatRIS。不同后端最好使用独立 Conda 环境，避免 CUDA 和依赖冲突。
 
 完整的服务器准备说明见 [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md)。

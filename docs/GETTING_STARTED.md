@@ -4,9 +4,15 @@ This guide lists what a **new administrator** must have in place before `interop
 
 ## 1. Python environment
 
-- Use **Python 3.10+** (3.12 is fine).
+- Use **Python 3.11 or 3.12**.
 - Avoid running loose scripts **from inside** `InterOptimus/InterOptimus/` with `python ./something.py`: that directory contains a file named `jobflow.py`, which can **shadow** the real `jobflow` package and cause circular import errors. Prefer `python -m …` from the repo root or `pip install -e .` and import `InterOptimus.*` from a neutral working directory.
-- Install InterOptimus in editable mode from a checkout:
+- Most users can install from PyPI:
+
+  ```bash
+  pip install InterOptimus
+  ```
+
+- For source development, install in editable mode from a checkout:
 
   ```bash
   git clone <your-fork-or-upstream-url> InterOptimus
@@ -15,7 +21,7 @@ This guide lists what a **new administrator** must have in place before `interop
   pip install -e .
   ```
 
-- The default **`pip install`** includes **PyYAML** for YAML configs; it does **not** include PyTorch or the ORB / SevenNet / DeepMD packages. Use **`itom config --with-mlip-workers`** (writes jobflow-remote YAML and creates orb/dpa/matris/sevenn conda workers—see `InterOptimus/deploy_jobflow_stack.py`), or install `torch`, `orb-models`, `sevenn`, and `deepmd-kit` yourself in the env that executes MLIP jobs.
+- The default **`pip install`** includes **PyYAML** for YAML configs; it does **not** include PyTorch or the ORB / SevenNet / DeepMD packages. Use **`itom config --with-mlip-workers`** to create the orb/dpa/matris/sevenn environments and jobflow-remote workers. By default, each worker environment installs the same InterOptimus version as the active `itom` command directly from PyPI; no `~/software/InterOptimus` checkout is required. Developers or offline users may explicitly pass `--interoptimus-dir <source-or-zip>`.
 - If `pip install` pulls MLIP wheels that expect **MPI** (e.g. some `deepmd-kit` builds), install the small **`mpich`** PyPI shim or use a conda MPI stack that matches your site policy.
 
 ## 2. Jobflow + MongoDB
