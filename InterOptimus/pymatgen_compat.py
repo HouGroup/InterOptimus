@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 from pymatgen.analysis.interfaces import CoherentInterfaceBuilder, SubstrateAnalyzer
+from pymatgen.analysis.interfaces.coherent_interfaces import label_termination
 from pymatgen.core.surface import SlabGenerator
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
@@ -23,16 +24,74 @@ def coherent_interface_builder_for_match(
 ) -> CoherentInterfaceBuilder:
     """Build a CIB for exactly one existing SubstrateAnalyzer match."""
 
+    if isinstance(termination_ftol, tuple):
+        film_ftol, substrate_ftol = (float(value) for value in termination_ftol)
+        # Current pymatgen accepts only one scalar tolerance in the constructor.
+        # Initialize with a valid scalar, then rebuild the termination mapping with
+        # the independently scaled film/substrate tolerances used by InterOptimus.
+        builder_ftol = film_ftol
+    else:
+        film_ftol = substrate_ftol = builder_ftol = float(termination_ftol)
+
     builder = CoherentInterfaceBuilder(
         substrate_structure=substrate_structure,
         film_structure=film_structure,
         film_miller=tuple(int(value) for value in match.film_miller),
         substrate_miller=tuple(int(value) for value in match.substrate_miller),
         zslgen=SubstrateAnalyzer(max_area=100),
-        termination_ftol=termination_ftol,
+        termination_ftol=builder_ftol,
         label_index=label_index,
         filter_out_sym_slabs=filter_out_sym_slabs,
     )
+    if isinstance(termination_ftol, tuple):
+        film_sg = SlabGenerator(
+            builder.film_structure,
+            builder.film_miller,
+            min_slab_size=1,
+            min_vacuum_size=3,
+            in_unit_planes=True,
+            center_slab=True,
+            primitive=True,
+            reorient_lattice=False,
+        )
+        substrate_sg = SlabGenerator(
+            builder.substrate_structure,
+            builder.substrate_miller,
+            min_slab_size=1,
+            min_vacuum_size=3,
+            in_unit_planes=True,
+            center_slab=True,
+            primitive=True,
+            reorient_lattice=False,
+        )
+        film_slabs = film_sg.get_slabs(
+            ftol=film_ftol, filter_out_sym_slabs=filter_out_sym_slabs
+        )
+        substrate_slabs = substrate_sg.get_slabs(
+            ftol=substrate_ftol, filter_out_sym_slabs=filter_out_sym_slabs
+        )
+
+        def termination_labels(slabs: list[Any], ftol: float) -> list[str]:
+            if label_index:
+                return [
+                    label_termination(slab, ftol, index)
+                    for index, slab in enumerate(slabs, start=1)
+                ]
+            return [label_termination(slab, ftol) for slab in slabs]
+
+        builder._terminations = {
+            (film_label, substrate_label): (float(film_slab.shift), float(substrate_slab.shift))
+            for (film_label, film_slab), (substrate_label, substrate_slab) in product(
+                zip(termination_labels(film_slabs, film_ftol), film_slabs, strict=True),
+                zip(
+                    termination_labels(substrate_slabs, substrate_ftol),
+                    substrate_slabs,
+                    strict=True,
+                ),
+            )
+        }
+        builder.terminations = list(builder._terminations)
+        builder.termination_ftol = (film_ftol, substrate_ftol)
     # CIB's own search validates against a separately reduced surface basis and
     # rejects some valid external SubstrateAnalyzer matches for non-orthogonal
     # cells. Preserve InterOptimus's established selected-match behavior here,

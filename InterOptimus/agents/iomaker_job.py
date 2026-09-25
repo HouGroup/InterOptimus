@@ -70,10 +70,10 @@ def _run_flow_locally(flow, workdir: str) -> None:
         os.chdir(workdir)
         try:
             from jobflow import run_locally
-            run_locally(flow, create_folders=True, ensure_success=True)
-        except Exception:
+            run_locally(flow, create_folders=True, root_dir='jobflow_run', ensure_success=True)
+        except ImportError:
             from jobflow.managers.local import run_locally
-            run_locally(flow, create_folders=True, ensure_success=True)
+            run_locally(flow, create_folders=True, root_dir='jobflow_run', ensure_success=True)
     finally:
         os.chdir(old_cwd)
 
