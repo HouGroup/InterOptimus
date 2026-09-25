@@ -452,7 +452,7 @@ class InterfaceWorker:
                 #break
         return screened_matches
     
-    def parse_interface_structure_params(self, termination_ftol = 0.15, film_thickness = 15, substrate_thickness = 15, double_interface = False, vacuum_over_film = 5, charge_filter_settings = None, non_polar_substrate_termination = False, non_polar_film_termination = False):
+    def parse_interface_structure_params(self, termination_ftol = 0.15, film_thickness = 15, substrate_thickness = 15, double_interface = False, vacuum_over_film = 5, charge_filter_settings = None, non_polar_substrate_termination = False, non_polar_film_termination = False, symmetric_substrate_termination = False, symmetric_film_termination = False, slab_symprec = 0.1):
         """
         parse necessary structure parameters for interface generation in the next steps
 
@@ -472,6 +472,10 @@ class InterfaceWorker:
             ``tol_dipole_per_unit_area``).
         non_polar_film_termination (bool|dict|None): same as
             ``non_polar_substrate_termination`` but for the film surface slab.
+        symmetric_substrate_termination (bool): keep only substrate slabs whose
+            two exposed surfaces are symmetry-equivalent according to ``Slab.is_symmetric``.
+        symmetric_film_termination (bool): apply the same symmetry requirement to film slabs.
+        slab_symprec (float): symmetry tolerance passed to ``Slab.is_symmetric``.
         """
         self.termination_ftol, self.film_thickness, self.substrate_thickness, self.double_interface, self.vacuum_over_film = \
         termination_ftol, film_thickness, substrate_thickness, double_interface, vacuum_over_film
@@ -487,6 +491,17 @@ class InterfaceWorker:
                 filter_substrate=substrate_polar_enabled,
                 film_settings=film_polar_settings,
                 substrate_settings=substrate_polar_settings,
+            )
+        self.symmetric_substrate_termination = bool(symmetric_substrate_termination)
+        self.symmetric_film_termination = bool(symmetric_film_termination)
+        self.slab_symprec = float(slab_symprec)
+        if self.slab_symprec <= 0:
+            raise ValueError('slab_symprec must be positive')
+        if self.symmetric_film_termination or self.symmetric_substrate_termination:
+            self.filter_terminations_by_surface_symmetry(
+                filter_film=self.symmetric_film_termination,
+                filter_substrate=self.symmetric_substrate_termination,
+                symprec=self.slab_symprec,
             )
         self.charge_filter_settings = charge_filter_settings
         if charge_filter_settings is not None and charge_filter_settings is not False:
@@ -1042,6 +1057,76 @@ class InterfaceWorker:
             raise ValueError(
                 'Polarity screening removed all unique terminations. '
                 'Please disable non-polar filtering or check the structures/oxidation states.'
+            )
+
+    def filter_terminations_by_surface_symmetry(
+        self, filter_film=True, filter_substrate=True, symprec=0.1
+    ):
+        """Keep only terminations whose isolated slabs have equivalent top/bottom surfaces."""
+        if not filter_film and not filter_substrate:
+            return
+        symprec = float(symprec)
+        if symprec <= 0:
+            raise ValueError('symprec must be positive')
+        self.termination_symmetry_filter_log = {}
+        total_before = 0
+        total_after = 0
+        for i, terminations_here in enumerate(self.all_unique_terminations):
+            total_before += len(terminations_here)
+            cib = self.get_specified_match_cib(i)
+            film_thickness, substrate_thickness = self.thickness_in_layers[i]
+            film_sg = SlabGenerator(
+                self.film, self.unique_matches[i].film_miller,
+                min_slab_size=film_thickness, min_vacuum_size=3,
+                in_unit_planes=True, center_slab=True,
+                primitive=True, reorient_lattice=False,
+            )
+            substrate_sg = SlabGenerator(
+                self.substrate, self.unique_matches[i].substrate_miller,
+                min_slab_size=substrate_thickness, min_vacuum_size=3,
+                in_unit_planes=True, center_slab=True,
+                primitive=True, reorient_lattice=False,
+            )
+            shift_map = termination_shift_map(cib)
+            kept_terminations = []
+            kept_term_ids = []
+            removed_reports = []
+            for j, termination in enumerate(terminations_here):
+                film_shift, substrate_shift = shift_map[termination]
+                film_symmetric = bool(
+                    film_sg.get_slab(shift=film_shift).is_symmetric(symprec=symprec)
+                ) if filter_film else True
+                substrate_symmetric = bool(
+                    substrate_sg.get_slab(shift=substrate_shift).is_symmetric(symprec=symprec)
+                ) if filter_substrate else True
+                if not film_symmetric or not substrate_symmetric:
+                    removed_reports.append({
+                        'term_id': j,
+                        'termination': termination,
+                        'film_symmetric': film_symmetric,
+                        'substrate_symmetric': substrate_symmetric,
+                    })
+                else:
+                    kept_terminations.append(termination)
+                    kept_term_ids.append(j)
+            self.all_unique_terminations[i] = kept_terminations
+            total_after += len(kept_terminations)
+            self.termination_symmetry_filter_log[i] = {
+                'num_before': len(terminations_here),
+                'num_after': len(kept_terminations),
+                'kept_term_ids': kept_term_ids,
+                'removed': removed_reports,
+                'symprec': symprec,
+            }
+            print(
+                f'match {i}: kept {len(kept_terminations)}/{len(terminations_here)} '
+                'unique terminations after slab-symmetry screening'
+            )
+        print(f'slab-symmetry screening kept {total_after}/{total_before} unique terminations')
+        if total_after == 0:
+            raise ValueError(
+                'Slab-symmetry screening removed all unique terminations. '
+                'Check slab thicknesses or relax slab_symprec.'
             )
 
     def calculate_thickness(self):
